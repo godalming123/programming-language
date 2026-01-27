@@ -1,0 +1,59 @@
+math_token = [
+	Plus,
+	Minus,
+	Multiply,
+	Divide,
+	OpenBracket,
+	CloseBracket,
+	Integer(i64),
+	Float(f64),
+	Error(string)
+]
+
+get_next_token = (math: string, ~pos: uint) -> math_token {
+	if math[pos] == '+' {~pos += 1; return .Plus}
+	if math[pos] == '-' {~pos += 1; return .Minus}
+	if math[pos] == '*' {~pos += 1; return .Multiply}
+	if math[pos] == '/' {~pos += 1; return .Divide}
+	if math[pos] == '(' {~pos += 1; return .OpenBracket}
+	if math[pos] == ')' {~pos += 1; return .CloseBracket}
+	start_pos = pos
+	while '0' <= math[pos] and math[pos] <= '9' {
+		~pos += 1
+	}
+	if math[pos] == '.' {
+		~pos += 1
+		if not ('0' <= math[pos] and math[pos] <= '9') {
+			// TODO: handle error
+		}
+		do {
+			~pos += 1
+		} while '0' <= math[pos] and math[pos] <= '9'
+		return .Float(parse_float(math[pos:new_pos$]))
+	} else if start_pos == pos {
+		// TODO: Handle error
+		return
+	} else {
+		return .Integer(parse_int(math[pos:new_pos$]))
+	}
+}
+
+parsed_math = [
+	Addition(parsed_math, parsed_math),
+	Subtraction(parsed_math, parsed_math),
+	Multiplication(parsed_math, parsed_math),
+	Division(parsed_math, parsed_math),
+	Negation(parsed_math),
+]
+
+parse_math(math: string, ~pos: uint) -> parsed_math {
+	token = get_next_token(math, ~pos)
+	if token is .Plus { return parse_math(math, ~pos) }
+	if token is .Minus { return .Negation(parse_math(math, ~pos)) }
+	if token is .OpenBracket { parse_math(math, pos$) }
+	// TODO
+}
+
+main = (_args: []string) -> i32 {
+	// TODO
+}

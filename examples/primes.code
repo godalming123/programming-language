@@ -1,0 +1,24 @@
+// TODO
+// find_primes = (-prime_sieve: []bool) -> (+prime_sieve: []bool) {
+// 	
+// }
+// 
+// main = (_args: []string) {
+// 	+prime_sieve = []bool{}
+// 	while {
+// 		println("Primes found so far:")
+// 		for is_prime, index in prime_sieve {
+// 			if is_prime {
+// 				print("- ${index}")
+// 			}
+// 		}
+// 	input("How many primes would you like to find")
+// 	+prime_sieve = find_primes(-prime_sieve)
+// 		
+// 	}
+// }
+
+main = (_args: []string) -> i32 {
+	println("TODO: primes")
+	return 0
+}
