@@ -19,11 +19,26 @@ Array :: struct {
     item_type: ^Type,
 }
 
-Type :: union {
+SumTypeVariant :: struct {
+    name: string,
+    type: Type,
+}
+
+SumType :: struct {
+    variants: []SumTypeVariant,
+}
+
+TypeValue :: union {
     Struct,
     Function,
     TypeVariable,
     Array,
+    SumType,
+}
+
+Type :: struct {
+    pos:  uint,
+    type: TypeValue,
 }
 
 VariableReference :: distinct string
@@ -31,6 +46,15 @@ VariableReference :: distinct string
 Number :: distinct string
 
 String :: distinct string
+
+Char :: distinct byte
+
+ArrayAccess :: struct {
+    array: ^Value,
+    index: ^Value,
+}
+
+ValueInBrackets :: distinct ^Value
 
 Value :: struct {
     pos:   uint,
@@ -40,6 +64,9 @@ Value :: struct {
         VariableReference,
         Number,
         String,
+        Char,
+        ArrayAccess,
+        ValueInBrackets,
     },
 }
 
@@ -111,8 +138,8 @@ VariableManagement :: struct {
 }
 
 FunctionCall :: struct {
-    function_name: string,
-    args:          []Value, // TODO: Add named arguments
+    function: ^Value,
+    args:     []Value, // TODO: Add named arguments
 }
 
 Iterator :: union {
@@ -168,6 +195,15 @@ Statement :: struct {
     },
 }
 
+FunctionArg :: struct {
+    name:       IdentAndPos,
+    value_type: Type,
+    arg_type:   enum {
+        Normal,
+        Mutable,
+        RemovedFromStack,
+    },
+}
 
 NameAndType :: struct {
     name: string,
@@ -175,7 +211,7 @@ NameAndType :: struct {
 }
 
 FunctionDefinition :: struct {
-    inputs:  []NameAndType,
+    inputs:  []FunctionArg,
     outputs: []NameAndType,
     body:    []Statement,
 }
@@ -185,21 +221,18 @@ ComponentDefinition :: struct {
     body:   []Statement,
 }
 
-Global :: struct {
-    position: uint,
-    value:    union {
-        Type,
-        FunctionDefinition,
-    },
-}
-
-File :: struct {
-    imports: []Import,
-    // TODO: Store the map order to maintain order when formatting is implemented
-    globals: map[string]Global,
-}
+//File :: struct {
+//    imports: []Import,
+//    // TODO: Store the map order to maintain order when formatting is implemented
+//    globals: map[string]Global,
+//}
 
 print_type :: proc(s: ^TreePrinterState, type: Type) {
+    list_item(s, "Type at character index %d:", type.pos)
+    print_type_value(s, type.type)
+}
+
+print_type_value :: proc(s: ^TreePrinterState, type: TypeValue) {
     list_item(s, "todo")
 }
 
@@ -211,15 +244,37 @@ print_name_and_type_list :: proc(s: ^TreePrinterState, label: string, list: []Na
     }
 }
 
+print_argument_list :: proc(s: ^TreePrinterState, label: string, list: []FunctionArg) {
+    list_item(s, label)
+    for arg, index in list {
+        list_item(s, "`%s`:", arg.name)
+        switch arg.arg_type {
+        case .Normal:
+            list_item(s, "normal type")
+        case .Mutable:
+            list_item(s, "mutable type")
+        case .RemovedFromStack:
+            list_item(s, "removed from stack type")
+        }
+        print_type(s, arg.value_type)
+    }
+}
+
 print_value :: proc(s: ^TreePrinterState, value: Value, label_fmt: string, args: ..any) {
     list_item(s, label_fmt, ..args)
     list_item(s, "value at character index %d", value.pos)
     switch v in value.value {
+    case ValueInBrackets:
+        print_value(s, v^, "value in brackets")
+    case ArrayAccess:
+        list_item(s, "array access:")
+        print_value(s, v.array^, "array:")
+        print_value(s, v.index^, "index:")
     case Number:
         list_item(s, "number: %s", v)
     case FunctionCall:
-        list_item(s, "function call:")
-        {list_item(s, "function name: %s", v.function_name)}
+        list_item(s, "function call")
+        print_value(s, v.function^, "function value")
         for arg, index in v.args {
             print_value(s, arg, "value %d", index)
         }
@@ -232,6 +287,8 @@ print_value :: proc(s: ^TreePrinterState, value: Value, label_fmt: string, args:
         list_item(s, "variable: %s", v)
     case String:
         list_item(s, "string: %s", v)
+    case Char:
+        list_item(s, "character: %c", v)
     }
 }
 
@@ -239,7 +296,7 @@ print_block :: proc(s: ^TreePrinterState, label: string, block: []Statement) {
     list_item(s, label)
     for statement, index in block {
         list_item(s, "statement %d at character index %d", index, statement.position)
-        #partial switch value in statement.value {
+        #partial switch v in statement.value {
         case ForInLoop:
             list_item(s, "for in loop:")
             {
@@ -247,11 +304,11 @@ print_block :: proc(s: ^TreePrinterState, label: string, block: []Statement) {
                 print_variable :: proc(s: ^TreePrinterState, var: IdentAndPos) {
                     list_item(s, "`%s` at character index %d", var.ident, var.pos)
                 }
-                print_variable(s, value.variables[0])
-                print_variable(s, value.variables[1])
-                print_variable(s, value.variables[2])
+                print_variable(s, v.variables[0])
+                print_variable(s, v.variables[1])
+                print_variable(s, v.variables[2])
             }
-            switch iter in value.iterator {
+            switch iter in v.iterator {
             case NumericIterator:
                 list_item(s, "numeric iterator:")
                 {list_item(s, "type: %v", iter.type)}
@@ -261,27 +318,27 @@ print_block :: proc(s: ^TreePrinterState, label: string, block: []Statement) {
             case string:
                 list_item(s, "string iterator `%s`", iter)
             }
-            print_block(s, "body", value.body)
+            print_block(s, "body", v.body)
         case ReturnStatement:
             list_item(s, "return statement")
-            for v, i in value {
+            for v, i in v {
                 print_value(s, v, "value %d:", i)
             }
         case YieldStatement:
             list_item(s, "yield statement")
-            for v, i in value {
+            for v, i in v {
                 print_value(s, v, "value %d:", i)
             }
         case IfElseStatement:
             list_item(s, "if else statement")
-            print_value(s, value.condition, "condition:")
-            print_block(s, "if block:", value.if_block)
-            print_block(s, "else block:", value.else_block)
+            print_value(s, v.condition, "condition:")
+            print_block(s, "if block:", v.if_block)
+            print_block(s, "else block:", v.else_block)
         case FunctionCall:
-            list_item(s, "a function call")
-            {list_item(s, "function name: %s", value.function_name)}
-            for v, i in value.args {
-                print_value(s, v, "arg %d:", i)
+            list_item(s, "function call")
+            print_value(s, v.function^, "function value")
+            for arg, index in v.args {
+                print_value(s, arg, "value %d", index)
             }
         case:
             list_item(s, "todo")
@@ -290,7 +347,12 @@ print_block :: proc(s: ^TreePrinterState, label: string, block: []Statement) {
     }
 }
 
-print_ast :: proc(imports: []Import, globals: map[string]Global) {
+print_ast :: proc(
+    imports: []Import,
+    globals: map[string]ParsedGlobal,
+    global_functions: []FunctionDefinition,
+    global_types: []TypeValue,
+) {
     s: TreePrinterState
 
     {
@@ -306,16 +368,16 @@ print_ast :: proc(imports: []Import, globals: map[string]Global) {
     {
         list_item(&s, "%d globals:", len(globals))
         for name, global in globals {
-            list_item(&s, "global called `%s` at character index %d:", name, global.position)
-            switch value in global.value {
-            case Type:
+            list_item(&s, "global called `%s` at character index %d:", name, global.pos)
+            switch global.kind {
+            case .Type:
                 list_item(&s, "value is a type:")
-                print_type(&s, value)
-            case FunctionDefinition:
+                print_type_value(&s, global_types[global.index])
+            case .Function:
                 list_item(&s, "value is a function definition:")
-                print_name_and_type_list(&s, "inputs:", value.inputs)
-                print_name_and_type_list(&s, "outputs:", value.outputs)
-                print_block(&s, "body:", value.body)
+                print_argument_list(&s, "inputs:", global_functions[global.index].inputs)
+                print_name_and_type_list(&s, "outputs:", global_functions[global.index].outputs)
+                print_block(&s, "body:", global_functions[global.index].body)
             }
         }
     }

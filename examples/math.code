@@ -1,14 +1,14 @@
-math_token = [
+math_token = <
 	Plus,
 	Minus,
 	Multiply,
 	Divide,
 	OpenBracket,
 	CloseBracket,
-	Integer(i64),
-	Float(f64),
-	Error(string)
-]
+	Integer: i64,
+	Float: f64,
+	Error: string,
+>
 
 get_next_token = (math: string, ~pos: uint) -> math_token {
 	if math[pos] == '+' {~pos += 1; return .Plus}

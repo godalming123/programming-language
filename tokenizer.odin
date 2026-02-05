@@ -15,6 +15,8 @@ OpenBracketToken :: struct {} // (
 CloseBracketToken :: struct {} // )
 OpenSquareBracketToken :: struct {} // [
 CloseSquareBracketToken :: struct {} // ]
+OpenAngleBracketToken :: struct {} // <
+CloseAngleBracketToken :: struct {} // >
 OpenBraceToken :: struct {} // {
 CloseBraceToken :: struct {} // }
 CommaToken :: struct {} // ,
@@ -37,6 +39,7 @@ AndToken :: struct {} // and
 OrToken :: struct {} // or
 CommentToken :: distinct string
 StringToken :: distinct string
+CharToken :: distinct byte
 EndOfFileToken :: struct {}
 
 TokenContents :: union {
@@ -46,6 +49,8 @@ TokenContents :: union {
     CloseBracketToken,
     OpenSquareBracketToken,
     CloseSquareBracketToken,
+    OpenAngleBracketToken,
+    CloseAngleBracketToken,
     OpenBraceToken,
     CloseBraceToken,
     CommaToken,
@@ -68,13 +73,14 @@ TokenContents :: union {
     OrToken,
     CommentToken,
     StringToken,
+    CharToken,
     EndOfFileToken,
 }
 
 token_contents_to_string :: proc(token: TokenContents) -> string {
     switch value in token {
     case Error:
-        return fmt.aprintf("the tokenizer error `%s`", value)
+        return fmt.aprintf("the tokenizer error \"%s\"", value)
     case NewlineToken:
         return "a newline"
     case OpenBracketToken:
@@ -85,6 +91,10 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "an open square bracket (`[`)"
     case CloseSquareBracketToken:
         return "a close square bracket (`]`)"
+    case OpenAngleBracketToken:
+        return "an open angle bracket (`<`)"
+    case CloseAngleBracketToken:
+        return "a close angle bracket (`>`)"
     case CommaToken:
         return "a comma (`,`)"
     case ColonToken:
@@ -129,6 +139,9 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "a comment"
     case StringToken:
         return fmt.aprintf("the string literal `%s`", value)
+    case CharToken:
+        // TODO: Properly format character literals that use escapes
+        return fmt.aprintf("the character literal '%c'", value)
     case EndOfFileToken:
         return "the end of the file"
     case:
@@ -172,17 +185,22 @@ get_location :: proc(text: string, position: uint) -> (line := 1, column := 1) {
     return
 }
 
+// Set the position to max(uint) to not have a position for the error message
 err_ok :: proc(file: CompilerFile, position: uint, message_fmt: string, message_args: ..any) {
-    line, column := get_location(file.code, position)
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
-    fmt.eprintf(
-        "\nError compiling `%s`:\nLine %d column %d:\n%s\n",
-        file.file_name,
-        line,
-        column,
-        message,
-    )
+    if position == max(uint) {
+        fmt.eprintf("\nError compiling `%s`:\n%s\n", file.file_name, message)
+    } else {
+        line, column := get_location(file.code, position)
+        fmt.eprintf(
+            "\nError compiling `%s`:\nLine %d column %d:\n%s\n",
+            file.file_name,
+            line,
+            column,
+            message,
+        )
+    }
 }
 
 wrong_token_err :: proc(state: ^TokenizerState, expected_possibilities: []string) {
@@ -208,11 +226,9 @@ wrong_token_err :: proc(state: ^TokenizerState, expected_possibilities: []string
     err_ok(
         state.file,
         state.last_token_pos,
-        fmt.aprintf(
-            "Expected%s\nGot %s",
-            string(expected_bytes),
-            token_contents_to_string(state.last_token),
-        ),
+        "Expected%s\nGot %s",
+        string(expected_bytes),
+        token_contents_to_string(state.last_token),
     )
     delete(expected_bytes)
 }
@@ -236,7 +252,7 @@ get_next_token :: proc(
         return
     }
     state.last_token_pos = state.index
-    symbols :: []u8{'|', '=', '+', '-', '*', '/', '.', '<', '>', '%'}
+    symbols :: []u8{'|', '=', '+', '-', '*', '/', '.', '<', '>', '%', '~'}
     char := state.code[state.index]
     switch char {
     case '\n':
@@ -331,6 +347,20 @@ get_next_token :: proc(
                 state.index += 1
             }
         }
+    case '\'':
+        state.index += 1
+        if state.index >= len(state.code) {
+            state.last_token = Error("Unexpected end of file while tokenizing character")
+            return
+        }
+        if state.code[state.index] == '\\' {
+            state.index += 1
+            if state.index >= len(state.code) {
+                state.last_token = Error("Unexpected end of file while tokenizing character")
+                return
+            }
+        }
+        state.last_token = CharToken(state.code[state.index])
     case '/':
         if state.index + 1 < len(state.code) && state.code[state.index + 1] == '/' {
             state.index += 2
@@ -356,6 +386,10 @@ get_next_token :: proc(
             switch symbols {
             case "->":
                 state.last_token = ArrowToken{}
+            case "<":
+                state.last_token = OpenAngleBracketToken{}
+            case ">":
+                state.last_token = CloseAngleBracketToken{}
             case:
                 state.last_token = SymbolsToken(symbols)
             }

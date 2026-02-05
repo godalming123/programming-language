@@ -27,7 +27,7 @@ build :: proc(file_name: string) -> bool {
         file  = file,
     }
     fmt.printfln("Parsing `%s`...", file.file_name)
-    imports, globals, ok := parse(&state)
+    imports, globals, global_funcs, global_types, ok := parse(&state)
     if !ok {
         return false
     }
@@ -35,7 +35,13 @@ build :: proc(file_name: string) -> bool {
     // print_ast(imports, globals)
 
     fmt.printfln("Checking `%s`...", file.file_name)
-    checked, main_func_index, checked_ok := check(file, imports, globals)
+    checked, main_func_index, checked_ok := check(
+        file,
+        imports,
+        globals,
+        global_funcs,
+        global_types,
+    )
     if !checked_ok {
         fmt.eprintfln("\nFailed to check `%s`", file.file_name)
         return false
@@ -92,6 +98,9 @@ main :: proc() {
         }
     case "help":
         print_help(0)
+    case:
+        fmt.eprintfln("Unexpected command `%s`", os2.args[1])
+        print_help(1)
     }
 }
 

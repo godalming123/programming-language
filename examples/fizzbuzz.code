@@ -1,4 +1,4 @@
-main = (_args: []String) -> I32 {
+main = () -> i32 {
     for i in 1..=100 {
         if i % 15 == 0 {
             println("Fizzbuzz")
@@ -10,5 +10,5 @@ main = (_args: []String) -> I32 {
             println(i)
         }
     }
-    // return 0
+    return 0
 }

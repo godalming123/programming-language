@@ -1,8 +1,9 @@
-factorial = (n: uint) {
+factorial = (n: i64) -> i64 { // TODO: Support using u64 as the type for `n`
 	if n <= 1 {return 1}
 	return n * factorial(n-1)
 }
 
-main = (_args: []string) -> i32 {
+main = () -> i32 {
 	println(factorial(5))
+	return 0
 }
