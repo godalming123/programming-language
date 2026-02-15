@@ -1,24 +1,25 @@
-// TODO
-// find_primes = (-prime_sieve: []bool) -> (+prime_sieve: []bool) {
-// 	
-// }
-// 
-// main = (_args: []string) {
-// 	+prime_sieve = []bool{}
-// 	while {
-// 		println("Primes found so far:")
-// 		for is_prime, index in prime_sieve {
-// 			if is_prime {
-// 				print("- ${index}")
-// 			}
-// 		}
-// 	input("How many primes would you like to find")
-// 	+prime_sieve = find_primes(-prime_sieve)
-// 		
-// 	}
-// }
+find_primes = || -> [100]Bool {
+	mut is_prime = [100]Bool={false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true}
+	for index in 1 ..< len(is_prime) {
+		if is_prime[index] {
+			for i in (2*index)+1 ..< len(is_prime) step index + 1 {
+				~is_prime[i] = false
+			}
+		}
+	}
+	return is_prime
+}
 
-main = (_args: []string) -> i32 {
-	println("TODO: primes")
+main = || -> I64 {
+    primes = find_primes()
+    for is_prime, i in primes {
+		print("The number ")
+		print(i+1)
+	    if is_prime {
+			println(" is prime")
+		} else {
+			println(" is not prime")
+		}
+	}
 	return 0
 }

@@ -88,6 +88,118 @@ factorial_example :: proc(t: ^testing.T) {
     testing.expect(t, ran.stdout == "120\n")
 }
 
+@(test)
+primes_example :: proc(t: ^testing.T) {
+    ran := run_example(t, "examples/primes.code")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    testing.expect(
+        t,
+        ran.stdout ==
+        `The number 1 is not prime
+The number 2 is prime
+The number 3 is prime
+The number 4 is not prime
+The number 5 is prime
+The number 6 is not prime
+The number 7 is prime
+The number 8 is not prime
+The number 9 is not prime
+The number 10 is not prime
+The number 11 is prime
+The number 12 is not prime
+The number 13 is prime
+The number 14 is not prime
+The number 15 is not prime
+The number 16 is not prime
+The number 17 is prime
+The number 18 is not prime
+The number 19 is prime
+The number 20 is not prime
+The number 21 is not prime
+The number 22 is not prime
+The number 23 is prime
+The number 24 is not prime
+The number 25 is not prime
+The number 26 is not prime
+The number 27 is not prime
+The number 28 is not prime
+The number 29 is prime
+The number 30 is not prime
+The number 31 is prime
+The number 32 is not prime
+The number 33 is not prime
+The number 34 is not prime
+The number 35 is not prime
+The number 36 is not prime
+The number 37 is prime
+The number 38 is not prime
+The number 39 is not prime
+The number 40 is not prime
+The number 41 is prime
+The number 42 is not prime
+The number 43 is prime
+The number 44 is not prime
+The number 45 is not prime
+The number 46 is not prime
+The number 47 is prime
+The number 48 is not prime
+The number 49 is not prime
+The number 50 is not prime
+The number 51 is not prime
+The number 52 is not prime
+The number 53 is prime
+The number 54 is not prime
+The number 55 is not prime
+The number 56 is not prime
+The number 57 is not prime
+The number 58 is not prime
+The number 59 is prime
+The number 60 is not prime
+The number 61 is prime
+The number 62 is not prime
+The number 63 is not prime
+The number 64 is not prime
+The number 65 is not prime
+The number 66 is not prime
+The number 67 is prime
+The number 68 is not prime
+The number 69 is not prime
+The number 70 is not prime
+The number 71 is prime
+The number 72 is not prime
+The number 73 is prime
+The number 74 is not prime
+The number 75 is not prime
+The number 76 is not prime
+The number 77 is not prime
+The number 78 is not prime
+The number 79 is prime
+The number 80 is not prime
+The number 81 is not prime
+The number 82 is not prime
+The number 83 is prime
+The number 84 is not prime
+The number 85 is not prime
+The number 86 is not prime
+The number 87 is not prime
+The number 88 is not prime
+The number 89 is prime
+The number 90 is not prime
+The number 91 is not prime
+The number 92 is not prime
+The number 93 is not prime
+The number 94 is not prime
+The number 95 is not prime
+The number 96 is not prime
+The number 97 is prime
+The number 98 is not prime
+The number 99 is not prime
+The number 100 is not prime
+`,
+    )
+}
+
 //@(test)
 //run_examples :: proc(t: ^testing.T) {
 //    base_dir, ok := filepath.abs(filepath.dir(os2.args[0]))

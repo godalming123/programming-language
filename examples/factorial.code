@@ -1,9 +1,9 @@
-factorial = (n: i64) -> i64 { // TODO: Support using u64 as the type for `n`
+factorial = |n: I64| -> I64 { // TODO: Support using U64 as the type for `n`
 	if n <= 1 {return 1}
 	return n * factorial(n-1)
 }
 
-main = () -> i32 {
+main = || -> I64 {
 	println(factorial(5))
 	return 0
 }

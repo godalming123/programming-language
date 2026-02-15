@@ -4,7 +4,8 @@ import "core:fmt"
 import "core:mem"
 import "core:os/os2"
 
-debug :: false
+debug_tokenizer :: false
+debug_checker :: false // TODO: Improve the debugging logs when this in turned on
 
 print_help :: proc(exit_code: int) -> ! {
     fmt.println("- `build file_name` build a file")
@@ -22,24 +23,22 @@ build :: proc(file_name: string) -> bool {
     defer delete(data, context.allocator)
 
     file := CompilerFile{string(data), file_name}
-    state := TokenizerState {
-        index = 0,
-        file  = file,
-    }
+    state := ParserState{make([dynamic]FunctionDefinition), TokenizerState{index = 0, file = file}}
     fmt.printfln("Parsing `%s`...", file.file_name)
-    imports, globals, global_funcs, global_types, ok := parse(&state)
+    imports, globals, global_types, ok := parse(&state)
     if !ok {
+        fmt.eprintfln("\nFailed to parse `%s`", file.file_name)
         return false
     }
     // fmt.printf("%#v", globals)
     // print_ast(imports, globals)
 
     fmt.printfln("Checking `%s`...", file.file_name)
-    checked, main_func_index, checked_ok := check(
+    checked, array_types, main_func_index, checked_ok := check(
         file,
         imports,
         globals,
-        global_funcs,
+        state.function_defs[:],
         global_types,
     )
     if !checked_ok {
@@ -48,7 +47,7 @@ build :: proc(file_name: string) -> bool {
     }
 
     fmt.println("Emitting c code...")
-    c := emit_c(checked, main_func_index)
+    c := emit_c(checked, array_types, main_func_index)
 
     out_name := fmt.aprintf("%s.c", file_name)
     fmt.printfln("Writing to `%s`...", out_name)

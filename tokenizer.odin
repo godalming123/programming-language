@@ -16,27 +16,37 @@ CloseBracketToken :: struct {} // )
 OpenSquareBracketToken :: struct {} // [
 CloseSquareBracketToken :: struct {} // ]
 OpenAngleBracketToken :: struct {} // <
+LessThanOrEqualToken :: struct {} // <=
 CloseAngleBracketToken :: struct {} // >
+GreaterThanOrEqualToken :: struct {} // >=
 OpenBraceToken :: struct {} // {
 CloseBraceToken :: struct {} // }
 CommaToken :: struct {} // ,
 ColonToken :: struct {} // :
+SemiColonToken :: struct {} // ;
+BarToken :: struct {} // |
+PipeToken :: struct {} // |>
 ArrowToken :: struct {} // ->
+AssignToken :: struct {} // =
 SymbolsToken :: distinct string
 DigitsToken :: distinct string
 IdentToken :: distinct string
+TrueToken :: struct {} // true
+FalseToken :: struct {} // false
 InToken :: struct {} // in
 StepToken :: struct {} // step
+DoToken :: struct {} // do
 ForToken :: struct {} // for
+WhileToken :: struct {} // while
 IfToken :: struct {} // if
 ElseToken :: struct {} // else
-StructToken :: struct {} // struct
-SumToken :: struct {} // sum
 ImportToken :: struct {} // import
 ReturnToken :: struct {} // return
 YieldToken :: struct {} // yield
 AndToken :: struct {} // and
 OrToken :: struct {} // or
+DynamicToken :: struct {} // dynamic
+MutToken :: struct {} // mut
 CommentToken :: distinct string
 StringToken :: distinct string
 CharToken :: distinct byte
@@ -50,27 +60,37 @@ TokenContents :: union {
     OpenSquareBracketToken,
     CloseSquareBracketToken,
     OpenAngleBracketToken,
+    LessThanOrEqualToken,
     CloseAngleBracketToken,
+    GreaterThanOrEqualToken,
     OpenBraceToken,
     CloseBraceToken,
     CommaToken,
     ColonToken,
+    SemiColonToken,
+    BarToken,
+    PipeToken,
     SymbolsToken,
     ArrowToken,
+    AssignToken,
     DigitsToken,
     IdentToken,
+    TrueToken,
+    FalseToken,
     InToken,
     StepToken,
+    DoToken,
     ForToken,
+    WhileToken,
     IfToken,
     ElseToken,
-    StructToken,
-    SumToken,
     ImportToken,
     ReturnToken,
     YieldToken,
     AndToken,
     OrToken,
+    DynamicToken,
+    MutToken,
     CommentToken,
     StringToken,
     CharToken,
@@ -93,12 +113,22 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "a close square bracket (`]`)"
     case OpenAngleBracketToken:
         return "an open angle bracket (`<`)"
+    case LessThanOrEqualToken:
+        return "an less than or equal sign (`<=`)"
     case CloseAngleBracketToken:
         return "a close angle bracket (`>`)"
+    case GreaterThanOrEqualToken:
+        return "a greater than or equal sign (`>=`)"
     case CommaToken:
         return "a comma (`,`)"
     case ColonToken:
         return "`:`"
+    case SemiColonToken:
+        return "`;`"
+    case BarToken:
+        return "`|`"
+    case PipeToken:
+        return "`|>`"
     case OpenBraceToken:
         return "an open brace (`{`)"
     case CloseBraceToken:
@@ -107,24 +137,30 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return fmt.aprintf("the symbols `%s`", value)
     case ArrowToken:
         return "`->`"
+    case AssignToken:
+        return "`=`"
     case DigitsToken:
         return fmt.aprintf("the digits `%s`", value)
     case IdentToken:
         return fmt.aprintf("the identifier `%s`", value)
+    case TrueToken:
+        return "the keyword `true`"
+    case FalseToken:
+        return "the keyword `false`"
     case InToken:
         return "the keyword `in`"
     case StepToken:
         return "the keyword `step`"
     case ForToken:
         return "the keyword `for`"
+    case DoToken:
+        return "the keyword `do`"
+    case WhileToken:
+        return "the keyword `while`"
     case IfToken:
         return "the keyword `if`"
     case ElseToken:
         return "the keyword `else`"
-    case StructToken:
-        return "the keyword `struct`"
-    case SumToken:
-        return "the keyword `sum`"
     case ImportToken:
         return "the keyword `import`"
     case ReturnToken:
@@ -135,6 +171,10 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "the keyword `and`"
     case OrToken:
         return "the keyword `or`"
+    case DynamicToken:
+        return "the keyword `dynamic`"
+    case MutToken:
+        return "the keyword `mut`"
     case CommentToken:
         return "a comment"
     case StringToken:
@@ -155,10 +195,11 @@ CompilerFile :: struct {
 }
 
 TokenizerState :: struct {
-    index:          uint,
-    using file:     CompilerFile,
-    last_token_pos: uint,
-    last_token:     TokenContents,
+    index:              uint,
+    using file:         CompilerFile,
+    last_token_pos:     uint,
+    last_token:         TokenContents,
+    last_token_skipped: bool,
 }
 
 // Returns whether the tokenizer has reached the end of the file
@@ -203,8 +244,13 @@ err_ok :: proc(file: CompilerFile, position: uint, message_fmt: string, message_
     }
 }
 
-wrong_token_err :: proc(state: ^TokenizerState, expected_possibilities: []string) {
+wrong_token_err :: proc(
+    state: ^TokenizerState,
+    expected_possibilities: []string,
+    infos: ..string,
+) {
     expected_bytes: []byte
+    defer delete(expected_bytes)
     if len(expected_possibilities) == 1 {
         expected_bytes = make([]byte, len(expected_possibilities[0]) + 1)
         expected_bytes[0] = ' '
@@ -223,28 +269,35 @@ wrong_token_err :: proc(state: ^TokenizerState, expected_possibilities: []string
             i += copy(expected_bytes[i:], str)
         }
     }
+    info_len := len(infos)
+    for info in infos {
+        info_len += len(info)
+    }
+    info_bytes := make([]byte, info_len)
+    defer delete(info_bytes)
+    i := 0
+    for info in infos {
+        i += copy(info_bytes[i:], info)
+        info_bytes[i] = '\n'
+        i += 1
+    }
     err_ok(
         state.file,
         state.last_token_pos,
-        "Expected%s\nGot %s",
+        "%sExpected%s\nGot %s",
+        string(info_bytes),
         string(expected_bytes),
         token_contents_to_string(state.last_token),
     )
-    delete(expected_bytes)
 }
 
 get_next_token :: proc(
     state: ^TokenizerState,
-    skip_newlines_and_comments: bool,
+    skip_newlines_and_comments_and_semicolons: bool,
     loc := #caller_location,
 ) {
-    when debug {
-        fmt.printfln(
-            "Get next token called from file %s at line %d column %d",
-            loc.file_path,
-            loc.line,
-            loc.column,
-        )
+    when debug_tokenizer {
+        print_call(Loc(loc), "get next token")
     }
     if skip_nothing_tokens(state) {
         state.last_token_pos = state.index
@@ -252,13 +305,15 @@ get_next_token :: proc(
         return
     }
     state.last_token_pos = state.index
-    symbols :: []u8{'|', '=', '+', '-', '*', '/', '.', '<', '>', '%', '~'}
+    state.last_token_skipped = false
+    symbols :: []u8{'=', '+', '-', '*', '/', '.', '<', '>', '%', '~'}
     char := state.code[state.index]
     switch char {
     case '\n':
         state.index += 1
-        if skip_newlines_and_comments {
-            get_next_token(state, skip_newlines_and_comments)
+        if skip_newlines_and_comments_and_semicolons {
+            get_next_token(state, skip_newlines_and_comments_and_semicolons)
+            state.last_token_skipped = true
         } else {
             state.last_token = NewlineToken{}
         }
@@ -286,6 +341,38 @@ get_next_token :: proc(
     case ':':
         state.index += 1
         state.last_token = ColonToken{}
+    case '<':
+        state.index += 1
+        if state.index < len(state.code) && state.code[state.index] == '=' {
+            state.index += 1
+            state.last_token = LessThanOrEqualToken{}
+        } else {
+            state.last_token = OpenAngleBracketToken{}
+        }
+    case '>':
+        state.index += 1
+        if state.index < len(state.code) && state.code[state.index] == '=' {
+            state.index += 1
+            state.last_token = GreaterThanOrEqualToken{}
+        } else {
+            state.last_token = CloseAngleBracketToken{}
+        }
+    case ';':
+        state.index += 1
+        if skip_newlines_and_comments_and_semicolons {
+            get_next_token(state, skip_newlines_and_comments_and_semicolons)
+            state.last_token_skipped = true
+        } else {
+            state.last_token = SemiColonToken{}
+        }
+    case '|':
+        state.index += 1
+        if state.index < len(state.code) && state.code[state.index] == '>' {
+            state.index += 1
+            state.last_token = PipeToken{}
+        } else {
+            state.last_token = BarToken{}
+        }
     case '0' ..< '9':
         for state.index < len(state.code) &&
             '0' <= state.code[state.index] &&
@@ -305,24 +392,36 @@ get_next_token :: proc(
         switch ident {
         case "in":
             state.last_token = InToken{}
+        case "true":
+            state.last_token = TrueToken{}
+        case "false":
+            state.last_token = FalseToken{}
         case "step":
             state.last_token = StepToken{}
         case "for":
             state.last_token = ForToken{}
+        case "do":
+            state.last_token = DoToken{}
+        case "while":
+            state.last_token = WhileToken{}
         case "if":
             state.last_token = IfToken{}
         case "else":
             state.last_token = ElseToken{}
-        case "struct":
-            state.last_token = StructToken{}
-        case "sum":
-            state.last_token = SumToken{}
         case "import":
             state.last_token = ImportToken{}
         case "return":
             state.last_token = ReturnToken{}
         case "yield":
             state.last_token = YieldToken{}
+        case "and":
+            state.last_token = AndToken{}
+        case "or":
+            state.last_token = OrToken{}
+        case "dynamic":
+            state.last_token = DynamicToken{}
+        case "mut":
+            state.last_token = MutToken{}
         case:
             state.last_token = IdentToken(ident)
         }
@@ -361,6 +460,20 @@ get_next_token :: proc(
             }
         }
         state.last_token = CharToken(state.code[state.index])
+        state.index += 1
+        if state.index >= len(state.code) {
+            state.last_token = Error(
+                "While tokenizing character. Expected `'`. Got unexpected end of file.",
+            )
+            return
+        }
+        if state.code[state.index] != '\'' {
+            state.last_token = Error(
+                fmt.aprintf("Expected `'`, got `%c`", state.code[state.index]),
+            )
+            return
+        }
+        state.index += 1
     case '/':
         if state.index + 1 < len(state.code) && state.code[state.index + 1] == '/' {
             state.index += 2
@@ -368,8 +481,9 @@ get_next_token :: proc(
                 state.index += 1
             }
             state.index += 1
-            if skip_newlines_and_comments {
-                get_next_token(state, skip_newlines_and_comments)
+            if skip_newlines_and_comments_and_semicolons {
+                get_next_token(state, skip_newlines_and_comments_and_semicolons)
+                state.last_token_skipped = true
                 return
             }
             state.last_token = CommentToken(
@@ -386,10 +500,8 @@ get_next_token :: proc(
             switch symbols {
             case "->":
                 state.last_token = ArrowToken{}
-            case "<":
-                state.last_token = OpenAngleBracketToken{}
-            case ">":
-                state.last_token = CloseAngleBracketToken{}
+            case "=":
+                state.last_token = AssignToken{}
             case:
                 state.last_token = SymbolsToken(symbols)
             }
@@ -397,7 +509,7 @@ get_next_token :: proc(
             state.last_token = Error(fmt.aprintf("Unrecognized character %c", char))
         }
     }
-    when debug {
+    when debug_tokenizer {
         // TODO: There are some cases where state.last_token is updated but this line of code in not ran
         fmt.printfln("Last token set to %s", token_contents_to_string(state.last_token))
     }

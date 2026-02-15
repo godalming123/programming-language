@@ -1,59 +1,69 @@
-math_token = <
-	Plus,
-	Minus,
-	Multiply,
-	Divide,
-	OpenBracket,
-	CloseBracket,
-	Integer: i64,
-	Float: f64,
-	Error: string,
+// `dynamic` means that the compiler does not know the maximum size of part of a type
+// this means that the type cannot be stored on the CMS alone
+MathToken : dynamic <
+	Plus{pos: U64},
+	Minus{pos: U64},
+	Multiply{pos: U64},
+	Divide{pos: U64},
+	OpenBracket{pos: U64},
+	CloseBracket{pos: U64},
+	Integer{pos: U64, value: I64},
+	Float{pos: U64, value: F64},
+	Error{pos: U64, msg: dynamic String},
 >
 
-get_next_token = (math: string, ~pos: uint) -> math_token {
-	if math[pos] == '+' {~pos += 1; return .Plus}
-	if math[pos] == '-' {~pos += 1; return .Minus}
-	if math[pos] == '*' {~pos += 1; return .Multiply}
-	if math[pos] == '/' {~pos += 1; return .Divide}
-	if math[pos] == '(' {~pos += 1; return .OpenBracket}
-	if math[pos] == ')' {~pos += 1; return .CloseBracket}
+get_next_token = |math: String, ~pos: U64| -> +MathToken { // DONE: Mutability
 	start_pos = pos
-	while '0' <= math[pos] and math[pos] <= '9' {
-		~pos += 1
+	if math[pos] == '+' {~pos += 1; return .Plus{start_pos}}
+	if math[pos] == '-' {~pos += 1; return .Minus{start_pos}}
+	if math[pos] == '*' {~pos += 1; return .Multiply{start_pos}}
+	if math[pos] == '/' {~pos += 1; return .Divide{start_pos}}
+	if math[pos] == '(' {~pos += 1; return .OpenBracket{start_pos}}
+	if math[pos] == ')' {~pos += 1; return .CloseBracket{start_pos}}
+	if not ('0' <= math[pos] and math[pos] <= '9') {
+		+msg = "Unexpected character '${math[pos]}'"
+		return .Error{start_pos, msg}
 	}
+	do {
+		~pos += 1
+	} while '0' <= math[pos] and math[pos] <= '9'
 	if math[pos] == '.' {
 		~pos += 1
 		if not ('0' <= math[pos] and math[pos] <= '9') {
-			// TODO: handle error
+			+msg = "After decimal point, expected digit, got '${math[pos]}'"
+			return .Error{start_pos, msg} // DONE: Memory model and string interpolation
 		}
 		do {
 			~pos += 1
 		} while '0' <= math[pos] and math[pos] <= '9'
-		return .Float(parse_float(math[pos:new_pos$]))
-	} else if start_pos == pos {
-		// TODO: Handle error
-		return
+		return .Float{start_pos, parse_float(math[start_pos:pos])}
 	} else {
-		return .Integer(parse_int(math[pos:new_pos$]))
+		return .Integer{start_pos, parse_int(math[start_pos:pos])}
 	}
 }
 
-parsed_math = [
-	Addition(parsed_math, parsed_math),
-	Subtraction(parsed_math, parsed_math),
-	Multiplication(parsed_math, parsed_math),
-	Division(parsed_math, parsed_math),
-	Negation(parsed_math),
-]
+ParsedMathElem : <
+    Addition,
+	Subtraction,
+	Multiplication,
+	Division,
+	Negation,
+	Integer{value: I64},
+	Float{value: F64},
+	Empty,
+>
 
-parse_math(math: string, ~pos: uint) -> parsed_math {
-	token = get_next_token(math, ~pos)
-	if token is .Plus { return parse_math(math, ~pos) }
-	if token is .Minus { return .Negation(parse_math(math, ~pos)) }
-	if token is .OpenBracket { parse_math(math, pos$) }
-	// TODO
-}
+ParsedMath : dynamic []ParsedMathElem
 
-main = (_args: []string) -> i32 {
+//parse_math = |math: String, ~pos: U64| -> +ParsedMath {
+//	+token = get_next_token(math, ~pos)
+//	// TODO: Constraints
+//	if token is .Plus { return parse_math(math, ~pos) }
+//	if token is .Minus { return .Negation(parse_math(math, ~pos)) }
+//	if token is .OpenBracket { parse_math(math, pos$) }
+//	// TODO
+//}
+
+main = || -> I32 {
 	// TODO
 }

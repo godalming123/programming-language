@@ -1,7 +1,9 @@
 package main
 
 // Handles namespace operations. Namespace operations are all handled in the
-// same file to maintain a consistant set of builtins which cannot be overriden.
+// same file to maintain a consistent set of builtins which cannot be overridden.
+
+import "core:fmt"
 
 // Returns nil if there are errors in the named function call
 handle_named_function_call :: proc(
@@ -9,7 +11,11 @@ handle_named_function_call :: proc(
     pos: uint,
     function_name: string,
     args: []Value,
-) -> CheckedStatement {
+) -> union {
+        CheckedPrint,
+        CheckedFunctionCall,
+        I64Value,
+    } {
     switch function_name {
     case "print":
         stmt, ok := check_print(s, pos, args, false)
@@ -23,6 +29,37 @@ handle_named_function_call :: proc(
             return nil
         }
         return stmt
+    case "len":
+        if len(args) != 1 {
+            err_ok(
+                s.file,
+                pos,
+                "Argument count mismatch\nFunction call provides %d arguments\n`len` function expects 1 argument\n",
+                len(args),
+            )
+            return nil
+        }
+        value, ok := check_value(s, args[0])
+        if !ok {
+            return nil
+        }
+        type := get_type(s, value)
+        array_ref, is_array := type.(ArrayRef)
+        if !is_array {
+            err_ok(
+                s.file,
+                pos,
+                "Expected an array type\nGot the type `%s`\nYou can only get the length of an array",
+                type_to_string(s, type),
+            )
+            return nil
+        }
+        array := get_array_type(s.array_types[:], &array_ref)
+        if array.length != 0 {
+            return I64Value(fmt.aprint(array.length))
+        }
+        err_ok(s.file, pos, "TODO: Handle getting the length of a dynamic length array")
+        return nil
     }
     is_builtin := err_if_builtin(
         s.file,
@@ -34,22 +71,12 @@ handle_named_function_call :: proc(
     if is_builtin {
         return nil
     }
-    global_props, ok := s.globals[function_name]
-    if !ok {
-        err_ok(s.file, pos, "The global `%s` is not defined", function_name)
-        return nil
-    }
-    if global_props.kind != .Function {
-        err_ok(
-            s.file,
-            pos,
-            "The global `%s` is not a function and so cannot be called",
-            function_name,
-        )
+    func_index, exists := get_global_function(s.file, s.globals, pos, function_name, "")
+    if !exists {
         return nil
     }
 
-    func_props := s.global_funcs_props[global_props.index]
+    func_props := s.global_funcs_props[func_index]
     if len(args) != len(func_props.args) {
         err_ok(
             s.file,
@@ -69,7 +96,7 @@ handle_named_function_call :: proc(
         }
 
         type := get_type(s, value)
-        ok = expect_type(s.file, arg.pos, func_props.args[i].type, type)
+        ok = expect_type(s, arg.pos, func_props.args[i].type, type)
         if !ok {
             return nil
         }
@@ -77,28 +104,32 @@ handle_named_function_call :: proc(
         checked_args[i] = value
     }
 
-    return CheckedFunctionCall{global_props.index, checked_args}
+    return CheckedFunctionCall{func_index, checked_args}
 }
 
 // Returns nil if there are errors in the named type
 handle_named_type :: proc(file: CompilerFile, pos: uint, type_name: string) -> CheckedType {
     switch type_name {
-    case "i64":
+    case "I64":
         return I64Type{}
-    case "i32":
+    case "I32":
         return I32Type{}
-    case "i16":
+    case "I16":
         return I16Type{}
-    case "i8":
+    case "I8":
         return I8Type{}
-    case "u64":
+    case "U64":
         return U64Type{}
-    case "u32":
+    case "U32":
         return U32Type{}
-    case "u16":
+    case "U16":
         return U16Type{}
-    case "u8":
+    case "U8":
         return U8Type{}
+    case "Bool":
+        return BoolType{}
+    case "String":
+        return StringType{}
     }
     is_builtin := err_if_builtin(
         file,
@@ -114,7 +145,7 @@ handle_named_type :: proc(file: CompilerFile, pos: uint, type_name: string) -> C
     return nil
 }
 
-// The boolean returned is wether there are errors in the print statement
+// The boolean returned is whether there are errors in the print statement
 check_print :: proc(
     s: ^CheckerState,
     pos: uint,
@@ -159,13 +190,16 @@ check_print :: proc(
         format = add_newline ? "\"%\" PRIu16 \"\\n\"" : "\"%\" PRIu16"
     case U8Type:
         format = add_newline ? "\"%\" PRIu8 \"\\n\"" : "\"%\" PRIu8"
+    case ArrayRef:
+        err_ok(s.file, pos, "Cannot print an array")
+        return CheckedPrint{}, false
     }
     values := make([]CheckedValue, 1)
     values[0] = val
     return CheckedPrint{format, values}, true
 }
 
-// The boolean returned is wether the name is a builtin
+// The boolean returned is whether the name is a builtin
 err_if_builtin :: proc(
     file: CompilerFile,
     name: string,
@@ -174,21 +208,34 @@ err_if_builtin :: proc(
     args: ..any,
 ) -> bool {
     switch name {
-    case "print", "println", "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8":
+    case "print",
+         "println",
+         "I64",
+         "I32",
+         "I16",
+         "I8",
+         "U64",
+         "U32",
+         "U16",
+         "U8",
+         "Bool",
+         "String",
+         "len":
         err_ok(file, pos, msg, ..args)
         return true
     }
     return false
 }
 
+// The boolean returned is whether there are errors
 add_variable :: proc(
     s: ^CheckerState,
     variable_type: CheckedType,
     variable_is_mut: bool,
     variable: IdentAndPos,
 ) -> (
-    var_ref: VariableRef,
-    ok: bool,
+    VariableRef,
+    bool,
 ) {
     // TODO: Add a warning for unused variables
     assert(
@@ -202,21 +249,24 @@ add_variable :: proc(
         "`%s` is a builtin\nCannot override builtins",
         variable.ident,
     )
-    var_ref = VariableRef {
+    // TODO: Consider whether we should fail compilation when there is an incorrectly cased variable name
+    expect_snake_case(s, "variable names", variable)
+    if is_builtin {
+        return VariableRef{}, false
+    }
+    var_ref := VariableRef {
         len(s.scopes) - 1,
         uint(len(s.scopes[len(s.scopes) - 1].variable_is_muts)),
     }
     if variable.ident != "" {
         if variable.ident in s.variables_map {
             err_ok(s.file, variable.pos, "Redeclaration of variable `%s`", variable.ident)
-            ok = false
-            return
+            return VariableRef{}, false
         }
         s.variables_map[variable.ident] = var_ref
     }
     append_elem(&s.scopes[len(s.scopes) - 1].variable_types, variable_type)
     append_elem(&s.scopes[len(s.scopes) - 1].variable_is_muts, variable_is_mut)
-    ok = true
-    return
+    return var_ref, true
 }
 
