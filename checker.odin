@@ -2,6 +2,8 @@ package main
 
 import "base:intrinsics"
 import "core:fmt"
+import "core:strconv"
+import "core:strings"
 
 VariableRef :: struct {
     nesting_level: uint,
@@ -19,24 +21,40 @@ ArrayType :: struct {
     item_type: CheckedType,
 }
 
+FunctionType :: enum {
+    Normal,
+    // JsFunc,
+    ComptimeFunc,
+}
+
 ArrayRef :: distinct uint // An index into `CheckerState.array_types`
 
 CheckerState :: struct {
-    file:               CompilerFile,
-    globals:            map[string]ParsedGlobal,
-    global_funcs:       []FunctionDefinition,
-    global_types:       []TypeValue,
-    global_funcs_props: []CheckedFunctionProps,
-    scopes:             [dynamic]Scope,
-    variables_map:      map[string]VariableRef,
-    return_type:        CheckedType,
+    // The following fields do not change while checking
+    file:             CompilerFile,
+    globals:          map[string]ParsedGlobal,
+    funcs:            []FunctionDefinition,
+    global_types:     []TypeValue,
+    funcs_props:      []CheckedFunctionProps,
+
+    // The following fields depend on the function currently being checked
+    func_type:        FunctionType,
+    return_type:      CheckedType,
+
+    // The following fields depend on which variables are in scope
+    scopes:           [dynamic]Scope,
+    variables_map:    map[string]VariableRef,
+
+    // The following field changes while checking
     // TODO: Use some sort of hash map to store the types in a program so that
     // you can figure out if a new type is the same as any type which has already
     // been used in the program in O(1) time.
-    array_types:        [dynamic]union {
+    array_types:      [dynamic]union {
         ArrayType,
         ArrayRef,
     },
+    loop_index:       uint,
+    diagnostics_info: DiagnosticsInfo,
     // TODO: represent the order of the programmer controlled stack
 }
 
@@ -47,10 +65,9 @@ CheckedFunction :: struct {
     body:      []CheckedStatement,
 }
 
-StringValue :: distinct string
+StringLiteralValue :: distinct string
 U8Value :: distinct u8
-I64Value :: distinct string // TODO: use i64 instead of string
-VariableValue :: distinct VariableRef
+I64Value :: distinct i64
 BooleanNotValue :: distinct ^CheckedValue
 CheckedJoinedValues :: struct {
     join_method: ValueJoinMethod,
@@ -61,9 +78,8 @@ CheckedFunctionCall :: struct {
     index: uint,
     args:  []CheckedValue,
 }
-ArrayValue :: struct {
-    array_type:   ArrayRef,
-    array_values: []CheckedValue,
+LengthOfArray :: struct {
+    array: ^CheckedValue,
 }
 CheckedArrayAccess :: struct {
     // The code emitter might not emit code to sanity check the index
@@ -72,16 +88,18 @@ CheckedArrayAccess :: struct {
 }
 BoolValue :: distinct bool
 CheckedValue :: union {
-    StringValue,
+    StringLiteralValue,
     U8Value,
     I64Value,
-    VariableValue,
+    VariableRef,
     BooleanNotValue,
     CheckedJoinedValues,
     CheckedFunctionCall,
-    ArrayValue,
     BoolValue,
     CheckedArrayAccess,
+    // CheckedJsFunctionCall,
+    LengthOfArray,
+    uint, // an index into the function definitions
 }
 
 StringType :: struct {}
@@ -94,6 +112,12 @@ U32Type :: struct {}
 U16Type :: struct {}
 U8Type :: struct {}
 BoolType :: struct {}
+// JsObjectType :: struct {}
+FuncType :: struct {
+    args:   []CheckedArg,
+    output: ^CheckedType,
+    type:   FunctionType,
+}
 CheckedType :: union {
     StringType,
     I64Type,
@@ -107,6 +131,8 @@ CheckedType :: union {
     BoolType,
     ArrayRef,
     // Type,
+    // JsObjectType,
+    FuncType,
 }
 
 CharGroup :: enum {
@@ -131,8 +157,7 @@ get_character_group :: proc(c: byte) -> CharGroup {
     }
 }
 
-// The boolean returned is whether the identifier is snake case
-expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos) -> bool {
+expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos) {
     i: uint = 0
     state: enum {
         InUppercaseBlock,
@@ -147,14 +172,14 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 state = .InLowercaseBlock
             case .InLowercaseBlock:
             case .InUppercaseBlock:
-                err_ok(
-                    s.file,
+                warn(
+                    s,
                     ident.pos + i,
                     "Expect %s to be `snake_case`\nUnexpected lowercase letter '%c' in an uppercase block of a snake case identifier\nExpected an underscore, a number, or an uppercase letter",
                     expected,
                     ident.ident[i],
                 )
-                return false
+                return
             }
         case .UpperCase:
             switch state {
@@ -162,100 +187,97 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 state = .InUppercaseBlock
             case .InUppercaseBlock:
             case .InLowercaseBlock:
-                err_ok(
-                    s.file,
+                warn(
+                    s,
                     ident.pos + i,
                     "Expect %s to be `snake_case`\nUnexpected uppercase letter '%c' in a lowercase block of a snake case identifier\nExpected an underscore, a number, or a lowercase letter",
                     expected,
                     ident.ident[i],
                 )
-                return false
+                return
             }
         case .Digit:
         case .Underscore:
             state = .NotInBlock
         case .Unknown:
-            err_ok(
-                s.file,
+            warn(
+                s,
                 ident.pos + i,
                 "Unexpected character '%c' in identifier `%s`",
                 ident.ident[i],
                 ident.ident,
             )
-            return false
+            return
         }
         i += 1
     }
-    return true
+    return
 }
 
 // The boolean returned is whether the identifier is camel case
-expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos) -> bool {
+expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos) {
     if get_character_group(ident.ident[0]) != .UpperCase {
-        err_ok(
-            s.file,
+        warn(
+            s,
             ident.pos,
             "Expect %s to be `CamelCase`\nFirst character in camel case ident must be an uppercase letter\nGot '%c'",
             expected,
             ident.ident[0],
         )
-        return false
+        return
     }
     for c, i in ident.ident[1:] {
         switch get_character_group(u8(c)) {
         case .Underscore:
-            err_ok(
-                s.file,
+            warn(
+                s,
                 ident.pos + uint(i) + 1,
                 "Expect %s to be `CamelCase`\nCannot have `_` in a camel case identifier",
                 expected,
             )
-            return false
+            return
         case .LowerCase, .UpperCase, .Digit:
         case .Unknown:
-            err_ok(
-                s.file,
+            warn(
+                s,
                 ident.pos + uint(i) + 1,
                 "Unexpected character '%c' in identifier `%s`",
                 ident.ident[i],
                 ident.ident,
             )
-            return false
+            return
         }
     }
-    return true
+    return
 }
 
 // Returns nil if there are errors in the type
-check_type :: proc(file: CompilerFile, array_types: ^[dynamic]union {
-        ArrayType,
-        ArrayRef,
-    }, type: Type) -> CheckedType {
+check_type :: proc(s: ^CheckerState, type: Type) -> CheckedType {
     switch t in type.type {
     case DynamicType:
-        err_ok(file, type.pos, "TODO: Support checking dynamic type")
+        err(s, type.pos, "TODO: Support checking dynamic type")
         return nil
     case Struct:
-        err_ok(file, type.pos, "TODO: Support checking struct type")
+        err(s, type.pos, "TODO: Support checking struct type")
         return nil
     case Function:
-        err_ok(file, type.pos, "TODO: Support checking function type")
+        err(s, type.pos, "TODO: Support checking function type")
         return nil
     case TypeVariable:
-        if len(t) != 1 {
-            err_ok(file, type.pos, "TODO: Type references with `.` in them")
+        if t.generic_type != nil {
+            err(s, type.pos, "TODO: Handle generic type")
             return nil
         }
-        return handle_named_type(file, type.pos, t[0])
+        return handle_named_type(s, type.pos, t.identifier)
     case Array:
-        item_type := check_type(file, array_types, t.item_type^)
+        item_type := check_type(s, t.item_type^)
         if item_type == nil {
             return nil
         }
-        append_elem(array_types, ArrayType{t.length, item_type})
-        return ArrayRef(len(array_types) - 1)
+        append_elem(&s.array_types, ArrayType{t.length, item_type})
+        return ArrayRef(len(s.array_types) - 1)
     case SumType:
-        err_ok(file, type.pos, "TODO: Support checking sum type")
+        err(s, type.pos, "TODO: Support checking sum type")
         return nil
     case:
         panic("Unreachable")
@@ -278,22 +300,40 @@ CheckedIf :: struct {
     else_block: CheckedBlock,
 }
 
-CheckedPrint :: struct {
-    format: string, // Should not be wrapped in ""
-    values: []CheckedValue,
+CheckedPrint :: distinct CheckedValue // Always a string
+
+CheckedWriteFile :: struct {
+    file_name:     CheckedValue,
+    file_contents: CheckedValue,
 }
 
+// JsValue :: struct {
+//     value: ^CheckedValue, // can be nil
+//     str:   string,
+// }
+
+// CheckedJsFunctionCall :: struct {
+//     function:  JsValue,
+//     arguments: []CheckedValue,
+// }
+//
+// CheckedJsAssignment :: struct {
+//     destination: JsValue,
+//     value:       CheckedValue,
+// }
+
 CheckedLoop :: struct {
-    variables: []CheckedType,
-    body:      []CheckedStatement,
-    enter:     []CheckedStatement,
+    loop_index: uint,
+    variables:  []CheckedType,
+    body:       []CheckedStatement,
+    enter:      []CheckedStatement,
 }
 
 ContinueLoop :: struct {
-    block_nesting_level: uint,
+    loop_index: uint,
 }
 BreakLoop :: struct {
-    block_nesting_level: uint,
+    loop_index: uint,
 }
 
 CheckedBlock :: struct {
@@ -302,43 +342,75 @@ CheckedBlock :: struct {
 }
 
 MutationType :: enum {
-    Increment,
-    Decrement,
+    IncrementBy,
+    DecrementBy,
     MultiplyBy,
     DivideBy,
     SetTo,
 }
 
-CheckedSingleVariableMutation :: struct {
-    mutation_type: MutationType,
-    variable:      VariableRef,
-    value:         CheckedValue,
+CheckedMutationDestination :: struct {
+    variable: VariableRef, // the variable being mutated
+    index:    CheckedValue, // if this is not nil, then `variable` is an array, and this is the index in that array which is being mutated
 }
 
-CheckedArrayElementMutation :: struct {
-    // The code emitter might not emit code to sanity check the index
-    array: VariableRef,
-    index: CheckedValue,
-    value: CheckedValue,
+CheckedMutation :: struct {
+    destination:   CheckedMutationDestination,
+    mutation_type: MutationType,
+    value:         CheckedValue, // The source
+}
+
+InlineArraySegment :: struct {
+    array:        CheckedValue, // an array that should be copied into the `ArrayValue`
+    array_length: CheckedValue,
+}
+
+SingleElemSegment :: struct {
+    elem: CheckedValue, // a scalar value for an element in the `ArrayValue`
+}
+
+ArraySegment :: union {
+    InlineArraySegment,
+    SingleElemSegment,
+}
+// Cannot be a value and has to be a statement so that when something like
+// `~my_array = append(my_array, 1)` is written, `check_value` creates a
+// temporary variable that is used to allocate the expanded array, rather then
+// setting `my_array` to a new allocation and then attempting to copy that
+// uninitialised data onto itself.
+CheckedArrayMutation :: struct {
+    variable:      VariableRef, // the variable being mutated
+    variable_type: ArrayType,
+    segments:      []ArraySegment, // The source
+}
+
+StringInterpolation :: struct {
+    variable: VariableRef, // the variable being mutated
+    format:   string,
+    values:   []CheckedValue,
 }
 
 CheckedStatement :: union {
+    StringInterpolation,
     CheckedReturn,
     CheckedIf,
+    CheckedWriteFile,
     CheckedLoop,
     CheckedPrint,
     ContinueLoop,
     BreakLoop,
-    CheckedSingleVariableMutation,
-    CheckedArrayElementMutation,
+    CheckedMutation,
+    CheckedArrayMutation, // like `CheckedMutation`, except the value is an array
     CheckedFunctionCall,
+    // CheckedJsFunctionCall,
+    // CheckedJsAssignment,
 }
 
 type_is_numeric :: proc(type: CheckedType) -> bool {
     switch _ in type {
     case I64Type, I32Type, I16Type, I8Type, U64Type, U32Type, U16Type, U8Type:
         return true
-    case StringType, BoolType, ArrayRef:
+    case StringType, BoolType, ArrayRef, FuncType:
         return false
     }
     panic("Unreachable")
@@ -369,6 +441,9 @@ type_is_equal :: proc(s: ^CheckerState, type0: CheckedType, type1: CheckedType) 
     switch &t0 in type0 {
     case:
         panic("Unreachable")
+    case FuncType:
+        fmt.println("TODO: Check type equivalency for functions")
+        return false
     case StringType:
         _, is_string := type1.(StringType)
         return is_string
@@ -396,6 +471,9 @@ type_is_equal :: proc(s: ^CheckerState, type0: CheckedType, type1: CheckedType) 
     case U8Type:
         _, is_u8 := type1.(U8Type)
         return is_u8
+    // case JsObjectType:
+    //     _, is_js_object := type1.(JsObjectType)
+    //     return is_js_object
     case BoolType:
         _, is_bool := type1.(BoolType)
         return is_bool
@@ -433,14 +511,21 @@ type_is_equal :: proc(s: ^CheckerState, type0: CheckedType, type1: CheckedType) 
 }
 
 // The boolean returned is whether the `got` type matches the `expected` type
-expect_type :: proc(s: ^CheckerState, pos: uint, expected: CheckedType, got: CheckedType) -> bool {
+expect_type :: proc(
+    s: ^CheckerState,
+    pos: uint,
+    expected: CheckedType,
+    got: CheckedType,
+    extra_text: string, // TODO: Specify `extra_text` in all cases
+) -> bool {
     if !type_is_equal(s, got, expected) {
-        err_ok(
-            s.file,
+        err(
+            s,
             pos,
-            "Expected the type %s but got the type %s", // TODO: Say why that type is expected
+            "Expected the type `%s` but got the type `%s`%s",
             type_to_string(s, expected),
             type_to_string(s, got),
+            extra_text,
         )
         return false
     }
@@ -449,6 +534,9 @@ expect_type :: proc(s: ^CheckerState, pos: uint, expected: CheckedType, got: Che
 
 get_type :: proc(s: ^CheckerState, value: CheckedValue) -> CheckedType {
     switch v in value {
+    case uint:
+        props := s.funcs_props[v]
+        return FuncType{props.args, new_clone(props.return_type), props.func_type}
     case CheckedArrayAccess:
         array_ref := get_type(s, v.array^).(ArrayRef)
         array_type := get_array_type(s.array_types[:], &array_ref)
@@ -456,20 +544,18 @@ get_type :: proc(s: ^CheckerState, value: CheckedValue) -> CheckedType {
     case BoolValue:
         return BoolType{}
     case CheckedFunctionCall:
-        return s.global_funcs_props[v.index].return_type
-    case StringValue:
+        return s.funcs_props[v.index].return_type
+    case StringLiteralValue:
         return StringType{}
     case U8Value:
         return U8Type{}
     case I64Value:
         return I64Type{}
-    case VariableValue:
+    case VariableRef:
         scope := s.scopes[v.nesting_level]
         return scope.variable_types[v.index]
     case BooleanNotValue:
         return BoolType{}
-    case ArrayValue:
-        return v.array_type
     case CheckedJoinedValues:
         switch v.join_method {
         case .BooleanAnd,
@@ -484,66 +570,92 @@ get_type :: proc(s: ^CheckerState, value: CheckedValue) -> CheckedType {
         case .Division, .Multiplication, .Subtraction, .Addition, .Modulo:
             return I64Type{} // TODO: do not assume type
         }
+    // case CheckedJsFunctionCall:
+    //     return JsObjectType{}
+    case LengthOfArray:
+        return I64Type{} // TODO: do not assume type
     }
     panic("Unreachable")
 }
 
 type_to_string :: proc(s: ^CheckerState, t: CheckedType) -> string {
-    switch &type in t {
-    case StringType:
-        return "String"
-    case I64Type:
-        return "I64"
-    case I32Type:
-        return "I32"
-    case I16Type:
-        return "I16"
-    case I8Type:
-        return "I8"
-    case U64Type:
-        return "U64"
-    case U32Type:
-        return "U32"
-    case U16Type:
-        return "U16"
-    case U8Type:
-        return "U8"
-    case BoolType:
-        return "Bool"
-    case ArrayRef:
-        array_type := get_array_type(s.array_types[:], &type)
-        if array_type.length == 0 {
-            return fmt.aprintf("[]%s", type_to_string(s, array_type.item_type))
-        }
-        return fmt.aprintf("[%d]%s", type_to_string(s, array_type.item_type))
-    }
-    panic("Unreachable")
+    builder := strings.builder_make()
+    build_type_string(s, &builder, t)
+    return strings.to_string(builder)
 }
 
-// Returns nil if there are errors in the function call
-check_function_call :: proc(s: ^CheckerState, pos: uint, call: FunctionCall) -> union {
-        CheckedPrint,
-        CheckedFunctionCall,
-        I64Value,
-    } {
+build_type_string :: proc(s: ^CheckerState, b: ^strings.Builder, t: CheckedType) {
+    switch &type in t {
+    case FuncType:
+        switch type.type {
+        case .Normal:
+        // case .JsFunc:
+        //     strings.write_string(b, "#js ")
+        case .ComptimeFunc:
+            strings.write_string(b, "#comptime ")
+        }
+        strings.write_byte(b, '(')
+        for arg, index in type.args {
+            // TODO: Print the name and whether the arg is mutable
+            build_type_string(s, b, arg.type)
+            if index + 1 != len(type.args) {
+                strings.write_string(b, ", ")
+            }
+        }
+        strings.write_string(b, ") -> ")
+        build_type_string(s, b, type.output^)
+    // case JsObjectType:
+    //     strings.write_string(b, "js.Object")
+    case StringType:
+        strings.write_string(b, "String")
+    case I64Type:
+        strings.write_string(b, "I64")
+    case I32Type:
+        strings.write_string(b, "I32")
+    case I16Type:
+        strings.write_string(b, "I16")
+    case I8Type:
+        strings.write_string(b, "I8")
+    case U64Type:
+        strings.write_string(b, "U64")
+    case U32Type:
+        strings.write_string(b, "U32")
+    case U16Type:
+        strings.write_string(b, "U16")
+    case U8Type:
+        strings.write_string(b, "U8")
+    case BoolType:
+        strings.write_string(b, "Bool")
+    case ArrayRef:
+        array_type := get_array_type(s.array_types[:], &type)
+        strings.write_byte(b, '[')
+        if array_type.length != 0 {
+            strings.write_uint(b, array_type.length)
+        }
+        strings.write_byte(b, ']')
+        build_type_string(s, b, array_type.item_type)
+    }
+}
+
+check_function_call :: proc(
+    s: ^CheckerState,
+    pos: uint,
+    call: FunctionCall,
+    body: ^[dynamic]CheckedStatement,
+    loc := #caller_location,
+) -> (
+    CheckedValue,
+    bool,
+) {
+    when debug_checker {
+        print_call(loc, "check function call")
+    }
     function_name, is_var_ref := call.function.value.(VariableReference)
     if !is_var_ref {
-        err_ok(
-            s.file,
-            pos,
-            "TODO: Handle function calls where the function isn't a variable reference",
-        )
-        return nil
+        err(s, pos, "TODO: Handle function calls where the function isn't a variable reference")
+        return nil, false
     }
-    if len(function_name) != 1 {
-        err_ok(
-            s.file,
-            pos,
-            "TODO: Handle function calls where the number of segments in the function name isn't 1",
-        )
-        return nil
-    }
-    return handle_named_function_call(s, pos, function_name[0], call.args)
+    return handle_named_function_call(s, pos, ([]string)(function_name), call.args, body)
 }
 
 pop_scope :: proc(s: ^CheckerState) {
@@ -557,172 +669,241 @@ pop_scope :: proc(s: ^CheckerState) {
     }
 }
 
-// The boolean returned is whether there are errors in the block
-check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool) {
+// The `CheckedValue` returned is the value of the destination array index
+get_expected_value_type :: proc(
+    s: ^CheckerState,
+    var_name: IdentAndPos,
+    var_type: CheckedType,
+    array_index: ^Value,
+    body: ^[dynamic]CheckedStatement,
+) -> (
+    CheckedType,
+    CheckedValue,
+    bool,
+) {
+    if array_index == nil {
+        return var_type, nil, true
+    }
+    warn(s, array_index.pos, "This array access is not bounds checked\nTODO: Bounds checks")
+    array_ref, is_array := var_type.(ArrayRef)
+    if !is_array {
+        err(
+            s,
+            var_name.pos,
+            "The variable `%s` is of type `%s`\nExpected an array",
+            var_name.ident,
+            type_to_string(s, var_type),
+        )
+        return nil, nil, false
+    }
+    array_type := get_array_type(s.array_types[:], &array_ref)
+    index_value := check_value(s, array_index^, body)
+    if index_value == nil {
+        return array_type.item_type, nil, false
+    }
+    index_type_ok := expect_type(
+        s,
+        array_index.pos,
+        I64Type{},
+        get_type(s, index_value),
+        "Array index must be `I64`",
+    )
+    if !index_type_ok {
+        return array_type.item_type, nil, false
+    }
+    return array_type.item_type, index_value, true
+}
+
+check_mutation :: proc(
+    s: ^CheckerState,
+    destination: VariableDest,
+    mutation_type: MutationType,
+    value_type: CheckedType,
+    value_pos: uint,
+    body: ^[dynamic]CheckedStatement,
+) -> (
+    CheckedMutationDestination,
+    MutationType,
+    bool,
+) {
+    switch destination.type {
+    case .Mutated:
+        var_ref, ok := s.variables_map[destination.name.ident]
+        if !ok {
+            err(
+                s,
+                destination.name.pos,
+                "The variable `%s` is not defined",
+                destination.name.ident,
+            )
+            return CheckedMutationDestination{}, .SetTo, false
+        }
+        if s.scopes[var_ref.nesting_level].variable_is_muts[var_ref.index] == false {
+            err(
+                s,
+                destination.name.pos,
+                "The variable `%s` is not mutable",
+                destination.name.ident,
+            )
+            return CheckedMutationDestination{}, .SetTo, false
+        }
+        var_type := get_type(s, var_ref)
+        expected_value_type, index_value, dest_ok := get_expected_value_type(
+            s,
+            destination.name,
+            var_type,
+            destination.array_index,
+            body,
+        )
+        if expected_value_type != nil {
+            if !expect_type(s, value_pos, expected_value_type, value_type, "") {
+                return CheckedMutationDestination{}, .SetTo, false
+            }
+        }
+        if !dest_ok {
+            return CheckedMutationDestination{}, .SetTo, false
+        }
+        if mutation_type != .SetTo {
+            if !type_is_numeric(value_type) {
+                err(
+                    s,
+                    value_pos,
+                    "Cannot perform numeric mutation on non-numeric type `%s`",
+                    type_to_string(s, value_type),
+                )
+                return CheckedMutationDestination{}, .SetTo, false
+            }
+        }
+        return CheckedMutationDestination{var_ref, index_value}, mutation_type, true
+    case .Constant, .Mutable:
+        if mutation_type != .SetTo {
+            err(s, destination.name.pos, "Expected variable assignment to be done with `=`")
+            return CheckedMutationDestination{}, .SetTo, false
+        }
+        variable_is_mutable := destination.type == .Mutable
+        variable, variable_ok := add_variable(s, value_type, variable_is_mutable, destination.name)
+        if !variable_ok {
+            return CheckedMutationDestination{}, .SetTo, false
+        }
+        return CheckedMutationDestination{variable, nil}, .SetTo, true
+    case .ConstantAddedToPcs, .MutableAddedToPcs:
+        err(s, destination.name.pos, "TODO: Figure out what to do with old code")
+        return CheckedMutationDestination{}, .SetTo, false
+    }
+    panic("Unreachable")
+}
+
+// The boolean returned is whether the block checked successfully
+check_block :: proc(
+    s: ^CheckerState,
+    block: []Statement,
+    body: ^[dynamic]CheckedStatement,
+    loc := #caller_location,
+) -> (
+    CheckedBlock,
+    bool,
+) {
+    when debug_checker {
+        print_call(loc, "check block")
+    }
     assert(
         len(s.scopes[len(s.scopes) - 1].variable_types) ==
         len(s.scopes[len(s.scopes) - 1].variable_is_muts),
     )
-    body := make([dynamic]CheckedStatement)
     for stmt, stmt_index in block {
         switch value in stmt.value {
         case VariableManagement:
-            checked_value, value_ok := check_value(s, value.value)
-            type := value_ok ? get_type(s, checked_value) : nil
-            ok := true
-            variable_is_mutable := false
+            checked_value := check_value(s, value.value, body)
             if len(value.destination) != 1 {
-                err_ok(
-                    s.file,
+                err(
+                    s,
                     stmt.position,
                     "TODO: Handle variable management where len(value.destination) != 1",
                 )
-                ok = false
-            } else if value.destination[0].array_index != nil {
-                if value.destination[0].type != .Mutated {
-                    err_ok(
-                        s.file,
-                        value.destination[0].name.pos,
-                        "Expected value to be mutated\nTry adding `~`",
-                    )
-                    return CheckedBlock{}, false
-                }
-                var_index, ok := s.variables_map[value.destination[0].name.ident]
-                if !ok {
-                    err_ok(
-                        s.file,
-                        value.destination[0].name.pos,
-                        "The variable `%s` is not defined",
-                        value.destination[0].name.ident,
-                    )
-                    return CheckedBlock{}, false
-                }
-                if s.scopes[var_index.nesting_level].variable_is_muts[var_index.index] == false {
-                    err_ok(
-                        s.file,
-                        value.destination[0].name.pos,
-                        "The variable `%s` is not mutable",
-                        value.destination[0].name.ident,
-                    )
-                    return CheckedBlock{}, false
-                }
-                var_type := get_type(s, VariableValue(var_index))
-                array_ref, is_array := var_type.(ArrayRef)
-                if !is_array {
-                    err_ok(
-                        s.file,
-                        value.destination[0].name.pos,
-                        "The variable `%s` is of type `%s`\nExpected an array",
-                        value.destination[0].name.ident,
-                        type_to_string(s, var_type),
-                    )
-                    return CheckedBlock{}, false
-                }
-                array := get_array_type(s.array_types[:], &array_ref)
-                array_type_ok := expect_type(s, value.value.pos, array.item_type, type)
-                if !array_type_ok {
-                    return CheckedBlock{}, false
-                }
-                index_value, index_value_ok := check_value(s, value.destination[0].array_index^)
-                if !index_value_ok {
-                    return CheckedBlock{}, false
-                }
-                index_type := get_type(s, index_value)
-                index_type_ok := expect_type(s, value.value.pos, I64Type{}, index_type)
-                if !index_type_ok {
-                    return CheckedBlock{}, false
-                }
-                append_elem(
-                    &body,
-                    CheckedArrayElementMutation {
-                        VariableRef(var_index),
-                        index_value,
-                        checked_value,
-                    },
-                )
-                break
-            } else {
-                switch value.destination[0].type {
-                case .Constant:
-                case .Mutable:
-                    variable_is_mutable = true
-                case .ConstantAddedToPcs, .MutableAddedToPcs, .Mutated:
-                    err_ok(s.file, stmt.position, "TODO: Handle more variable management types")
-                    ok = false
-                }
-            }
-            // TODO: Handle value.destination[0].array_index
-            if value.mutation_type != .SetTo {
-                err_ok(
-                    s.file,
-                    stmt.position,
-                    "TODO: Handle variable management where value.mutation_type != .SetTo",
-                )
-                ok = false
-            }
-            if !ok || !value_ok {
                 return CheckedBlock{}, false
             }
-            variable, variable_ok := add_variable(
+            if checked_value == nil {
+                return CheckedBlock{}, false
+            }
+            mutation_dest, mutation_type, mutation_ok := check_mutation(
                 s,
-                type,
-                variable_is_mutable,
-                value.destination[0].name,
+                value.destination[0],
+                value.mutation_type,
+                get_type(s, checked_value),
+                value.value.pos,
+                body,
             )
-            if !variable_ok {
+            if !mutation_ok {
                 return CheckedBlock{}, false
             }
-            array_value, is_array_value := checked_value.(ArrayValue)
-            if is_array_value {
-                array_type := get_array_type(s.array_types[:], &array_value.array_type)
-                assert(array_type.length != 0)
-                if len(array_value.array_values) != 0 {
-                    for i in 0 ..< array_type.length {
-                        append_elem(
-                            &body,
-                            CheckedArrayElementMutation {
-                                variable,
-                                I64Value(fmt.aprint(i)),
-                                array_value.array_values[i],
-                            },
-                        )
-                    }
-                }
-            } else {
-                append_elem(&body, CheckedSingleVariableMutation{.SetTo, variable, checked_value})
-            }
+            append_elem(body, CheckedMutation{mutation_dest, mutation_type, checked_value})
         case FunctionCall:
-            switch checked in check_function_call(s, stmt.position, value) {
-            case nil:
-                return CheckedBlock{}, false
-            case CheckedPrint:
-                append_elem(&body, checked)
-            case CheckedFunctionCall:
-                append_elem(&body, checked)
-            case I64Value:
-                err_ok(s.file, stmt.position, "Cannot use this value as a statement")
+            func_value, ok := check_function_call(s, stmt.position, value, body)
+            if !ok {
                 return CheckedBlock{}, false
             }
-        case DoWhileLoop, WhileLoop:
-            err_ok(s.file, stmt.position, "TODO: Handle while loops")
-            return CheckedBlock{}, false
+            if func_value != nil {
+                err(s, stmt.position, "Cannot use this value as a statement")
+                return CheckedBlock{}, false
+            }
+        case ConditionControlledLoop:
+            append_elem(&s.scopes, Scope{})
+            defer pop_scope(s)
+            loop_index := s.loop_index
+            s.loop_index += 1
+            condition := check_value(s, value.condition, body)
+            if condition != nil {
+                if !expect_type(
+                    s,
+                    value.condition.pos,
+                    BoolType{},
+                    get_type(s, condition),
+                    "\nExpect loop condition to be a boolean",
+                ) {
+                    condition = nil
+                }
+            }
+            loop_body_array := make([dynamic]CheckedStatement)
+            loop_body, loop_body_ok := check_block(s, value.body, &loop_body_array)
+            if condition == nil || !loop_body_ok {
+                return CheckedBlock{}, false
+            }
+
+            exit_loop := make([]CheckedStatement, 1)
+            exit_loop[0] = BreakLoop{loop_index}
+            condition_check := CheckedIf{condition, CheckedBlock{}, CheckedBlock{nil, exit_loop}}
+            loop_body_with_condition := make([]CheckedStatement, len(loop_body.body) + 1)
+            if value.type == .WhileLoop {
+                loop_body_with_condition[0] = condition_check
+                copy_slice(loop_body_with_condition[1:], loop_body.body)
+            } else {
+                index := copy_slice(loop_body_with_condition, loop_body.body)
+                loop_body_with_condition[index] = condition_check
+            }
+            append_elem(
+                body,
+                CheckedLoop{loop_index, loop_body.variables, loop_body_with_condition, nil},
+            )
         case ForInLoop:
             append_elem(&s.scopes, Scope{})
             defer pop_scope(s)
+            loop_index := s.loop_index
+            s.loop_index += 1
+            loop_body_array := make([dynamic]CheckedStatement)
             loop_enter: []CheckedStatement
             loop_start: []CheckedStatement
             loop_end: []CheckedStatement
             switch iter in value.iterator {
             case Value:
-                v, ok := check_value(s, iter)
-                if !ok {
+                v := check_value(s, iter, body)
+                if v == nil {
                     return CheckedBlock{}, false
                 }
                 type := get_type(s, v)
                 array_ref, is_array := type.(ArrayRef)
                 if !is_array {
-                    err_ok(
-                        s.file,
+                    err(
+                        s,
                         iter.pos,
                         "Can only iterate over an array\nGot a value of type `%s`",
                         type_to_string(s, type),
@@ -730,13 +911,9 @@ check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool
                     return CheckedBlock{}, false
                 }
                 array := get_array_type(s.array_types[:], &array_ref)
-                if array.length == 0 {
-                    err_ok(s.file, iter.pos, "TODO: Be able to iterate over dynamic length arrays")
-                    return CheckedBlock{}, false
-                }
                 if value.variables[2].ident != "" {
-                    err_ok(
-                        s.file,
+                    err(
+                        s,
                         stmt.position,
                         "You can only capture at most 2 variables from iterating over an array",
                     )
@@ -748,33 +925,40 @@ check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool
                     return CheckedBlock{}, false
                 }
                 loop_enter = make([]CheckedStatement, 1)
-                loop_enter[0] = CheckedSingleVariableMutation{.SetTo, index_ref, I64Value("0")}
+                loop_enter[0] = CheckedMutation {
+                    CheckedMutationDestination{index_ref, nil},
+                    .SetTo,
+                    I64Value(0),
+                }
                 loop_start = make([]CheckedStatement, 2)
                 if_block := make([]CheckedStatement, 1)
-                if_block[0] = BreakLoop{index_ref.nesting_level}
+                if_block[0] = BreakLoop{loop_index}
                 loop_start[0] = CheckedIf {
                     CheckedJoinedValues {
                         .IsGreaterThanOrEqual,
-                        new_clone(CheckedValue(VariableValue(index_ref))),
-                        new_clone(CheckedValue(I64Value(fmt.aprint(array.length)))),
+                        new_clone(CheckedValue(index_ref)),
+                        new_clone(
+                            array.length == 0 ? CheckedValue(LengthOfArray{new_clone(v)}) : CheckedValue(I64Value(array.length)),
+                        ),
                     },
                     CheckedBlock{nil, if_block},
                     CheckedBlock{},
                 }
-                loop_start[1] = CheckedSingleVariableMutation {
+                loop_start[1] = CheckedMutation {
+                    CheckedMutationDestination{elem_ref, nil},
                     .SetTo,
-                    elem_ref,
-                    CheckedArrayAccess {
-                        new_clone(v),
-                        new_clone(CheckedValue(VariableValue(index_ref))),
-                    },
+                    CheckedArrayAccess{new_clone(v), new_clone(CheckedValue(index_ref))},
                 }
                 loop_end = make([]CheckedStatement, 1)
-                loop_end[0] = CheckedSingleVariableMutation{.Increment, index_ref, I64Value("1")}
+                loop_end[0] = CheckedMutation {
+                    CheckedMutationDestination{index_ref, nil},
+                    .IncrementBy,
+                    I64Value(1),
+                }
             case NumericIterator:
                 if value.variables[1].ident != "" || value.variables[2].ident != "" {
-                    err_ok(
-                        s.file,
+                    err(
+                        s,
                         stmt.position,
                         "You can only capture at most one variable in a numeric iterator",
                     )
@@ -786,34 +970,39 @@ check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool
                     false,
                     value.variables[0],
                 )
-                start, start_ok := check_value(s, iter.start)
-                end, end_ok := check_value(s, iter.end)
-                step := CheckedValue(I64Value("1"))
-                step_ok := true
-                if iter.step != nil {
-                    step, step_ok = check_value(s, iter.step^)
-                }
-                if !var_ok || !start_ok || !end_ok || !step_ok {
+                start := check_value(s, iter.start, &loop_body_array)
+                end := check_value(s, iter.end, &loop_body_array)
+                step :=
+                    iter.step == nil ? CheckedValue(I64Value(1)) : check_value(s, iter.step^, &loop_body_array)
+                if !var_ok || start == nil || end == nil || step == nil {
                     return CheckedBlock{}, false
                 }
                 loop_enter = make([]CheckedStatement, 1)
-                loop_enter[0] = CheckedSingleVariableMutation{.SetTo, index_variable, start}
+                loop_enter[0] = CheckedMutation {
+                    CheckedMutationDestination{index_variable, nil},
+                    .SetTo,
+                    start,
+                }
                 if_block := make([]CheckedStatement, 1)
-                if_block[0] = BreakLoop{index_variable.nesting_level}
+                if_block[0] = BreakLoop{loop_index}
                 loop_start = make([]CheckedStatement, 1)
                 loop_start[0] = CheckedIf {
                     CheckedJoinedValues {
                         iter.type == .IncludeEndValue ? .IsGreaterThan : .IsGreaterThanOrEqual,
-                        new_clone(CheckedValue(VariableValue(index_variable))),
+                        new_clone(CheckedValue(index_variable)),
                         new_clone(end),
                     },
                     CheckedBlock{nil, if_block},
                     CheckedBlock{},
                 }
                 loop_end = make([]CheckedStatement, 1)
-                loop_end[0] = CheckedSingleVariableMutation{.Increment, index_variable, step}
+                loop_end[0] = CheckedMutation {
+                    CheckedMutationDestination{index_variable, nil},
+                    .IncrementBy,
+                    step,
+                }
             }
-            loop_body, loop_body_ok := check_block(s, value.body)
+            loop_body, loop_body_ok := check_block(s, value.body, &loop_body_array)
             if !loop_body_ok {
                 return CheckedBlock{}, false
             }
@@ -824,63 +1013,61 @@ check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool
             copy_slice(full_body, loop_start)
             copy_slice(full_body[len(loop_start):], loop_body.body)
             copy_slice(full_body[len(loop_start) + len(loop_body.body):], loop_end)
-            append(
-                &body,
-                CheckedLoop{variables = loop_body.variables, body = full_body, enter = loop_enter},
-            )
+            append_elem(body, CheckedLoop{loop_index, loop_body.variables, full_body, loop_enter})
         case IfElseStatement:
-            condition, condition_ok := check_value(s, value.condition)
-            if condition_ok {
+            condition := check_value(s, value.condition, body)
+            if condition != nil {
                 type := get_type(s, condition)
-                #partial switch _ in type {
-                case BoolType:
-                case:
-                    err_ok(
-                        s.file,
+                _, is_bool := get_type(s, condition).(BoolType)
+                if !is_bool {
+                    err(
+                        s,
                         value.condition.pos,
                         "If statement condition must be of type bool\nGot %s",
                         type_to_string(s, type),
                     )
-                    condition_ok = false
+                    condition = nil
                 }
             }
 
             append_elem(&s.scopes, Scope{})
-            if_block, if_block_ok := check_block(s, value.if_block)
+            if_block_array := make([dynamic]CheckedStatement)
+            if_block, if_block_ok := check_block(s, value.if_block, &if_block_array)
             pop_scope(s)
 
             append_elem(&s.scopes, Scope{})
-            else_block, else_block_ok := check_block(s, value.else_block)
+            else_block_array := make([dynamic]CheckedStatement)
+            else_block, else_block_ok := check_block(s, value.else_block, &else_block_array)
             pop_scope(s)
 
-            if !condition_ok | !if_block_ok | !else_block_ok {
+            if condition == nil || !if_block_ok || !else_block_ok {
                 return CheckedBlock{}, false
             }
-            append_elem(&body, CheckedIf{condition, if_block, else_block})
+            append_elem(body, CheckedIf{condition, if_block, else_block})
         case ReturnStatement:
             if stmt_index + 1 != len(block) {
-                err_ok(s.file, stmt.position, "Return statement must be last statement in block")
+                err(s, stmt.position, "Return statement must be last statement in block")
                 return CheckedBlock{}, false
             }
             if len(value) != 1 {
-                err_ok(
-                    s.file,
+                err(
+                    s,
                     stmt.position,
                     "Can only have one value in return statement (TODO: add support for returning multiple values)",
                 )
                 return CheckedBlock{}, false
             }
-            v, value_ok := check_value(s, value[0])
-            if !value_ok {
+            v := check_value(s, value[0], body)
+            if v == nil {
                 return CheckedBlock{}, false
             }
-            type_ok := expect_type(s, value[0].pos, s.return_type, get_type(s, v))
+            type_ok := expect_type(s, value[0].pos, s.return_type, get_type(s, v), "")
             if !type_ok {
                 return CheckedBlock{}, false
             }
-            append_elem(&body, CheckedReturn{v})
+            append_elem(body, CheckedReturn{v})
         case YieldStatement:
-            err_ok(s.file, stmt.position, "TODO: Handle yield statement")
+            err(s, stmt.position, "TODO: Handle yield statement")
             return CheckedBlock{}, false
         }
     }
@@ -891,68 +1078,99 @@ check_block :: proc(s: ^CheckerState, block: []Statement) -> (CheckedBlock, bool
 check_array_index :: proc(s: ^CheckerState, pos: uint, index: union {
         SingleElemAccess,
         RangedAccess,
-    }) -> CheckedValue {
-    err_ok(s.file, pos, "WARNING: This array access is not bounds checked\nTODO: Bounds checks")
+    }, body: ^[dynamic]CheckedStatement) -> CheckedValue {
+    warn(s, pos, "This array access is not bounds checked\nTODO: Bounds checks")
     unchecked_value, is_single_elem_access := index.(SingleElemAccess)
     if !is_single_elem_access {
-        err_ok(s.file, pos, "TODO: Multi elem array access")
+        err(s, pos, "TODO: Multi elem array access")
         return nil
     }
-    checked_value, ok := check_value(s, unchecked_value^)
-    if !ok {
+    checked_value := check_value(s, unchecked_value^, body)
+    if checked_value == nil {
         return nil
     }
     type := get_type(s, checked_value)
-    is_i64 := expect_type(s, pos, I64Type{}, type)
+    is_i64 := expect_type(s, pos, I64Type{}, type, "")
     if !is_i64 {
         return nil
     }
     return checked_value
 }
 
-// The boolean returned is whether there are errors in the value
-check_value :: proc(s: ^CheckerState, v: Value) -> (CheckedValue, bool) {
+check_var_ref :: proc(s: ^CheckerState, ref: VariableReference, pos: uint) -> (VariableRef, bool) {
+    if len(ref) != 1 {
+        err(
+            s,
+            pos,
+            "TODO: Handle where the number of segments in an identifier in a value isn't 1",
+        )
+        return VariableRef{}, false
+    }
+    var_index, ok := s.variables_map[ref[0]]
+    if ok {
+        return var_index, true
+    } else {
+        err(s, pos, "The variable `%s` is not defined", ref[0])
+        return VariableRef{}, false
+    }
+}
+
+// - Returns `nil` if there are errors in the value
+// - The `body` arg may be appended to with statements that should be executed
+//   before the value is accessed
+check_value :: proc(
+    s: ^CheckerState,
+    v: Value,
+    body: ^[dynamic]CheckedStatement,
+    loc := #caller_location,
+) -> CheckedValue {
+    when debug_checker {
+        print_call(loc, "check value")
+    }
     switch value in v.value {
     case:
-        err_ok(s.file, v.pos, "Internal error: got nil value in check_value")
-        return nil, false
+        err(s, v.pos, "Internal error: got nil value in check_value")
+        return nil
+    case MarkedValue:
+        err(s, v.pos, "TODO: Handle marked values")
+        return nil
     case ValueInBrackets:
-        return check_value(s, value^)
+        return check_value(s, value^, body)
     case ArrayAccess:
-        index_value := check_array_index(s, value.index_pos, value.index)
-        array_value, ok := check_value(s, value.array^)
-        if !ok {
-            return nil, false
+        array_value := check_value(s, value.array^, body)
+        index_value := check_array_index(s, value.index_pos, value.index, body)
+        if array_value == nil {
+            return nil
         }
         array_type := get_type(s, array_value)
         array_ref, is_array := array_type.(ArrayRef)
         if !is_array {
-            err_ok(
-                s.file,
+            err(
+                s,
                 value.array.pos,
                 "Expected an array, but got the type `%s`",
                 type_to_string(s, array_type),
             )
-            return nil, false
+            return nil
         }
-        array := get_array_type(s.array_types[:], &array_ref)
-        if array.length == 0 {
-            err_ok(
-                s.file,
-                value.array.pos,
-                "TODO: Implement element access for dynamically sized arrays",
-                type_to_string(s, array_type),
-            )
-            return nil, false
-        }
+        //array := get_array_type(s.array_types[:], &array_ref)
+        //if array.length == 0 {
+        //    err(
+        //        s,
+        //        value.array.pos,
+        //        "TODO: Implement element access for dynamically sized arrays",
+        //        type_to_string(s, array_type),
+        //    )
+        //    return nil, false
+        //}
         if index_value == nil {
-            return nil, false
+            return nil
         }
-        return CheckedArrayAccess{new_clone(array_value), new_clone(index_value)}, true
+        return CheckedArrayAccess{new_clone(array_value), new_clone(index_value)}
     case TypeInitialisation:
-        type := check_type(s.file, &s.array_types, Type{v.pos, value.type})
+        type := check_type(s, Type{v.pos, value.type})
         if type == nil {
-            return nil, false
+            return nil
         }
         switch &t in type {
         case StringType,
@@ -964,86 +1182,101 @@ check_value :: proc(s: ^CheckerState, v: Value) -> (CheckedValue, bool) {
              U32Type,
              U16Type,
              U8Type,
+             // JsObjectType,
+             FuncType,
              BoolType:
-            err_ok(
-                s.file,
+            err(
+                s,
                 v.pos,
                 "The type `%s` is not initialised like this\nOnly array types can by initialised using a type initialiser",
                 type_to_string(s, type),
             )
-            return nil, false
+            return nil
         case ArrayRef:
             array_type := get_array_type(s.array_types[:], &t)
-            if array_type.length == 0 {
-                err_ok(s.file, v.pos, "TODO: Support dynamic sized array initialisations")
-                return nil, false
-            }
-            if len(value.args) == 0 {
-                return ArrayValue{t, nil}, true
-            }
-            if uint(len(value.args)) != array_type.length {
-                err_ok(
-                    s.file,
+            if array_type.length != 0 && uint(len(value.args)) != array_type.length {
+                err(
+                    s,
                     v.pos,
                     "Type initialisation provides %d values\nType expects %d values",
                     len(value.args),
                     array_type.length,
                 )
-                return nil, false
+                return nil
             }
-            array_values := make([]CheckedValue, len(value.args))
+            array_segments := make([]ArraySegment, len(value.args))
             ok := true
             for arg, i in value.args {
-                value, value_ok := check_value(s, arg)
-                if value_ok {
-                    array_values[i] = value
-                } else {
+                value := check_value(s, arg, body)
+                if value == nil {
                     ok = false
+                } else {
+                    array_segments[i] = SingleElemSegment{value}
                 }
             }
             if !ok {
-                return nil, false
+                return nil
             }
-            return ArrayValue{t, array_values}, true
+            array_ref := add_unnamed_variable(s, t, false)
+            append_elem(body, CheckedArrayMutation{array_ref, array_type, array_segments})
+            return array_ref
         case:
             panic("Unreachable")
         }
     case Bool:
-        return BoolValue(value), true
+        return BoolValue(value)
     case uint:
-        err_ok(s.file, v.pos, "TODO: Handle function definition")
-        return nil, false
+        // if s.func_type != .JsFunc {
+        //     err(
+        //         s,
+        //         v.pos,
+        //         "TODO: Handle inline functions in functions that aren't marked with `#js`",
+        //     )
+        //     return nil, false
+        // }
+        // if s.funcs_props[value].func_type != s.func_type {
+        //     err(
+        //         s,
+        //         v.pos,
+        //         "TODO: Handle inline function where the inline function type is different to the external function type",
+        //     )
+        //     return nil, false
+        // }
+        // func, func_ok := check_function(s, value)
+        // if !func_ok {
+        //     return nil, false
+        // }
+        // return func, true
+        err(s, v.pos, "TODO: Handle function definition")
+        return nil
     case FunctionCall:
-        switch stmt in check_function_call(s, v.pos, value) {
-        case nil:
-            return nil, false
-        case CheckedFunctionCall:
-            return stmt, true
-        case I64Value:
-            return stmt, true
-        case CheckedPrint:
-            err_ok(s.file, v.pos, "This function call cannot be used as a value")
-            return nil, false
+        val, ok := check_function_call(s, v.pos, value, body)
+        if !ok {
+            return nil
         }
-        panic("Unreachable")
+        if val == nil {
+            err(s, v.pos, "This function call cannot be used as a value")
+            return nil
+        }
+        return val
     case JoinedValues:
-        val0, val0_ok := check_value(s, value.val0^)
-        val1, val1_ok := check_value(s, value.val1^)
-        if !val0_ok | !val1_ok {
-            return nil, false
+        val0 := check_value(s, value.val0^, body)
+        val1 := check_value(s, value.val1^, body)
+        if val0 == nil || val1 == nil {
+            return nil
         }
         type0 := get_type(s, val0)
         type1 := get_type(s, val1)
         switch value.join_method {
         case .BooleanAnd, .BooleanOr:
-            ok0 := expect_type(s, value.val0.pos, BoolType{}, type0)
-            ok1 := expect_type(s, value.val0.pos, BoolType{}, type0)
+            ok0 := expect_type(s, value.val0.pos, BoolType{}, type0, "")
+            ok1 := expect_type(s, value.val0.pos, BoolType{}, type0, "")
             if !ok0 | !ok1 {
-                return nil, false
+                return nil
             }
         case .IsEqual, .IsNotEqual:
-            if !expect_type(s, value.val1.pos, type0, type1) {
-                return nil, false
+            if !expect_type(s, value.val1.pos, type0, type1, "") {
+                return nil
             }
         case .IsGreaterThan,
              .IsGreaterThanOrEqual,
@@ -1055,61 +1288,56 @@ check_value :: proc(s: ^CheckerState, v: Value) -> (CheckedValue, bool) {
              .Addition,
              .Modulo:
             if !type_is_numeric(type0) {
-                err_ok(
-                    s.file,
+                err(
+                    s,
                     value.val0.pos,
                     "Expected type in numeric operation to be numeric, but got the type `%s`",
                     type_to_string(s, type0),
                 )
-                return nil, false
+                return nil
             }
             if !type_is_numeric(type1) {
-                err_ok(
-                    s.file,
+                err(
+                    s,
                     value.val1.pos,
                     "Expected type in numeric operation to be numeric, but got the type `%s`",
                     type_to_string(s, type1),
                 )
-                return nil, false
+                return nil
             }
             if !type_is_equal(s, type0, type1) {
-                err_ok(
-                    s.file,
+                err(
+                    s,
                     value.val0.pos,
                     "Expected types in numeric operation to be the same, but got `%s` and `%s`",
                     type_to_string(s, type0),
                     type_to_string(s, type1),
                 )
-                return nil, false
+                return nil
             }
         }
-        return CheckedJoinedValues{value.join_method, new_clone(val0), new_clone(val1)}, true
+        return CheckedJoinedValues{value.join_method, new_clone(val0), new_clone(val1)}
     case VariableReference:
-        if len(value) != 1 {
-            err_ok(
-                s.file,
-                v.pos,
-                "TODO: Handle where the number of segments in an identifier in a value isn't 1",
-            )
-            return nil, false
+        var_ref, ok := check_var_ref(s, value, v.pos)
+        if !ok {
+            return nil
         }
-        var_index, ok := s.variables_map[value[0]]
-        if ok {
-            return VariableValue(var_index), true
-        } else {
-            err_ok(s.file, v.pos, "The variable `%s` is not defined", value[0])
-            return nil, false
-        }
+        return var_ref
     case Number:
-        return I64Value(value), true
+        parsed, ok := strconv.parse_i64(string(value))
+        if !ok {
+            err(s, v.pos, "Could not convert number `%s` to I64", value)
+            return nil
+        }
+        return I64Value(parsed)
     case String:
-        return StringValue(value), true
+        return StringLiteralValue(strings.join(([]string)(value), ""))
     case Char:
-        return U8Value(value), true
+        return U8Value(value)
     }
 }
 
-// The boolean returned is whether there are errors in the function
+// The bool returned is whether the function checked successfully
 check_function :: proc(
     s: ^CheckerState,
     index: uint,
@@ -1119,35 +1347,66 @@ check_function :: proc(
     bool,
 ) {
     when debug_checker {
-        print_call(Loc(loc), "check function")
+        print_call(loc, "check function")
     }
-    assert(len(s.scopes) == 0)
-    assert(len(s.variables_map) == 0)
-    assert(s.return_type == nil)
-    s.return_type = s.global_funcs_props[index].return_type
-    defer s.return_type = nil
-    f := s.global_funcs[index]
-    append(&s.scopes, Scope{})
+    f := s.funcs[index]
+    f_props := s.funcs_props[index]
+    s.return_type = f_props.return_type
+    append_elem(&s.scopes, Scope{})
     defer pop_scope(s)
     inputs := make([]CheckedType, len(f.inputs))
-    for arg, i in s.global_funcs_props[index].args {
-        add_variable(s, arg.type, arg.is_mutable, arg.name)
-        inputs[i] = arg.type
+    ok := true
+    for arg, i in f_props.args {
+        _, var_ok := add_variable(s, arg.type, arg.is_mutable, arg.name)
+        if var_ok {
+            inputs[i] = arg.type
+        } else {
+            ok = false
+        }
+    }
+    if !ok {
+        return CheckedFunction{}, false
     }
     append(&s.scopes, Scope{})
     defer pop_scope(s)
     // TODO: Check that the function always returns if it has a return type
-    block, ok := check_block(s, f.body)
-    if !ok {
+    body := make([dynamic]CheckedStatement)
+    block, block_ok := check_block(s, f.body, &body)
+    if !block_ok {
         return CheckedFunction{}, false
     }
-    return CheckedFunction {
-            inputs,
-            s.global_funcs_props[index].return_type,
-            block.variables,
-            block.body,
-        },
+    return CheckedFunction{inputs, s.funcs_props[index].return_type, block.variables, block.body},
         true
+}
+
+// Returns `nil, 0, nil` if there was an error
+// The `CheckedValue` returned is the length of the array
+// The `ArrayRef` returned is the simplified reference to the array
+// The `CheckedType` returned is the item type of the array
+check_array :: proc(
+    s: ^CheckerState,
+    pos: uint,
+    value: CheckedValue,
+
+    // The error message for if the value is not an array
+    // Must have one `%s` in it for the actual type of the value
+    err_msg: string,
+) -> (
+    CheckedValue,
+    ArrayRef,
+    ArrayType,
+) {
+    type := get_type(s, value)
+    array_ref, is_array := type.(ArrayRef)
+    if !is_array {
+        err(s, pos, err_msg, type_to_string(s, type))
+        return nil, 0, ArrayType{}
+    }
+    array_type := get_array_type(s.array_types[:], &array_ref)
+    if array_type.length != 0 {
+        return I64Value(array_type.length), array_ref, array_type
+    }
+    return LengthOfArray{new_clone(value)}, array_ref, array_type
 }
 
 CheckedArg :: struct {
@@ -1159,11 +1418,11 @@ CheckedArg :: struct {
 CheckedFunctionProps :: struct {
     args:        []CheckedArg,
     return_type: CheckedType,
+    func_type:   FunctionType,
 }
 
 get_global_function :: proc(
-    file: CompilerFile,
-    globals: map[string]ParsedGlobal,
+    s: ^CheckerState,
     pos: uint,
     name: string,
     extra_text: string,
@@ -1171,15 +1430,15 @@ get_global_function :: proc(
     uint,
     bool,
 ) {
-    global_props, exists := globals[name]
+    global_props, exists := s.globals[name]
     if !exists {
-        err_ok(file, pos, "The global `%s` is not defined%s", name, extra_text)
+        err(s, pos, "The global `%s` is not defined%s", name, extra_text)
         return 0, false
     }
     value, is_value := global_props.value.(Value)
     if !is_value {
-        err_ok(
-            file,
+        err(
+            s,
             pos,
             "The global `%s` is a type\nExpected it to be a function so it can be called%s",
             name,
@@ -1189,8 +1448,8 @@ get_global_function :: proc(
     }
     func_index, is_func := value.value.(uint)
     if !is_func {
-        err_ok(
-            file,
+        err(
+            s,
             pos,
             "The global value `%s` is not a function and so cannot be called%s",
             name,
@@ -1201,105 +1460,193 @@ get_global_function :: proc(
     return func_index, true
 }
 
-// The boolean returned is whether there are errors in the code
-// The uint returned is the index of the main function
+EntryFuncType :: enum {
+    BuildFunc,
+    MainFunc,
+}
+
+DiagnosticsInfo :: struct {
+    number_of_errors:   uint,
+    number_of_warnings: uint,
+}
+
+CheckerOutput :: struct {
+    checked_funcs:    []CheckedFunction,
+    array_types:      []union {
+        ArrayType,
+        ArrayRef,
+    },
+    entry_func_index: uint,
+    entry_func_type:  EntryFuncType,
+    diagnostics_info: DiagnosticsInfo,
+}
+
 check :: proc(
     file: CompilerFile,
     imports: []Import,
     globals: map[string]ParsedGlobal,
-    global_funcs: []FunctionDefinition,
+    funcs: []FunctionDefinition,
     global_types: []TypeValue,
-) -> (
-    []CheckedFunction,
-    []union {
-        ArrayType,
-        ArrayRef,
-    },
-    uint,
-    bool,
-) {
-    main_index, ok := get_global_function(
-        file,
-        globals,
-        max(uint),
-        "main",
-        "\nHint: A hello world program is defined like so:\n```\nmain = () {{\n    println(\"Hello world\")\n}\n```\nTODO: Add link to docs",
-    )
-    if !ok {
-        return nil, nil, max(uint), false
+) -> CheckerOutput {
+    state := CheckerState {
+        file         = file,
+        funcs        = funcs,
+        globals      = globals,
+        global_types = global_types,
+        funcs_props  = make([]CheckedFunctionProps, len(funcs)),
+        array_types  = make([dynamic]union {
+                ArrayType,
+                ArrayRef,
+            }),
     }
-
-    global_funcs_props := make([]CheckedFunctionProps, len(global_funcs))
-    array_types := make([dynamic]union {
-            ArrayType,
-            ArrayRef,
-        })
-    for func, i in global_funcs {
+    for file_import in imports {
+        warn(&state, file_import.pos, "TODO: Support modules")
+    }
+    for func, i in funcs {
+        func_type: FunctionType
+        if len(func.markers) == 0 {
+            func_type = .Normal
+        } else if len(func.markers) > 1 {
+            err(
+                &state,
+                func.markers[1].pos,
+                "TODO: Handle function definitions with more than one marker",
+            )
+            continue
+        } else if func.markers[0].ident == "comptime" {
+            func_type = .ComptimeFunc
+        } else {
+            err(
+                &state,
+                func.markers[0].pos,
+                "Expected marker to be `#comptime`\nGot `#%s`",
+                func.markers[0].ident,
+            )
+            continue
+        }
         return_type: CheckedType
         switch len(func.outputs) {
         case 0:
         case 1:
-            return_type = check_type(file, &array_types, func.outputs[0].value_type)
+            return_type = check_type(&state, func.outputs[0].value_type)
             if return_type == nil {
-                ok = false
                 continue
             }
         case:
-            err_ok(file, func.outputs[1].value_type.pos, "TODO: Support more than one return type")
-            ok = false
+            err(&state, func.outputs[1].value_type.pos, "TODO: Support more than one return type")
             continue
         }
         args := make([]CheckedArg, len(func.inputs))
         for input, i in func.inputs {
-            type := check_type(file, &array_types, input.value_type)
+            type := check_type(&state, input.value_type)
             if type == nil {
-                ok = false
                 continue
             }
             args[i] = CheckedArg{type, input.arg_type == .Mutable, input.name}
         }
-        global_funcs_props[i] = CheckedFunctionProps{args, return_type}
+        state.funcs_props[i] = CheckedFunctionProps{args, return_type, func_type}
     }
-    if !ok {
-        return nil, nil, max(uint), false
+    if state.diagnostics_info.number_of_errors > 0 {
+        return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
 
-    checked_functions := make([]CheckedFunction, len(global_funcs))
-    state := CheckerState {
-        file               = file,
-        globals            = globals,
-        global_funcs       = global_funcs,
-        global_types       = global_types,
-        global_funcs_props = global_funcs_props,
-        array_types        = array_types,
-    }
+    checked_functions := make([]CheckedFunction, len(funcs))
 
     for global_name, global in globals {
         switch value in global.value {
         case Value:
             expect_snake_case(&state, "variable names", IdentAndPos{global_name, global.pos})
-            index, is_func := value.value.(uint)
+            func_index, is_func := value.value.(uint)
             if !is_func {
-                err_ok(file, global.pos, "TODO: Handle global values that aren't function defs")
-                ok = false
+                warn(&state, global.pos, "TODO: Handle global values that aren't function defs")
                 continue
             }
-            checked_func, func_ok := check_function(&state, index)
-            if func_ok {
-                checked_functions[index] = checked_func
-            } else {
-                ok = false
+            state.func_type = state.funcs_props[func_index].func_type
+            state.loop_index = 0
+            checked_func, checking_ok := check_function(&state, func_index)
+            assert(len(state.scopes) == 0)
+            assert(len(state.variables_map) == 0)
+            if checking_ok {
+                checked_functions[func_index] = checked_func
             }
         case uint:
             expect_camel_case(&state, "type names", IdentAndPos{global_name, global.pos})
-            err_ok(file, global.pos, "TODO: Handle types")
-            ok = false
+            warn(&state, global.pos, "TODO: Handle types")
         }
     }
-    if !ok {
-        return nil, nil, max(uint), false
-    }
 
-    return checked_functions, state.array_types[:], main_index, true
+    // TODO: Check the arguments and return types of the `build` or `main` functions
+    hint ::
+        "\n\nHint: If you define a `build` function, the compiler will run that " +
+        "function at compile time to build the program, for example:\n\n" +
+        "```\n" +
+        "build = #comptime || {\n" +
+        "    code = compiler.emit_c_code(this_can_have_any_name)\n" +
+        "    compiler.write_file(\"code.c\", code)\n" +
+        "}\n" +
+        "this_can_have_any_name = || -> I64 {\n    println(\"Hello world\")\n    return 0\n}\n" +
+        "```\n\nIf no `build` function is defined, then you must specify a " +
+        "`main` function, and the compiler will just emit C code to run that " +
+        "`main` function, for example:\n\n" +
+        "```\n" +
+        "main = || -> I64 {\n    println(\"Hello world\")\n    return 0\n}\n" +
+        "```\n\n" +
+        "TODO: Add link to docs"
+
+    entry_func_index: uint = ---
+    entry_func_type: EntryFuncType = ---
+    if build_props, build_exists := globals["build"]; build_exists {
+        build_value, build_is_value := build_props.value.(Value)
+        if !build_is_value {
+            err(&state, build_props.pos, "`build` is a type\nExpected it to be a function%s", hint)
+            return CheckerOutput{diagnostics_info = state.diagnostics_info}
+        }
+        build_index, build_is_func := build_value.value.(uint)
+        if !build_is_func {
+            err(
+                &state,
+                build_props.pos,
+                "`build` is a value other than a function\nExpected it to be a function%s",
+                hint,
+            )
+            return CheckerOutput{diagnostics_info = state.diagnostics_info}
+        }
+        if state.funcs_props[build_index].func_type != .ComptimeFunc {
+            err(
+                &state,
+                build_props.pos,
+                "`build` is not marked with `#comptime`\nExpected it to be marked with `#comptime`%s",
+                hint,
+            )
+            return CheckerOutput{diagnostics_info = state.diagnostics_info}
+        }
+        entry_func_index = build_index
+        entry_func_type = .BuildFunc
+    } else {
+        main_index, main_ok := get_global_function(&state, max(uint), "main", hint)
+        if !main_ok {
+            return CheckerOutput{diagnostics_info = state.diagnostics_info}
+        }
+        if state.funcs_props[main_index].func_type != .Normal {
+            err(
+                &state,
+                build_props.pos,
+                "`main` has a marker\nExpected `main` to not have a marker",
+            )
+            return CheckerOutput{diagnostics_info = state.diagnostics_info}
+        }
+        entry_func_index = main_index
+        entry_func_type = .MainFunc
+    }
+    if state.diagnostics_info.number_of_errors > 0 {
+        return CheckerOutput{diagnostics_info = state.diagnostics_info}
+    }
+    return CheckerOutput {
+        checked_functions,
+        state.array_types[:],
+        entry_func_index,
+        entry_func_type,
+        state.diagnostics_info,
+    }
 }
 

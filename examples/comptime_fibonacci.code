@@ -1,0 +1,21 @@
+build = #comptime || -> I64 {
+    threshold = 1000
+    mut fibonacci_numbers = []I64(1, 1)
+    while fibonacci_numbers[len(fibonacci_numbers)-1] < threshold {
+        ~fibonacci_numbers = append(
+            fibonacci_numbers,
+            fibonacci_numbers[len(fibonacci_numbers)-1] + fibonacci_numbers[len(fibonacci_numbers)-2],
+        )
+    }
+
+    // TODO: Be able to use interpolated strings to write to the file
+    // compiler.write_file("fibonacci.txt", "The first fibonacci number that is >= ${threshold} is ${fibonacci_numbers[len(fibonacci_numbers)-1]}\n")
+
+    // TODO: Be able to write all of the fibonacci numbers to the file something like this
+    // for num, index in fibonacci_numbers {
+    //     compiler.append_file("fibonacci.txt", "the fibonacci number at index ${index} is ${num}")
+    // }
+
+    compiler.write_file("fibonacci.txt", to_str(fibonacci_numbers[len(fibonacci_numbers)-1]))
+    return 0
+}

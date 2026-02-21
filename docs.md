@@ -1,5 +1,19 @@
 > [!NOTE]
-> This programming language is pre-alpha, and almost everything may change as the language is developed.
+> This programming language is pre-alpha, and almost everything may change as the language evolves.
+
+# Markers
+
+- When a function is marked with `#comptime`, it means that it can only be ran at compile time because it interacts with the compiler
+- All `#comptime` functions either use another `#comptime` function or use a function in the `compiler` namespace
+- You cannot call a `#comptime` function from a function that isn't marked with `#comptime`
+
+<!--
+- When a function is marked with `#comptime`, it means that it can only be ran at compile time because it interacts with the compiler
+- When a function is marked with `#js`, it means that it cannot be transpiled to C nor ran at compile time because it uses JS code
+
+- All `#comptime` functions either use another `#comptime` function or use a function in the `compiler` namespace
+- All `#js` functions either use another `#js` function, or use a function in the `js` namespace
+-->
 
 # General
 

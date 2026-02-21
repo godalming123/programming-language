@@ -18,36 +18,14 @@ run_example :: proc(t: ^testing.T, relative_path: string) -> RanExample {
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
-    c_code := fmt.aprintf("%s.c", fullpath)
-    executable := fmt.aprintf("%s.bin", fullpath)
-
-    ok = build(fullpath)
-    if !ok {
-        testing.fail(t)
-        return RanExample{"", "", false}
-    }
-
-    state, stdout, stderr, err := os2.process_exec(
-        os2.Process_Desc{command = []string{"gcc", c_code, "-o", executable}},
-        context.allocator,
-    )
-    if err != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to compile `%s`: %#v", c_code, err))
-    }
-    if state.exit_code != 0 {
-        fmt.eprintfln(
-            "Failed to compile `%s`:\nExit code: %d\nStderr:\n%s\nStdout:\n%s",
-            c_code,
-            state.exit_code,
-            stdout,
-            stderr,
-        )
+    executable, build_ok := build(fullpath)
+    if !build_ok {
         testing.fail(t)
         return RanExample{"", "", false}
     }
 
     // TODO: Check for memory leaks when the process runs
-    state, stdout, stderr, err = os2.process_exec(
+    state, stdout, stderr, err := os2.process_exec(
         os2.Process_Desc{command = []string{executable}},
         context.allocator,
     )
@@ -198,6 +176,21 @@ The number 99 is not prime
 The number 100 is not prime
 `,
     )
+}
+
+@(test)
+comptime_fibonacci_example :: proc(t: ^testing.T) {
+    ran := run_example(t, "examples/comptime_fibonacci.code")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    testing.expect(t, ran.stdout == "")
+    file :: "fibonacci.txt"
+    data, err := os2.read_entire_file(file, context.allocator)
+    if err != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to read `%s`: %#v", file, err))
+    }
+    defer delete(data, context.allocator)
+    testing.expect(t, string(data) == "1597")
 }
 
 //@(test)

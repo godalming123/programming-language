@@ -25,6 +25,15 @@ odin test .
 # Todo
 
 - Choose a name
+- Remove unnecersarry array copies from the C backend
+  - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
+- Add modules and namespaces
+- Add garbage collection to the emitted C code to stop it from leaking memory
+- Do not leak memory in the compiler
+- Replace a couple of the compiler functions with functions in the standard library:
+  - `compiler.write_file`
+  - `compiler.run_executable`
+  - `compiler.read_file`
 - Tell the c compiler the type of the number literals that are emitted
 - Check that number literals aren't too big or small for their type
 - Implement parsing boolean not
@@ -51,17 +60,9 @@ odin test .
   - For example an array of 100 booleans where the first 50 are `true`, the next is `false`, and the rest are `true`
   - This could be something like `[100]Bool<50 x true, false, 49 x true>`
     - In this example, the numbers would be compile-time known constants to avoid the length mismatching
+  - Zig handles this by supporting repeating arrays and appending arrays at compile-time
   - Maybe you should have to explicitly set the initial value of every element in an array rather than being able to implicitly initialise a fixed size array with something like `[100]Bool<>`
-- Automatically run the C compiler after C code is emitted
-- Update the syntax:
-  - Instead of `<>`, I would rather use `[]` for union/sum types, but that conflicts with array types
-  - I don't like using `={}` for the payload of struct literals, tagged union literals, and array literals
-    - I would rather use just `{}` but that means you can't distinguish between an identifier value followed by a block and a struct literal
-      - This lack of clarity comes up with `for` loops, for example in `for i in ident {...}`, is the value being iterated over `ident {...}` or is the `...` the for loop's body
-    - I can't use just `[]` because then if you have something like `ident[0]`, is this a struct literal of type `ident`, or is it accessing the index `0` of the array `ident`
-    - I can't use just `<>` because then if you have something like `MyStructType<1, 2>3`, you cannot easily tell whether `2>3` is boolean comparison or if that code is the value `MyStructType<1, 2>`, and the `3` is a typo
-  - Instead of `[]Type={elems}`, I would rather use `[elems]` for array literals, but that is harder to type check
-  - Instead of `||`, I would rather use `()` for function definitions, but that conflicts with order of operations grouping
+- Update some of the syntax (see [the syntax](#the-syntax))
 - Implement data structures
   - Arena backed array with an embedded freelist
   - Tree
@@ -76,18 +77,87 @@ odin test .
 - Implement generic types
 - Deduplicate PMS resize operations
 - Support length based strings as well as null terminated strings
+- A compiler function to minify JS?
+
+# The syntax
+
+- Instead of `<>`, I would rather use `[]` for union/sum types, but that conflicts with array types
+- Instead of `[]Type(elem1, elem2, ...)`, I would rather use `[elem1, elem2, ...]` for array literals, but that is harder to type check
+- Instead of `|args| -> ReturnType {...}`, I would rather use `(args) -> ReturnType {}` for function definitions, but that syntax conflicts with order of operations grouping
+- Notes on the syntax for the payload of struct literals, tagged union literals, and array literals:
+  - Syntaxes that can be used:
+    - Just `()` (the current syntax)
+    - `={}`
+  - Syntaxes that can't easily be used:
+    - Just `{}`, because then you can't distinguish between an identifier value followed by a block and a struct literal
+      - This lack of clarity comes up with `for` loops, for example in `for i in ident {...}`, you can't tell if the value being iterated over `ident {...}` or if the `...` is the body of the for loop
+    - Just `[]`, because then if you have something like `ident[0]`, then you can't tell if this is a struct literal of type `ident`, or if it is accessing the index `0` of the array `ident`
+    - Just `<>`, because then if you have something like `MyStructType<1, 2>3`, you cannot easily tell whether `2>3` is a boolean comparison or if that code is the value `MyStructType<1, 2>`, and the `3` is a typo
+  - Most of the syntaxes that can't be used could be used if there was a distinction in the tokenizer between `CamalCase` identifiers (which would be used for types) and `snake_case` identifiers (which would be used for variables)
+  - I'm not sure if adding that distinction is worth the trade off in the quality of the parser's error messages
+  - You also can't tell whether something like `JS` is a `CamalCase` or `snake_case` identifier
 
 # Current Roadmap
 
-- v0.1.0: Mostly stabilize memory model
-- v0.2.0: Investigate [constraints](#what-i-mean-by-constraints)
-- v0.3.0: Implement any language features for writing interactive user interfaces, and a UI library to do so
-- v0.4.0: Implement a backend that goes all the way to assembly code
-- v0.5.0: Quality of life improvements:
+- v0.1.0: Implement any language features for writing interactive user interfaces, and a UI library to do so:
+  - Features of the UI system:
+    - Functional, elm-like reactivity
+    - Can compile to several different artifacts, all of which can seamlessly work together in the same website:
+      - Static HTML, with client side reactivity
+      - An executable for a server to handle requests
+      - JS code that could run on the edge
+  - Metaprogramming:
+    - It could be nice to be able to define a couple different `build` functions in the standard library for different types of website, and have that be sufficient for building 99%+ of websites
+    - There could be a different `build` function for:
+      - Static site generation
+      - Generating an executable for a server which implements a simple server+client model
+      - Generating some JS code which could run on the edge
+    - For this to be possible, you need some way to define that a particulair function/constant specifies the metadata/interactivity for one of the pages on the website
+      - Maybe this could be done with tags, for example:
+        ```
+        CounterState : {
+          count: I64,
+        }
+
+        #page={
+          output_path = "counter.html",
+          initial_state = CounterState={1},
+        }
+        counter = |s: CounterState| -> []Html(CounterState) {
+          return []Html={
+            button(
+              "The count is ${s.count}",
+              |s: CounterState| -> CounterState {return CounterState={s.count + 1}},
+            ),
+          }
+        }
+        ```
+      - And then the build function would be implemented something like:
+        ```
+        import compiler
+        output_page = |function, tag_arguments| {...}
+        build = || {
+          compiler.get_all_globals(with_tag = #page)
+          |> compiler.expect_types(($State) -> []Html($State))
+          |> map(output_page)
+        }
+        ```
+- v0.2.0: Quality of life improvements:
   - LSP
+    - A code action to reorder fields in a struct
+    - A code action to rename
+    - I think that the LSP code actions should also be accessible through a CLI
   - Formatter
   - Automatically generate documentation from code comments
+  - Nice quality of life features for print debugging:
+    - Although using a debugger is probably better, the combination of a couple of language features can create a really nice print debugging experience:
+      - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
+      - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
+      - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
   - Type inference?
+- v0.3.0: Investigate [constraints](#what-i-mean-by-constraints)
+- v0.4.0: Mostly stabilize a lower level memory model
+- v0.5.0: Implement a backend that goes all the way to assembly code
 
 # Potential zen of this programming language
 

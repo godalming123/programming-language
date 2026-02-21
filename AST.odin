@@ -1,6 +1,7 @@
 package main
 
 Import :: struct {
+    pos:        uint,
     components: []string,
 }
 
@@ -14,7 +15,11 @@ Function :: struct {
     outputs: []Type,
 }
 
-TypeVariable :: distinct []string
+TypeVariable :: struct {
+    identifier:   []string,
+    generic_type: ^Type, // can be `nil`
+}
+
 Array :: struct {
     length:    uint, // 0 means dynamic length
     item_type: ^Type,
@@ -45,7 +50,7 @@ VariableReference :: distinct []string // each string is separated by `.`
 
 Number :: distinct string
 
-String :: distinct string
+String :: distinct []string
 
 Char :: distinct byte
 
@@ -73,6 +78,11 @@ TypeInitialisation :: struct {
 
 ValueInBrackets :: distinct ^Value
 
+MarkedValue :: struct {
+    value:   ^ValueWithoutPos,
+    markers: []IdentAndPos,
+}
+
 ValueWithoutPos :: union {
     uint, // an index into the function definitions
     FunctionCall,
@@ -85,6 +95,7 @@ ValueWithoutPos :: union {
     ArrayAccess,
     ValueInBrackets,
     TypeInitialisation,
+    MarkedValue,
 }
 
 Value :: struct {
@@ -202,12 +213,13 @@ IdentAndPos :: struct {
 }
 
 ConditionControlledLoop :: struct {
+    type:      enum {
+        WhileLoop,
+        DoWhileLoop,
+    },
     condition: Value,
     body:      []Statement,
 }
-
-DoWhileLoop :: distinct ConditionControlledLoop
-WhileLoop :: distinct ConditionControlledLoop
 
 ForInLoop :: struct {
     // At most there can be 3 variables:
@@ -233,8 +245,7 @@ Statement :: struct {
     value:    union {
         VariableManagement,
         FunctionCall,
-        DoWhileLoop,
-        WhileLoop,
+        ConditionControlledLoop,
         ForInLoop,
         IfElseStatement,
         ReturnStatement,
@@ -270,6 +281,7 @@ FunctionDefinition :: struct {
     inputs:  []FunctionArg,
     outputs: []FunctionOutput,
     body:    []Statement,
+    markers: []IdentAndPos,
 }
 
 //ComponentDefinition :: struct {
@@ -282,7 +294,7 @@ FunctionDefinition :: struct {
 //    // TODO: Store the map order to maintain order when formatting is implemented
 //    globals: map[string]Global,
 //}
-
+/*
 print_type :: proc(s: ^TreePrinterState, type: Type) {
     list_item(s, "Type at character index %d:", type.pos)
     print_type_value(s, type.type)
@@ -495,4 +507,6 @@ print_ast :: proc(
         }
     }
 }
+
+*/
 

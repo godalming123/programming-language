@@ -31,6 +31,7 @@ AssignToken :: struct {} // =
 SymbolsToken :: distinct string
 DigitsToken :: distinct string
 IdentToken :: distinct string
+MarkerToken :: distinct string
 TrueToken :: struct {} // true
 FalseToken :: struct {} // false
 InToken :: struct {} // in
@@ -75,6 +76,7 @@ TokenContents :: union {
     AssignToken,
     DigitsToken,
     IdentToken,
+    MarkerToken,
     TrueToken,
     FalseToken,
     InToken,
@@ -143,6 +145,8 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return fmt.aprintf("the digits `%s`", value)
     case IdentToken:
         return fmt.aprintf("the identifier `%s`", value)
+    case MarkerToken:
+        return fmt.aprintf("the marker `#%s`", value)
     case TrueToken:
         return "the keyword `true`"
     case FalseToken:
@@ -226,24 +230,6 @@ get_location :: proc(text: string, position: uint) -> (line := 1, column := 1) {
     return
 }
 
-// Set the position to max(uint) to not have a position for the error message
-err_ok :: proc(file: CompilerFile, position: uint, message_fmt: string, message_args: ..any) {
-    message := fmt.aprintf(message_fmt, ..message_args)
-    defer delete(message)
-    if position == max(uint) {
-        fmt.eprintf("\nError compiling `%s`:\n%s\n", file.file_name, message)
-    } else {
-        line, column := get_location(file.code, position)
-        fmt.eprintf(
-            "\nError compiling `%s`:\nLine %d column %d:\n%s\n",
-            file.file_name,
-            line,
-            column,
-            message,
-        )
-    }
-}
-
 wrong_token_err :: proc(
     state: ^TokenizerState,
     expected_possibilities: []string,
@@ -281,7 +267,7 @@ wrong_token_err :: proc(
         info_bytes[i] = '\n'
         i += 1
     }
-    err_ok(
+    diagnostic(
         state.file,
         state.last_token_pos,
         "%sExpected%s\nGot %s",
@@ -297,7 +283,10 @@ get_next_token :: proc(
     loc := #caller_location,
 ) {
     when debug_tokenizer {
-        print_call(Loc(loc), "get next token")
+        print_call(loc, "get next token")
+        defer {
+            debug("last token set to %s", token_contents_to_string(state.last_token))
+        }
     }
     if skip_nothing_tokens(state) {
         state.last_token_pos = state.index
@@ -380,6 +369,34 @@ get_next_token :: proc(
             state.index += 1
         }
         state.last_token = DigitsToken(state.code[state.last_token_pos:state.index])
+    case '#':
+        state.index += 1
+        if state.index >= len(state.code) {
+            state.last_token = Error(
+                "While tokenizing marker\nExpected an alphanumeric\nGot the end of the file",
+            )
+            return
+        }
+        if !(state.code[state.index] == '_' ||
+               ('a' <= state.code[state.index] && state.code[state.index] <= 'z') ||
+               ('A' <= state.code[state.index] && state.code[state.index] <= 'Z') ||
+               ('0' <= state.code[state.index] && state.code[state.index] <= '9')) {
+            state.last_token = Error(
+                fmt.aprintf(
+                    "While tokenizing marker\nExpected an alphanumeric\nGot `%c`",
+                    state.code[state.index],
+                ),
+            )
+            return
+        }
+        for state.index < len(state.code) &&
+            (state.code[state.index] == '_' ||
+                    ('a' <= state.code[state.index] && state.code[state.index] <= 'z') ||
+                    ('A' <= state.code[state.index] && state.code[state.index] <= 'Z') ||
+                    ('0' <= state.code[state.index] && state.code[state.index] <= '9')) {
+            state.index += 1
+        }
+        state.last_token = MarkerToken(state.code[state.last_token_pos + 1:state.index])
     case '_', 'a' ..< 'z', 'A' ..< 'Z':
         for state.index < len(state.code) &&
             (state.code[state.index] == '_' ||
@@ -508,10 +525,6 @@ get_next_token :: proc(
         } else {
             state.last_token = Error(fmt.aprintf("Unrecognized character %c", char))
         }
-    }
-    when debug_tokenizer {
-        // TODO: There are some cases where state.last_token is updated but this line of code in not ran
-        fmt.printfln("Last token set to %s", token_contents_to_string(state.last_token))
     }
 }
 

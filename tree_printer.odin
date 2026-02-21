@@ -3,6 +3,8 @@ package main
 import "core:fmt"
 import "core:strings"
 
+// TODO: Merge with tree printing code in `utils.odin`
+
 TreePrinterState :: struct {
     depth: uint,
 }

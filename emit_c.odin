@@ -19,6 +19,10 @@ emit_variable :: proc(b: ^strings.Builder, nesting_level: uint, index: uint) {
 
 emit_type :: proc(s: ^EmitterState, type: CheckedType) {
     switch &t in type {
+    case FuncType:
+        panic("TODO: Emit function type for C emitter")
+    //case JsObjectType:
+    //    panic("Internal error: JS object type received by c emitter")
     case nil:
         strings.write_string(&s.b, "void")
     case BoolType:
@@ -64,8 +68,16 @@ emit_func_call :: proc(b: ^strings.Builder, c: CheckedFunctionCall) {
 emit_value :: proc(b: ^strings.Builder, v: CheckedValue) {
     strings.write_byte(b, '(')
     switch value in v {
-    case ArrayValue:
-        panic("Internal error: Unexpected array value")
+    case uint:
+        strings.write_string(b, "&func")
+        strings.write_uint(b, value)
+    //case CheckedJsFunctionCall:
+    //    panic("Internal error: JsFunctionCall received by C emitter")
+    //case ArrayValue:
+    //    panic("Internal error: Unexpected array value")
+    case LengthOfArray:
+        emit_value(b, value.array^)
+        strings.write_string(b, ".length")
     case CheckedArrayAccess:
         emit_value(b, value.array^)
         strings.write_string(b, ".elems[")
@@ -79,12 +91,12 @@ emit_value :: proc(b: ^strings.Builder, v: CheckedValue) {
         }
     case CheckedFunctionCall:
         emit_func_call(b, value)
-    case StringValue:
+    case StringLiteralValue:
         strings.write_byte(b, '"')
         strings.write_string(b, string(value))
         strings.write_byte(b, '"')
     case I64Value:
-        strings.write_string(b, string(value))
+        strings.write_i64(b, i64(value))
     case U8Value:
         strings.write_uint(b, uint(value))
     case BooleanNotValue:
@@ -121,7 +133,7 @@ emit_value :: proc(b: ^strings.Builder, v: CheckedValue) {
             strings.write_byte(b, '%')
         }
         emit_value(b, value.val1^)
-    case VariableValue:
+    case VariableRef:
         emit_variable(b, value.nesting_level, value.index)
     }
     strings.write_byte(b, ')')
@@ -141,6 +153,8 @@ emit_block :: proc(
     }
     for statement in body {
         switch stmt in statement {
+        //case CheckedJsFunctionCall, CheckedJsAssignment:
+        //    panic("Internal error: JS received by C emitter")
         case CheckedFunctionCall:
             emit_func_call(&s.b, stmt)
             strings.write_byte(&s.b, ';')
@@ -161,43 +175,106 @@ emit_block :: proc(
             emit_block(s, nesting_level + 1, stmt.variables, stmt.enter)
             strings.write_string(&s.b, "while (1) {")
             strings.write_string(&s.b, "loop")
-            strings.write_uint(&s.b, nesting_level + 1)
+            strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "start:")
             emit_block(s, nesting_level + 1, nil, stmt.body)
             strings.write_string(&s.b, "}}loop")
-            strings.write_uint(&s.b, nesting_level + 1)
+            strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "end:;")
         case CheckedPrint:
             strings.write_string(&s.b, "printf(")
-            strings.write_string(&s.b, stmt.format)
-            for value in stmt.values {
-                strings.write_byte(&s.b, ',')
-                emit_value(&s.b, value)
-            }
+            emit_value(&s.b, CheckedValue(stmt))
             strings.write_string(&s.b, ");")
         case ContinueLoop:
             strings.write_string(&s.b, "goto loop")
-            strings.write_uint(&s.b, stmt.block_nesting_level)
+            strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "start;")
         case BreakLoop:
             strings.write_string(&s.b, "goto loop")
-            strings.write_uint(&s.b, stmt.block_nesting_level)
+            strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "end;")
-        case CheckedArrayElementMutation:
-            emit_variable(&s.b, stmt.array.nesting_level, stmt.array.index)
-            strings.write_string(&s.b, ".elems[")
-            emit_value(&s.b, stmt.index)
-            strings.write_string(&s.b, "] = ")
-            emit_value(&s.b, stmt.value)
-            strings.write_byte(&s.b, ';')
-        case CheckedSingleVariableMutation:
+        case CheckedWriteFile:
+            strings.write_string(&s.b, "compiler_write_file(")
+            emit_value(&s.b, stmt.file_name)
+            strings.write_byte(&s.b, ',')
+            emit_value(&s.b, stmt.file_contents)
+            strings.write_string(&s.b, ");")
+        case StringInterpolation:
+            strings.write_string(&s.b, "asprintf(&")
             emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+            strings.write_byte(&s.b, ',')
+            strings.write_string(&s.b, stmt.format)
+            for elem in stmt.values {
+                strings.write_byte(&s.b, ',')
+                emit_value(&s.b, elem)
+            }
+            strings.write_string(&s.b, ");")
+        case CheckedArrayMutation:
+            if stmt.variable_type.length == 0 {
+                emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                strings.write_string(&s.b, ".length = 0;")
+                number_of_single_elem_segments := 0
+                for segment in stmt.segments {
+                    switch segment_value in segment {
+                    case SingleElemSegment:
+                        number_of_single_elem_segments += 1
+                    case InlineArraySegment:
+                        emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                        strings.write_string(&s.b, ".length += ")
+                        emit_value(&s.b, segment_value.array_length)
+                        strings.write_byte(&s.b, ';')
+                    }
+                }
+                if number_of_single_elem_segments > 0 {
+                    emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                    strings.write_string(&s.b, ".length += ")
+                    strings.write_int(&s.b, number_of_single_elem_segments)
+                    strings.write_byte(&s.b, ';')
+                }
+                emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                strings.write_string(&s.b, ".elems = malloc(")
+                emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                strings.write_string(&s.b, ".length * sizeof(")
+                emit_type(s, stmt.variable_type.item_type)
+                strings.write_string(&s.b, "));")
+            }
+            strings.write_string(&s.b, "{uint64_t index = 0;")
+            for segment in stmt.segments {
+                switch segment_value in segment {
+                case SingleElemSegment:
+                    emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                    strings.write_string(&s.b, ".elems[index] = ")
+                    emit_value(&s.b, segment_value.elem)
+                    strings.write_string(&s.b, "; index += 1;")
+                case InlineArraySegment:
+                    strings.write_string(&s.b, "{uint64_t index2 = 0; while (index2 < ")
+                    emit_value(&s.b, segment_value.array_length)
+                    strings.write_string(&s.b, ") {")
+                    emit_variable(&s.b, stmt.variable.nesting_level, stmt.variable.index)
+                    strings.write_string(&s.b, ".elems[index+index2] = ")
+                    emit_value(&s.b, segment_value.array)
+                    strings.write_string(&s.b, ".elems[index2];index2 += 1;}index += index2;}")
+                }
+            }
+            strings.write_byte(&s.b, '}')
+        case CheckedMutation:
+            emit_variable(
+                &s.b,
+                stmt.destination.variable.nesting_level,
+                stmt.destination.variable.index,
+            )
+            if stmt.destination.index != nil {
+                strings.write_string(&s.b, ".elems[")
+                emit_value(&s.b, stmt.destination.index)
+                strings.write_byte(&s.b, ']')
+
+            }
             switch stmt.mutation_type {
             case .SetTo:
                 strings.write_byte(&s.b, '=')
-            case .Increment:
+            case .IncrementBy:
                 strings.write_string(&s.b, "+=")
-            case .Decrement:
+            case .DecrementBy:
                 strings.write_string(&s.b, "-=")
             case .MultiplyBy:
                 strings.write_string(&s.b, "*=")
@@ -217,7 +294,20 @@ emit_c :: proc(code: []CheckedFunction, array_types: []union {
     s := EmitterState{strings.builder_make(), array_types}
     strings.write_string(
         &s.b,
-        "#include <stdint.h>\n#include <stdio.h>\n#include <inttypes.h>\n#include <stdbool.h>\n",
+        "#include <stdint.h>\n" +
+        "#include <stdlib.h>\n" +
+        "#include <stdio.h>\n" +
+        "#include <inttypes.h>\n" +
+        "#include <stdbool.h>\n" +
+        "void compiler_write_file(char* name, char* text) {" +
+        "  FILE* file_pointer = fopen(name, \"w\");" +
+        "  if (file_pointer == 0) {" +
+        "    printf(\"Failed to read file called `%s`\", name);" +
+        "    exit(1);" +
+        "  }" +
+        "  fputs(text, file_pointer);" +
+        "  fclose(file_pointer);" +
+        "}",
     )
 
     for type, index in array_types {
@@ -231,7 +321,7 @@ emit_c :: proc(code: []CheckedFunction, array_types: []union {
             strings.write_uint(&s.b, array_type.length)
             strings.write_string(&s.b, "];}")
         } else {
-            strings.write_string(&s.b, "struct {uint length; ")
+            strings.write_string(&s.b, "struct {uint64_t length;")
             emit_type(&s, array_type.item_type)
             strings.write_string(&s.b, "* elems;}")
         }

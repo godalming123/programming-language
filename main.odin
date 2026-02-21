@@ -3,22 +3,54 @@ package main
 import "core:fmt"
 import "core:mem"
 import "core:os/os2"
+import "core:path/filepath"
+import "core:time"
 
 debug_tokenizer :: false
 debug_checker :: false // TODO: Improve the debugging logs when this in turned on
 
-print_help :: proc(exit_code: int) -> ! {
-    fmt.println("- `build file_name` build a file")
-    fmt.println("- `help` show this help message")
-    os2.exit(exit_code)
+// The `string` returned is the path to the executable
+write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
+    c_code_path := fmt.aprintf("%s.c", path)
+    output_executable_path := fmt.aprintf("%s.bin", path)
+
+    fmt.printfln("Writing C code to `%s`...", c_code_path)
+    err := os2.write_entire_file(c_code_path, c_code)
+    if err != nil {
+        fmt.eprintfln("Failed to write to `%s`: %#v", c_code_path, err)
+        return "", false
+    }
+
+    fmt.printfln("Compiling the C code into an executable at `%s`...", output_executable_path)
+    // TODO: Use `CC` environment variable by default, and fallback to `cc` command, than `gcc` command
+    state, stdout, stderr, err2 := os2.process_exec(
+        os2.Process_Desc{command = []string{"gcc", c_code_path, "-o", output_executable_path}},
+        context.allocator,
+    )
+    if err2 != nil {
+        fmt.eprintln("Failed to invoke compilation command for `%s`: %#v", c_code_path, err2)
+        return "", false
+    }
+    if state.exit_code != 0 {
+        fmt.eprintfln(
+            "Failed to compile `%s`:\nExit code: %d\nStderr:\n%s\nStdout:\n%s",
+            c_code_path,
+            state.exit_code,
+            stdout,
+            stderr,
+        )
+        return "", false
+    }
+    return output_executable_path, true
 }
 
-build :: proc(file_name: string) -> bool {
+// The `string` returned is the path to the executable
+build :: proc(file_name: string) -> (string, bool) {
     fmt.printfln("Reading `%s`...", file_name)
     data, err := os2.read_entire_file(file_name, context.allocator)
     if err != nil {
-        fmt.eprintfln("Failed to read %s: %#v", file_name, err)
-        return false
+        fmt.eprintfln("Failed to read `%s`: %#v", file_name, err)
+        return "", false
     }
     defer delete(data, context.allocator)
 
@@ -28,37 +60,70 @@ build :: proc(file_name: string) -> bool {
     imports, globals, global_types, ok := parse(&state)
     if !ok {
         fmt.eprintfln("\nFailed to parse `%s`", file.file_name)
-        return false
+        return "", false
     }
-    // fmt.printf("%#v", globals)
+    // fmt.printf("%#v", state.function_defs[:])
     // print_ast(imports, globals)
 
     fmt.printfln("Checking `%s`...", file.file_name)
-    checked, array_types, main_func_index, checked_ok := check(
-        file,
-        imports,
-        globals,
-        state.function_defs[:],
-        global_types,
+    checker_output := check(file, imports, globals, state.function_defs[:], global_types)
+    if checker_output.diagnostics_info.number_of_errors > 0 {
+        fmt.eprintfln(
+            "Erroneously checked `%s` with %d errors and %d warnings",
+            file.file_name,
+            checker_output.diagnostics_info.number_of_errors,
+            checker_output.diagnostics_info.number_of_warnings,
+        )
+        return "", false
+    } else {
+        fmt.eprintfln(
+            "Successfully checked `%s` with %d errors and %d warnings",
+            file.file_name,
+            checker_output.diagnostics_info.number_of_errors,
+            checker_output.diagnostics_info.number_of_warnings,
+        )
+    }
+
+    fmt.printfln("Emitting C code for `%s`...", file.file_name)
+    c := emit_c(
+        checker_output.checked_funcs,
+        checker_output.array_types,
+        checker_output.entry_func_index,
     )
-    if !checked_ok {
-        fmt.eprintfln("\nFailed to check `%s`", file.file_name)
-        return false
+
+    if checker_output.entry_func_type == .BuildFunc {
+        tmp, err := os2.temp_directory(context.allocator)
+        if err != nil {
+            fmt.eprintfln("Failed to get temporary directory: %#v", file_name, err)
+            return "", false
+        }
+
+        absolute_file_name, ok := filepath.abs(file_name)
+        if !ok {
+            fmt.eprintfln("Failed to convert `%s` to an absolute path", file_name)
+            return "", false
+        }
+
+        dir_in_tmp := filepath.join([]string{tmp, filepath.dir(absolute_file_name)})
+        if !os2.exists(dir_in_tmp) {
+            err = os2.make_directory_all(dir_in_tmp)
+            if err != nil {
+                fmt.eprintfln("Failed to create directory `%s`: %#v", dir_in_tmp, err)
+                return "", false
+            }
+        }
+
+        fmt.println("TODO: Handle when the entry func is a build func")
+        return write_and_compile_c(c, filepath.join([]string{tmp, absolute_file_name}))
+    } else {
+        return write_and_compile_c(c, file_name)
     }
+}
 
-    fmt.println("Emitting c code...")
-    c := emit_c(checked, array_types, main_func_index)
-
-    out_name := fmt.aprintf("%s.c", file_name)
-    fmt.printfln("Writing to `%s`...", out_name)
-    err = os2.write_entire_file(out_name, c)
-    if err != nil {
-        fmt.eprintfln("Failed to write %s: %#v", out_name, err)
-        return false
-    }
-
-    fmt.println("Done!")
-    return true
+print_help :: proc(exit_code: int) -> ! {
+    fmt.println("- `build file_name` build a file")
+    fmt.println("- `help` show this help message")
+    os2.exit(exit_code)
 }
 
 main :: proc() {
@@ -91,7 +156,9 @@ main :: proc() {
             )
             print_help(1)
         }
-        ok := build(os2.args[2])
+        build_start := time.now()
+        _, ok := build(os2.args[2])
+        fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
         if !ok {
             os2.exit(1)
         }
