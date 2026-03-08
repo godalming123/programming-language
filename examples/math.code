@@ -1,6 +1,6 @@
 // `dynamic` means that the compiler does not know the maximum size of part of a type
 // this means that the type cannot be stored on the CMS alone
-MathToken : dynamic <
+MathToken : <
 	Plus{pos: U64},
 	Minus{pos: U64},
 	Multiply{pos: U64},
@@ -9,20 +9,20 @@ MathToken : dynamic <
 	CloseBracket{pos: U64},
 	Integer{pos: U64, value: I64},
 	Float{pos: U64, value: F64},
-	Error{pos: U64, msg: dynamic String},
+	Error{pos: U64, msg: String},
 >
 
-get_next_token = |math: String, ~pos: U64| -> +MathToken { // DONE: Mutability
+get_next_token = |math: String, ~pos: U64| -> MathToken {
 	start_pos = pos
-	if math[pos] == '+' {~pos += 1; return .Plus{start_pos}}
-	if math[pos] == '-' {~pos += 1; return .Minus{start_pos}}
-	if math[pos] == '*' {~pos += 1; return .Multiply{start_pos}}
-	if math[pos] == '/' {~pos += 1; return .Divide{start_pos}}
-	if math[pos] == '(' {~pos += 1; return .OpenBracket{start_pos}}
-	if math[pos] == ')' {~pos += 1; return .CloseBracket{start_pos}}
+	if math[pos] == '+' {~pos += 1; return .Plus(start_pos)}
+	if math[pos] == '-' {~pos += 1; return .Minus(start_pos)}
+	if math[pos] == '*' {~pos += 1; return .Multiply(start_pos)}
+	if math[pos] == '/' {~pos += 1; return .Divide(start_pos)}
+	if math[pos] == '(' {~pos += 1; return .OpenBracket(start_pos)}
+	if math[pos] == ')' {~pos += 1; return .CloseBracket(start_pos)}
 	if not ('0' <= math[pos] and math[pos] <= '9') {
 		+msg = "Unexpected character '${math[pos]}'"
-		return .Error{start_pos, msg}
+		return .Error(start_pos, msg)
 	}
 	do {
 		~pos += 1
@@ -31,14 +31,14 @@ get_next_token = |math: String, ~pos: U64| -> +MathToken { // DONE: Mutability
 		~pos += 1
 		if not ('0' <= math[pos] and math[pos] <= '9') {
 			+msg = "After decimal point, expected digit, got '${math[pos]}'"
-			return .Error{start_pos, msg} // DONE: Memory model and string interpolation
+			return .Error(start_pos, msg) // DONE: Memory model and string interpolation
 		}
 		do {
 			~pos += 1
 		} while '0' <= math[pos] and math[pos] <= '9'
-		return .Float{start_pos, parse_float(math[start_pos:pos])}
+		return .Float(start_pos, parse_float(math[start_pos:pos]))
 	} else {
-		return .Integer{start_pos, parse_int(math[start_pos:pos])}
+		return .Integer(start_pos, parse_int(math[start_pos:pos]))
 	}
 }
 
@@ -53,7 +53,7 @@ ParsedMathElem : <
 	Empty,
 >
 
-ParsedMath : dynamic []ParsedMathElem
+ParsedMath : []ParsedMathElem
 
 //parse_math = |math: String, ~pos: U64| -> +ParsedMath {
 //	+token = get_next_token(math, ~pos)

@@ -92,6 +92,10 @@ debug_and_reduce_nesting :: proc(format: string, args: ..any) {
     debug_nesting -= 1
 }
 
+print_arg :: proc(arg_name: string, arg_value: any) {
+    debug("arg `%s`: %v", arg_name, arg_value)
+}
+
 @(deferred_in_out = print_call_finished)
 print_call :: proc(loc: runtime.Source_Code_Location, func_name: string) {
     debug(

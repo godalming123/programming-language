@@ -4,10 +4,13 @@ import "core:fmt"
 import "core:mem"
 import "core:os/os2"
 import "core:path/filepath"
+import "core:strings"
 import "core:time"
 
 debug_tokenizer :: false
-debug_checker :: false // TODO: Improve the debugging logs when this in turned on
+debug_checker :: false
+debug_emitter :: true
+debug_equivalency_arrays :: false
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
@@ -23,8 +26,9 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
 
     fmt.printfln("Compiling the C code into an executable at `%s`...", output_executable_path)
     // TODO: Use `CC` environment variable by default, and fallback to `cc` command, than `gcc` command
+    command := []string{"gcc", c_code_path, "-o", output_executable_path}
     state, stdout, stderr, err2 := os2.process_exec(
-        os2.Process_Desc{command = []string{"gcc", c_code_path, "-o", output_executable_path}},
+        os2.Process_Desc{command = command},
         context.allocator,
     )
     if err2 != nil {
@@ -33,11 +37,10 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     }
     if state.exit_code != 0 {
         fmt.eprintfln(
-            "Failed to compile `%s`:\nExit code: %d\nStderr:\n%s\nStdout:\n%s",
+            "Failed to compile `%s`:\nCommand ran: `%s`\nExit code: %d",
             c_code_path,
+            strings.join(command, " "),
             state.exit_code,
-            stdout,
-            stderr,
         )
         return "", false
     }
@@ -62,7 +65,8 @@ build :: proc(file_name: string) -> (string, bool) {
         fmt.eprintfln("\nFailed to parse `%s`", file.file_name)
         return "", false
     }
-    // fmt.printf("%#v", state.function_defs[:])
+    // fmt.printfln("%#v", state.function_defs[:])
+    // fmt.printfln("%#v", global_types)
     // print_ast(imports, globals)
 
     fmt.printfln("Checking `%s`...", file.file_name)
@@ -87,6 +91,8 @@ build :: proc(file_name: string) -> (string, bool) {
     fmt.printfln("Emitting C code for `%s`...", file.file_name)
     c := emit_c(
         checker_output.checked_funcs,
+        checker_output.checked_global_types,
+        checker_output.generic_types,
         checker_output.array_types,
         checker_output.entry_func_index,
     )

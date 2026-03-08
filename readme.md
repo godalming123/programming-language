@@ -77,7 +77,54 @@ odin test .
 - Implement generic types
 - Deduplicate PMS resize operations
 - Support length based strings as well as null terminated strings
-- A compiler function to minify JS?
+- Always output error messages and warnings in the order that they appear in the program, rather than a somewhat random order
+
+# Stuff that may be added
+
+- A compiler function to minify JS
+  - Simplifies build process as you can create minified JS code without needing a separate JS minifier, and the JS minifier would probably need a JS package manager
+- Some kind of backwards pipe operator like [gleam's use expression](https://tour.gleam.run/advanced-features/use/)
+  - Something like:
+    ```
+    main = || {
+      use name = Input("What is your name?") // Alternative syntax: `name <- Input("What is your name?")`
+      use Println("Hello ${name}") // Alternative syntax: `<- Println("Hello ${name}")`
+      Exit(0)
+    }
+    ```
+  - Would desugar to:
+    ```
+    main = || {
+      Input("What is your name?", |name| {
+        Prinln("Hello ${name}", || {
+          Exit(0)
+        })
+      })
+    }
+    ```
+  - (When I say "closure" here, I just mean a function that is defined inside another function)
+  - This isn't really useful without closures that can access variables from the function where the closure was defined
+    - You can maintain performance while also having closures that can access variables from the function where the closure was defined if you have linear types and 2 types of closure:
+      - Closures where the type has `->` can be ran any number of times, and cannot access variables from the function where the closure was defined
+      - Closures where the type has `=>` have to be ran exactly once, and can access variables from the function where the closure was defined
+- Some kind of `loop` syntax sugar:
+  ```
+  sum = loop |n: I64 = 1, sum = 0| -> I64 {
+    if n > 100 {
+      return sum
+    }
+    return continue(n + 1, sum + n)
+  }
+  ```
+  - This could also be done using a pipe operator that takes a tuple and passes all of the values in the tuple into the function as arguments:
+    ```
+    (1, 0) |> |n: I64, sum: I64| {
+      if n > 100 {
+        return sum
+      }
+      return self(n + 1, sum + n)
+    }
+    ```
 
 # The syntax
 
@@ -227,6 +274,7 @@ Constraints could also be used for things like:
 
 - The compiler being able to prove that an assert will always be true at compile time
 - Disciminating the type of a union
+  - This could replace the `match` statement
 - Disciminating the size of an array
 - Creating SOA arrays, for example:
 

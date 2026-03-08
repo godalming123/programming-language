@@ -2,12 +2,18 @@ package main
 
 Import :: struct {
     pos:        uint,
-    components: []string,
+    components: IdentToken,
+}
+
+StructField :: struct {
+    name: IdentAndPos,
+    type: Type,
 }
 
 Struct :: struct {
-    fields_map: map[string]uint, // an index into the `fields` array
-    fields:     []Type,
+    // Stored this way to preserve the order
+    fields_map: map[string]uint, // An index into `fields`
+    fields:     #soa[]StructField,
 }
 
 Function :: struct {
@@ -16,7 +22,7 @@ Function :: struct {
 }
 
 TypeVariable :: struct {
-    identifier:   []string,
+    identifier:   IdentToken,
     generic_type: ^Type, // can be `nil`
 }
 
@@ -25,12 +31,18 @@ Array :: struct {
     item_type: ^Type,
 }
 
-SumType :: struct {
-    variants_map: map[string]uint, // an index into the `variants` array
-    variants:     []Struct,
+SumTypeVariant :: struct {
+    name:    IdentAndPos,
+    payload: Struct,
 }
 
-DynamicType :: distinct ^Type
+SumType :: struct {
+    // Stored this way to preserve the order
+    variants_map: map[string]uint, // An index into `variants`
+    variants:     #soa[]SumTypeVariant,
+}
+
+// DynamicType :: distinct ^Type
 
 TypeValue :: union {
     Struct,
@@ -38,7 +50,7 @@ TypeValue :: union {
     TypeVariable,
     Array,
     SumType,
-    DynamicType,
+    // DynamicType,
 }
 
 Type :: struct {
@@ -46,7 +58,7 @@ Type :: struct {
     type: TypeValue,
 }
 
-VariableReference :: distinct []string // each string is separated by `.`
+VariableReference :: distinct IdentToken
 
 Number :: distinct string
 
@@ -237,6 +249,17 @@ IfElseStatement :: struct {
     else_block: []Statement,
 }
 
+MatchBranch :: struct {
+    name: IdentAndPos,
+    type: Type,
+    body: []Statement,
+}
+
+MatchStatement :: struct {
+    value:    Value,
+    branches: []MatchBranch,
+}
+
 ReturnStatement :: distinct []Value
 YieldStatement :: distinct []Value
 
@@ -250,6 +273,7 @@ Statement :: struct {
         IfElseStatement,
         ReturnStatement,
         YieldStatement,
+        MatchStatement,
     },
 }
 

@@ -1,0 +1,47 @@
+// TODO: Be able to implement `insert`, `to_array`, and `empty_list` for any linked list type
+
+LinkedList[T] : <
+    Empty,
+    NotEmpty{head: T, tail: LinkedList[T]},
+>
+
+insert = |list: LinkedList[I64], number: I64| -> LinkedList[I64] {
+    return .NotEmpty(number, list)
+}
+
+to_array = |list: LinkedList[I64]| -> []I64 {
+    mut array = []I64()
+    mut l = list
+    while true {
+        match l {
+            _: .Empty {
+                return array
+            }
+            not_empty: .NotEmpty {
+                ~array = append(array, not_empty.head)
+                ~l = not_empty.tail
+            }
+        }
+    }
+}
+
+empty_list = || -> LinkedList[I64] {
+    return .Empty()
+}
+
+main = || -> I64 {
+    // TODO: Support pipe
+    // l =
+	//     .Empty
+	//     |> insert(_, 3)
+	//     |> insert(_, 2)
+	//     |> insert(_, 1)
+    mut l = empty_list()
+    ~l = insert(l, 3)
+    ~l = insert(l, 2)
+    ~l = insert(l, 1)
+    for number in to_array(l) {
+        println(number)
+    }
+    return 0
+}

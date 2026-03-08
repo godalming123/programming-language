@@ -1,4 +1,5 @@
-main = || -> I64 {
+// To test when functions don't return anything
+fizzbuzz = || {
     for i in 1..=100 {
         if i % 15 == 0 {
             println("Fizzbuzz")
@@ -10,5 +11,9 @@ main = || -> I64 {
             println(i)
         }
     }
+}
+
+main = || -> I64 {
+    fizzbuzz()
     return 0
 }

@@ -193,6 +193,14 @@ comptime_fibonacci_example :: proc(t: ^testing.T) {
     testing.expect(t, string(data) == "1597")
 }
 
+@(test)
+linked_list_example :: proc(t: ^testing.T) {
+    ran := run_example(t, "examples/linked_list.code")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    testing.expect(t, ran.stdout == "1\n2\n3\n")
+}
+
 //@(test)
 //run_examples :: proc(t: ^testing.T) {
 //    base_dir, ok := filepath.abs(filepath.dir(os2.args[0]))
