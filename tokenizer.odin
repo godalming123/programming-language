@@ -22,6 +22,7 @@ OpenBraceToken :: struct {} // {
 CloseBraceToken :: struct {} // }
 CommaToken :: struct {} // ,
 ColonToken :: struct {} // :
+ColonColonToken :: struct {} // ::
 SemiColonToken :: struct {} // ;
 BarToken :: struct {} // |
 PipeToken :: struct {} // |>
@@ -67,6 +68,7 @@ TokenContents :: union {
     CloseBraceToken,
     CommaToken,
     ColonToken,
+    ColonColonToken,
     SemiColonToken,
     BarToken,
     PipeToken,
@@ -124,6 +126,8 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "a comma (`,`)"
     case ColonToken:
         return "`:`"
+    case ColonColonToken:
+        return "`::`"
     case SemiColonToken:
         return "`;`"
     case BarToken:
@@ -399,7 +403,12 @@ get_next_token :: proc(
         state.last_token = CommaToken{}
     case ':':
         state.index += 1
-        state.last_token = ColonToken{}
+        if state.index < len(state.code) && state.code[state.index] == ':' {
+            state.index += 1
+            state.last_token = ColonColonToken{}
+        } else {
+            state.last_token = ColonToken{}
+        }
 
     case '<':
         state.index += 1

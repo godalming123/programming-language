@@ -8,15 +8,48 @@ import "core:strings"
 
 builtins_err :: "`%s` is a builtin\nCannot override builtins"
 
-function_todo1 :: "TODO: Handle function calls where the function isn't a variable reference"
-function_todo2 :: "TODO: Handle function calls where `len(function_name_segments) > 2`"
-function_err1 :: "Compiler functions can only be called in function definitions which are marked with `#comptime`"
-function_err2 :: "Within unmarked function, cannot call `#comptime` function"
-function_err3 :: "In 2 segment function call that is used as a %s where the first segment is `compiler`\nExpected the second segment to be either %s\nGot `%s`"
-function_err4 :: "This function returns a value, so it cannot be used this as a statement"
-function_err5 :: "This function does not return a value, so it cannot be used as a value"
-function_err6 :: "First segment of a 2 segment function call that is used as a statement must be `compiler`\nGot `%s`"
-function_err7 :: "First segment of a 2 segment function call that is used as a value must be either `compiler` or ``\nGot `%s`"
+// function_todo1 :: "TODO: Handle function calls where the function isn't a variable reference"
+// function_todo2 :: "TODO: Handle function calls where `len(function_name_segments) > 2`"
+// function_err1 :: "Compiler functions can only be called in function definitions which are marked with `#comptime`"
+// function_err2 :: "Within unmarked function, cannot call `#comptime` function"
+// function_err3 :: "In 2 segment function call that is used as a %s where the first segment is `compiler`\nExpected the second segment to be either %s\nGot `%s`"
+// function_err4 :: "This function returns a value, so it cannot be used this as a statement"
+// function_err5 :: "This function does not return a value, so it cannot be used as a value"
+// function_err6 :: "First segment of a 2 segment function call that is used as a statement must be `compiler`\nGot `%s`"
+// function_err7 :: "First segment of a 2 segment function call that is used as a value must be either `compiler` or ``\nGot `%s`"
+
+builtin_print :: 0
+builtin_println :: 1
+builtin_readline :: 2
+builtin_read_file :: 3
+builtin_write_file :: 4
+builtin_clear :: 5
+builtin_run_executable :: 6
+builtin_exit :: 7
+builtin_get_os_args :: 8 // TODO
+
+get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, ExactCheckedType) {
+    switch name {
+    case "print":
+        return builtin_print, s.string_to_nil_type
+    case "println":
+        return builtin_println, s.string_to_nil_type
+    case "readline":
+        return builtin_readline, s.string_to_string_type
+    case "read_file":
+        return builtin_read_file, s.string_to_string_type
+    case "write_file":
+        return builtin_write_file, s.string_string_to_nil_type
+    case "clear":
+        return builtin_clear, s.no_args_to_nil_type
+    case "run_executable":
+        return builtin_run_executable, s.array_of_strings_to_nil_type
+    case "exit":
+        return builtin_exit, s.i64_to_nil_type
+    case:
+        return max(u32), nil
+    }
+}
 
 argument_count_mismatch :: proc(
     s: ^CheckerState,
@@ -44,48 +77,87 @@ argument_count_mismatch :: proc(
     )
 }
 
+/*
+// The `ExactCheckedType` returned is the return type of the function
+// The `CheckedValue` returned is always either `nil`, `CheckedFunctionCall` or `CheckedStructTypeInitialisation`
 handle_user_defined_named_function_call :: proc(
     s: ^CheckerState,
     pos: uint,
     function_name: string,
     args: []Value,
     body: ^[dynamic]CheckedStatement,
+    loc := #caller_location,
 ) -> (
-    CheckedFunctionCall,
-    bool,
+    CheckedValue,
+    ExactCheckedType,
 ) {
+    when debug_checker {
+        print_call(loc, "handle_user_defined_named_function_call")
+    }
+
     if is_builtin(function_name) {
         err(s, pos, "`%s` is a builtin, but it is not a function", function_name)
-        return CheckedFunctionCall{}, false
+        return nil, nil
     }
 
-    func_index, exists := get_global_function(s, pos, function_name, "")
+    global_props, exists := s.globals[function_name]
     if !exists {
-        return CheckedFunctionCall{}, false
-    }
-    func_props := s.funcs_props[func_index]
-
-    if s.func_type == .Normal && func_props.func_type == .ComptimeFunc {
-        err(s, pos, function_err2)
-        return CheckedFunctionCall{}, false
+        err(s, pos, "The global `%s` is not defined", function_name)
+        return nil, nil
     }
 
-    if len(args) != len(func_props.args) {
-        argument_count_mismatch(s, pos, len(args), len(func_props.args), function_name)
-        return CheckedFunctionCall{}, false
-    }
+    switch value in global_props.value {
+    case Value:
+        func_index, is_func := value.value.(uint)
+        if !is_func {
+            err(
+                s,
+                pos,
+                "TODO: The global value `%s` is not a function and so cannot be called",
+                function_name,
+            )
+            return nil, nil
+        }
+        func_props, _ := get_info(s.func_types[:], func_index)
 
-    checked_args := make([]CheckedValue, len(args))
-    for arg, i in args {
-        value := check_value(s, arg, body, &func_props.args[i].type)
-        if value == nil {
-            return CheckedFunctionCall{}, false
+        if s.func_type == .Normal && func_props.type == .ComptimeFunc {
+            err(s, pos, function_err2)
+            return nil, nil
         }
 
-        checked_args[i] = value
-    }
+        checked_args, ok := check_args(s, pos, function_name, args, func_props.args, body)
+        if !ok {
+            return nil, nil
+        }
 
-    return CheckedFunctionCall{func_index, checked_args}, true
+        return CheckedFunctionCall{func_index, checked_args},
+            func_props.return_type == nil ? nil : func_props.return_type^
+
+    case GlobalTypeWithGenericRef:
+        err(s, pos, "No generic type argument passed to generic type")
+        return nil, nil
+
+    case GlobalTypeWithoutGenericRef:
+        global := s.checked_global_types_without_generics[value.index]
+        struct_type, struct_type_ok := get_struct_type(s, pos, global)
+        if !struct_type_ok {
+            return nil, nil
+        }
+
+        arg_types := struct_type.fields.type[:len(struct_type.fields)]
+        checked_args, ok := check_args(s, pos, function_name, args, arg_types, body)
+        if !ok {
+            return nil, nil
+        }
+
+        return CheckedStructTypeInitialisation{value, checked_args}, value
+
+    case nil:
+        panic("Unreachable")
+
+    case:
+        panic("Unreachable")
+    }
 }
 
 check_call_statement :: proc(
@@ -129,15 +201,21 @@ check_call_statement :: proc(
             append_elem(body, CheckedPrint(val))
             return true
         case:
-            call, ok := handle_user_defined_named_function_call(s, pos, func_name, call.args, body)
-            if !ok {
+            call, return_type := handle_user_defined_named_function_call(
+                s,
+                pos,
+                func_name,
+                call.args,
+                body,
+            )
+            if call == nil {
                 return false
             }
-            if s.funcs_props[call.index].return_type != nil {
+            if return_type != nil {
                 err(s, pos, function_err4)
                 return false
             }
-            append_elem(body, call)
+            append_elem(body, call.(CheckedFunctionCall))
             return true
         }
     case 2:
@@ -160,7 +238,7 @@ check_call_statement :: proc(
                 argument_count_mismatch(s, pos, len(call.args), 2, "compiler.write_file")
                 return false
             }
-            expected_type: CheckedType = StringType{}
+            expected_type: ExactCheckedType = StringType{}
             name_value := check_value(s, call.args[0], body, &expected_type)
             text_value := check_value(s, call.args[1], body, &expected_type)
             if name_value == nil || text_value == nil {
@@ -187,7 +265,7 @@ check_call_value :: proc(
     pos: uint,
     call: FunctionCall,
     body: ^[dynamic]CheckedStatement,
-    type: ^CheckedType, // TODO: Check type of function return is this type
+    type: ^ExactCheckedType,
     loc := #caller_location,
 ) -> CheckedValue {
     when debug_checker {
@@ -212,14 +290,14 @@ check_call_value :: proc(
                 argument_count_mismatch(s, pos, len(call.args), 2, "append")
                 return nil
             }
-            array_type: CheckedType = nil
-            item_type: CheckedType = nil
+            array_type: ExactCheckedType = nil
+            item_type: ExactCheckedType = nil
             array := check_value(s, call.args[0], body, &array_type)
             item := check_value(s, call.args[1], body, &item_type)
             if array == nil || item == nil {
                 return nil
             }
-            array_length, array_type_ref, array_type_info := check_array(
+            array_length, exact_array_type, array_item_type := check_array(
                 s,
                 call.args[0].pos,
                 array,
@@ -229,27 +307,32 @@ check_call_value :: proc(
             if array_length == nil {
                 return nil
             }
-            types_ok := expect_type(s, call.args[1].pos, array_type_info.item_type, item_type, "")
+            types_ok := expect_type(s, call.args[1].pos, array_item_type, item_type, "")
             if !types_ok {
                 return nil
             }
             segments := make([]ArraySegment, 2)
             segments[0] = InlineArraySegment{array, array_length}
             segments[1] = SingleElemSegment{item}
-            array_ref_type: CheckedType = ---
-            if array_type_info.length == 0 {
-                array_ref_type = array_type_ref
-            } else {
-                // If the input array is not dynamic, create a new type for the output array that is dynamic
-                array_ref_type := ArrayRef(len(s.array_types))
-                append_elem(&s.array_types, ArrayType{0, array_type_info.item_type})
+            return_type := ArrayType(u32){0, exact_array_type.item_type} // TODO: Maybe `append` should be able to output fixed size arrays
+            s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
+                struct{}{}
+            array_ref := add_unnamed_variable(s, return_type, false)
+            append_elem(body, CheckedArrayMutation{array_ref, return_type, segments})
+            return finish_checking_value(s, pos, array_ref, return_type, type)
+        case "readline":
+            // (String) -> String
+            if len(call.args) != 1 {
+                argument_count_mismatch(s, pos, len(call.args), 1, "readline")
+                return nil
             }
-            array_ref := add_unnamed_variable(s, array_ref_type, false)
-            append_elem(
-                body,
-                CheckedArrayMutation{array_ref, ArrayType{0, array_type_info.item_type}, segments},
-            )
-            return finish_checking_value(s, pos, array_ref, array_ref_type, type)
+            expected_type: ExactCheckedType = StringType{}
+            prompt_value := check_value(s, call.args[0], body, &expected_type)
+            if prompt_value == nil {
+                return nil
+            }
+            out := CheckedReadLine{new_clone(prompt_value)}
+            return finish_checking_value(s, pos, out, StringType{}, type)
         case "concat":
             // ([]$T, []$T) -> []$T
             err(s, pos, "TODO: Handle array concatenation")
@@ -270,7 +353,7 @@ check_call_value :: proc(
                 argument_count_mismatch(s, pos, len(call.args), 1, "len")
                 return nil
             }
-            value_type: CheckedType = nil
+            value_type: ExactCheckedType = nil
             value := check_value(s, call.args[0], body, &value_type)
             if value == nil {
                 return nil
@@ -287,16 +370,21 @@ check_call_value :: proc(
             }
             return finish_checking_value(s, pos, array_length, I64Type{}, type)
         case:
-            call, ok := handle_user_defined_named_function_call(s, pos, func_name, call.args, body)
-            if !ok {
+            call, return_type := handle_user_defined_named_function_call(
+                s,
+                pos,
+                func_name,
+                call.args,
+                body,
+            )
+            if call == nil {
                 return nil
             }
-            func_props := s.funcs_props[call.index]
-            if func_props.return_type == nil {
+            if return_type == nil {
                 err(s, pos, function_err5)
                 return nil
             }
-            return finish_checking_value(s, pos, call, func_props.return_type, type)
+            return finish_checking_value(s, pos, call, return_type, type)
         }
     case 2:
         switch function_segments[0].ident {
@@ -307,7 +395,7 @@ check_call_value :: proc(
             }
             switch function_segments[1].ident {
             case "emit_js_value":
-                // Any -> String
+                // (Any) -> String
                 err(s, pos, "TODO: Implement emit_js_value")
                 return nil
             case "emit_c_code":
@@ -316,8 +404,17 @@ check_call_value :: proc(
                 return nil
             case "read_file":
                 // (String) -> String
-                err(s, pos, "TODO: Implement read_file")
-                return nil
+                if len(call.args) != 1 {
+                    argument_count_mismatch(s, pos, len(call.args), 1, "compiler.read_file")
+                    return false
+                }
+                expected_type: ExactCheckedType = StringType{}
+                name_value := check_value(s, call.args[0], body, &expected_type)
+                if name_value == nil {
+                    return false
+                }
+                out := CheckedReadFile{new_clone(name_value)}
+                return finish_checking_value(s, pos, out, StringType{}, type)
             case:
                 err(
                     s,
@@ -367,6 +464,9 @@ check_call_value :: proc(
             args_ok := true
             for arg, i in call.args {
                 expected_type := variant.fields[i].type
+                when debug_checker {
+                    debug("expected_type is %#v", expected_type)
+                }
                 checked_args[i] = check_value(s, arg, body, &expected_type)
                 if checked_args[i] == nil {
                     args_ok = false
@@ -387,6 +487,7 @@ check_call_value :: proc(
         }
     }
 }
+*/
 
 // Returns nil if there are errors in the named type
 handle_named_type :: proc(
@@ -395,7 +496,7 @@ handle_named_type :: proc(
     type_segments: IdentToken,
     generic_arg: ^Type,
     generic_arg_name: string,
-) -> CheckedType {
+) -> GenericCheckedType {
     //if len(type_segments) == 2 && type_segments[0] == "js" && type_segments[1] == "Object" {
     //    if func_type != .JsFunc {
     //        err_ok(
@@ -412,7 +513,7 @@ handle_named_type :: proc(
         return nil
     }
     name := type_segments[0].ident
-    builtin_type: CheckedType = ---
+    builtin_type: GenericCheckedType = ---
     switch name {
     case "I64":
         builtin_type = I64Type{}
@@ -454,33 +555,24 @@ handle_named_type :: proc(
             return nil
         }
 
-        index, is_type := global.value.(uint)
-        if !is_type {
-            err(s, pos, "The global `%s` is not a type", name)
-            return nil
-        }
-
-        type := s.global_types[index]
         if generic_arg == nil {
-            if type.generic.ident != "" {
-                err(s, pos, "The global type `%s` requires a generic argument", name)
+            ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
+            if !is_type_without_generic {
+                err(s, pos, "The global `%s` is not a type without a generic arg", name)
                 return nil
             }
-            return TypeRef(index)
+            return GlobalTypeWithoutGenericRef{ref.index}
         } else {
-            if type.generic.ident == "" {
-                err(s, pos, "The global type `%s` does not accept a generic argument", name)
+            ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
+            if !is_type_with_generic {
+                err(s, pos, "The global `%s` is not a type with a generic arg", name)
                 return nil
             }
             checked_generic_arg := check_type(s, generic_arg^, generic_arg_name)
             if checked_generic_arg == nil {
                 return nil
             }
-            _, is_type_of_generic_arg := checked_generic_arg.(TypeOfGenericArg)
-            if is_type_of_generic_arg {
-                return GenericTypeWhereArgIsTypeOfGenericArg{index}
-            }
-            return create_generic_type(s, index, checked_generic_arg)
+            return GenericType(^GenericCheckedType){ref.index, new_clone(checked_generic_arg)}
         }
     }
     if generic_arg != nil {
@@ -490,111 +582,60 @@ handle_named_type :: proc(
     return builtin_type
 }
 
-// CheckInlineJsFirstArgsOutput :: struct {
-//     ok:        bool,
-//     args_left: []Value,
-//     value:     JsValue,
-// }
-
-// check_inline_js_first_args :: proc(
-//     s: ^CheckerState,
-//     pos: uint,
-//     args: []Value,
-// ) -> CheckInlineJsFirstArgsOutput {
-//     first_args_msg :: "Expected first arguments to be either just a string literal or a variable reference followed by a string literal"
-//     if len(args) == 0 {
-//         err_ok(s.file, pos, first_args_msg + "\nGot no arguments")
-//         return CheckInlineJsFirstArgsOutput{ok = false}
-//     }
-//     value, ok := check_value(s, args[0])
-//     if !ok {
-//         return CheckInlineJsFirstArgsOutput{ok = false}
-//     }
-//     if str, is_str := value.(StringValue); is_str {
-//         return CheckInlineJsFirstArgsOutput{true, args[1:], JsValue{nil, string(str)}}
-//     }
-//     if !expect_type(s, args[0].pos, JsObjectType{}, get_type(s, value), first_args_msg) {
-//         return CheckInlineJsFirstArgsOutput{ok = false}
-//     }
-//     if len(args) <= 1 {
-//         err_ok(
-//             s.file,
-//             args[0].pos,
-//             first_args_msg + "\nExpected additional string literal argument",
-//         )
-//         return CheckInlineJsFirstArgsOutput{ok = false}
-//     }
-//     if str, is_str := args[1].value.(String); is_str {
-//         return CheckInlineJsFirstArgsOutput {
-//             true,
-//             args[2:],
-//             JsValue{new_clone(value), strings.join(([]string)(str), "")},
-//         }
-//     }
-//     err_ok(s.file, args[1].pos, "After value, expected string literal\n" + first_args_msg)
-//     return CheckInlineJsFirstArgsOutput{ok = false}
-// }
-
 to_str :: proc(
     s: ^CheckerState,
+    pos: uint,
     body: ^[dynamic]CheckedStatement,
-    value: Value,
-    add_newline: bool,
+    val: CheckedValue,
+    type: ExactCheckedType,
 ) -> (
     VariableRef,
     bool,
 ) {
-    type: CheckedType = nil
-    val := check_value(s, value, body, &type)
-    if val == nil {
-        return VariableRef{}, false
-    }
     format: string
     // TODO: Rework to be able to emit JS code
     switch _ in type {
     case BoolType:
-        format = add_newline ? "\"%b\\n\"" : "\"%b\""
+        format = "\"%b\""
     case StringType:
-        format = add_newline ? "\"%s\\n\"" : "\"%s\""
+        format = "\"%s\""
     case I64Type:
-        format = add_newline ? "\"%\" PRId64 \"\\n\"" : "\"%\" PRId64"
+        format = "\"%\" PRId64"
     case I32Type:
-        format = add_newline ? "\"%\" PRId32 \"\\n\"" : "\"%\" PRId32"
+        format = "\"%\" PRId32"
     case I16Type:
-        format = add_newline ? "\"%\" PRId16 \"\\n\"" : "\"%\" PRId16"
+        format = "\"%\" PRId16"
     case I8Type:
-        format = add_newline ? "\"%\" PRId8 \"\\n\"" : "\"%\" PRId8"
+        format = "\"%\" PRId8"
     case U64Type:
-        format = add_newline ? "\"%\" PRIu64 \"\\n\"" : "\"%\" PRIu64"
+        format = "\"%\" PRIu64"
     case U32Type:
-        format = add_newline ? "\"%\" PRIu32 \"\\n\"" : "\"%\" PRIu32"
+        format = "\"%\" PRIu32"
     case U16Type:
-        format = add_newline ? "\"%\" PRIu16 \"\\n\"" : "\"%\" PRIu16"
+        format = "\"%\" PRIu16"
     case U8Type:
-        format = add_newline ? "\"%\" PRIu8 \"\\n\"" : "\"%\" PRIu8"
-    case ArrayRef:
-        err(s, value.pos, "Cannot convert array to string")
+        format = "\"%\" PRIu8"
+    case ArrayType(u32):
+        err(s, pos, "Cannot convert array to string")
         return VariableRef{}, false
-    case FuncType:
-        err(s, value.pos, "Cannot convert function to string")
+    case FuncTypeRef:
+        err(s, pos, "Cannot convert function to string")
         return VariableRef{}, false
-    case GenericTypeRef:
-        err(s, value.pos, "Cannot convert generic type to string")
+    case GenericType(u32):
+        err(s, pos, "Cannot convert generic type to string")
         return VariableRef{}, false
-    case TypeRef:
-        err(s, value.pos, "Cannot convert global type to string")
+    case GlobalTypeWithoutGenericRef:
+        err(s, pos, "Cannot convert global type to string")
         return VariableRef{}, false
-    case CheckedStructType:
-        err(s, value.pos, "Cannot convert struct type to string")
+    case Struct(ExactCheckedType):
+        err(s, pos, "Cannot convert struct type to string")
         return VariableRef{}, false
-    case CheckedSumType:
-        err(s, value.pos, "Cannot convert sum type to string")
+    case SumType(ExactCheckedType, FuncTypeRef):
+        err(s, pos, "Cannot convert sum type to string")
         return VariableRef{}, false
-    case SumVariant:
-        err(s, value.pos, "Cannot convert sum type variant to string")
+    case SumVariant(^ExactCheckedType):
+        err(s, pos, "Cannot convert sum type variant to string")
         return VariableRef{}, false
-    case TypeOfGenericArg, GenericTypeWhereArgIsTypeOfGenericArg:
-        panic("Unreachable")
     }
     variable := add_unnamed_variable(s, StringType{}, false)
     string_conversion_values := make([]CheckedValue, 1)
@@ -608,6 +649,12 @@ is_builtin :: proc(name: string) -> bool {
     switch name {
     case "print",
          "println",
+         "readline",
+         "read_file",
+         "write_file",
+         "clear",
+         "run_executable",
+         "exit",
          "I64",
          "I32",
          "I16",
@@ -618,12 +665,7 @@ is_builtin :: proc(name: string) -> bool {
          "U8",
          "Bool",
          "String",
-         "compiler",
-         "append",
-         "concat",
-         "to_str",
-         // "js",
-         "len":
+         "to_str":
         return true
     case:
         return false
@@ -632,13 +674,18 @@ is_builtin :: proc(name: string) -> bool {
 
 add_unnamed_variable :: proc(
     s: ^CheckerState,
-    variable_type: CheckedType,
+    variable_type: ExactCheckedType,
     variable_is_mut: bool,
+    loc := #caller_location,
 ) -> VariableRef {
+    when debug_checker {
+        print_call(loc, "add_unnamed_variable")
+    }
     assert(
         len(s.scopes[len(s.scopes) - 1].variable_is_muts) ==
         len(s.scopes[len(s.scopes) - 1].variable_types),
     )
+    assert(variable_type != nil)
     var_ref := VariableRef{len(s.scopes) - 1, len(s.scopes[len(s.scopes) - 1].variable_is_muts)}
     append_elem(&s.scopes[len(s.scopes) - 1].variable_types, variable_type)
     append_elem(&s.scopes[len(s.scopes) - 1].variable_is_muts, variable_is_mut)
@@ -648,13 +695,17 @@ add_unnamed_variable :: proc(
 // The boolean returned is whether there are errors
 add_variable :: proc(
     s: ^CheckerState,
-    variable_type: CheckedType,
+    variable_type: ExactCheckedType,
     variable_is_mut: bool,
     variable: IdentAndPos,
+    loc := #caller_location,
 ) -> (
     VariableRef,
     bool,
 ) {
+    when debug_checker {
+        print_call(loc, "add_variable")
+    }
     // TODO: Add a warning for unused variables
     expect_snake_case(s, "variable names", variable)
     if is_builtin(variable.ident) {

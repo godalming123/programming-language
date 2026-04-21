@@ -33,6 +33,10 @@ get_info :: proc(
         case uint:
             i = value
         case Elem:
+            when debug_equivalency_arrays {
+                debug("returned Elem is %v", value)
+                debug("returned uint is %d", i)
+            }
             return value, i
         case:
             panic("Unreachable")
@@ -44,7 +48,11 @@ mark_elements_equal :: proc(
     equivalency_array: $Array/[]EquivalencyArrayElem($Elem),
     index0: uint,
     index1: uint,
+    loc := #caller_location,
 ) {
+    when debug_equivalency_arrays {
+        print_call(loc, "mark_elements_equal")
+    }
     assert(index0 != index1)
     larger_index := max(index0, index1)
     smaller_index := min(index0, index1)

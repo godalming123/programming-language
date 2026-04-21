@@ -1,8 +1,8 @@
 find_primes = || -> [100]Bool {
 	mut is_prime = [100]Bool(false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true)
-	for index in 1 ..< len(is_prime) {
+	for index in 1 ..< is_prime.len {
 		if is_prime[index] {
-			for i in (2*index)+1 ..< len(is_prime) step index + 1 {
+			for i in (2*index)+1 ..< is_prime.len step index + 1 {
 				~is_prime[i] = false
 			}
 		}
@@ -14,7 +14,8 @@ main = || -> I64 {
     primes = find_primes()
     for is_prime, i in primes {
 		print("The number ")
-		print(i+1)
+		num = i + 1
+		print(num.to_str)
 	    if is_prime {
 			println(" is prime")
 		} else {

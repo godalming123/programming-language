@@ -25,6 +25,20 @@ odin test .
 # Todo
 
 - Choose a name
+- Implement subtypes/supertypes in the type checker
+  - For example:
+    - `[]I64` is a supertype of `[32]I64`
+    - `I64` is a supertype of `I32`
+    - `SumType` is a supertype of `SumType.Variant`
+  - Some things use `value.operation` rather than `operation(value)` because the way that the type of value that is passed to `operation` and/or the type of value that `operation` returns cannot be expressed in the type system
+  - For example:
+    - Currently `x.len` is used rather than `len(x)`
+    - Currently `x.to_str` is used rather than `to_str(x)`
+    - Currently `a :: b` is used rather than `append(a, b)`
+  - With the addition of subtypes/supertypes, `Any` and in the case of `append`, function generics, these functions could be represented like so:
+    - `len: ([]Any) -> I64`
+    - `to_str: (Any) -> String`
+    - `append[T]: ([]T, []T) -> []T`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add modules and namespaces
@@ -38,11 +52,7 @@ odin test .
 - Check that number literals aren't too big or small for their type
 - Implement parsing boolean not
 - Implement more types:
-  - Numbers of types other than `i64`
-  - Structs
-  - Enums
-  - Unions
-  - Dynamically sized arrays
+  - Numbers of types other than `I64`
 - Design and implement memory management
 - Implement string interpolation
 - Add support for `yield` in if statements (should `yield`ing from a loop be supported?)
@@ -74,7 +84,6 @@ odin test .
     - Should there be an efficient way to store a reference to a particulair item in one of these data structures?
   - Arena backed buffer with an embedded freelist?
   - Arena backed malloc/free/free_all implementation?
-- Implement generic types
 - Deduplicate PMS resize operations
 - Support length based strings as well as null terminated strings
 - Always output error messages and warnings in the order that they appear in the program, rather than a somewhat random order

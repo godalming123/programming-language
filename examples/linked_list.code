@@ -18,7 +18,7 @@ to_array = |list: LinkedList[I64]| -> []I64 {
                 return array
             }
             not_empty: .NotEmpty {
-                ~array = append(array, not_empty.head)
+                ~array = array :: not_empty.head
                 ~l = not_empty.tail
             }
         }
@@ -41,7 +41,7 @@ main = || -> I64 {
     ~l = insert(l, 2)
     ~l = insert(l, 1)
     for number in to_array(l) {
-        println(number)
+        println(number.to_str)
     }
     return 0
 }

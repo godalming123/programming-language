@@ -1,7 +1,8 @@
 package main
 
 import "core:fmt"
-import "core:os/os2"
+import "core:io"
+import "core:os"
 import "core:path/filepath"
 import "core:testing"
 
@@ -11,10 +12,10 @@ RanExample :: struct {
     ok:     bool,
 }
 
-run_example :: proc(t: ^testing.T, relative_path: string) -> RanExample {
-    base_dir, ok := filepath.abs(filepath.dir(os2.args[0]))
-    if !ok {
-        testing.fail_now(t, "Failed to make path absolute")
+run_example :: proc(t: ^testing.T, relative_path: string, stdin_to_send: string) -> RanExample {
+    base_dir, err := filepath.abs(filepath.dir(os.args[0]), context.allocator)
+    if err != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to make path absolute: %v", err))
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
@@ -25,13 +26,22 @@ run_example :: proc(t: ^testing.T, relative_path: string) -> RanExample {
     }
 
     // TODO: Check for memory leaks when the process runs
-    state, stdout, stderr, err := os2.process_exec(
-        os2.Process_Desc{command = []string{executable}},
+    stdin_reader, stdin_writer, err2 := os.pipe()
+    if err2 != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err2))
+    }
+    _, err3 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
+    if err3 != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err3))
+    }
+    state, stdout, stderr, err4 := os.process_exec(
+        os.Process_Desc{command = []string{executable}, stdin = stdin_reader},
         context.allocator,
     )
-    if err != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to run `%s`: %#v", executable, err))
+    if err4 != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to run `%s`: %#v", executable, err4))
     }
+
     if state.exit_code != 0 {
         fmt.eprintfln(
             "Failed to run `%s`:\nExit code: %d\nStderr:\n%s\nStdout:\n%s",
@@ -48,7 +58,7 @@ run_example :: proc(t: ^testing.T, relative_path: string) -> RanExample {
 
 @(test)
 fizzbuzz_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/fizzbuzz.code")
+    ran := run_example(t, "examples/fizzbuzz.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -60,7 +70,7 @@ fizzbuzz_example :: proc(t: ^testing.T) {
 
 @(test)
 factorial_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/factorial.code")
+    ran := run_example(t, "examples/factorial.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "120\n")
@@ -68,7 +78,7 @@ factorial_example :: proc(t: ^testing.T) {
 
 @(test)
 primes_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/primes.code")
+    ran := run_example(t, "examples/primes.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -180,12 +190,12 @@ The number 100 is not prime
 
 @(test)
 comptime_fibonacci_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/comptime_fibonacci.code")
+    ran := run_example(t, "examples/comptime_fibonacci.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "")
     file :: "fibonacci.txt"
-    data, err := os2.read_entire_file(file, context.allocator)
+    data, err := os.read_entire_file(file, context.allocator)
     if err != nil {
         testing.fail_now(t, fmt.aprintf("Failed to read `%s`: %#v", file, err))
     }
@@ -195,27 +205,68 @@ comptime_fibonacci_example :: proc(t: ^testing.T) {
 
 @(test)
 linked_list_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/linked_list.code")
+    ran := run_example(t, "examples/linked_list.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "1\n2\n3\n")
 }
 
+expect_ui_render :: proc(
+    t: ^TestingTextExpecter,
+    text: string,
+    focused_button_num: int,
+    pos := #caller_location,
+) {
+    expect_string(t, "\033[1;1H\033[2J- ", pos)
+    expect_string(t, text, pos)
+    expect_string(t, "\n", pos)
+    for i in 1 ..= 3 {
+        expect_string(t, i == focused_button_num ? "- Focused button\n" : "- Button\n", pos)
+        expect_string(t, "  - Text ", pos)
+        expect_string(t, fmt.aprintf("%d", i), pos)
+        expect_string(t, "\n", pos)
+    }
+    expect_string(t, "Enter either `next`, `prev`, `click`, or `quit`: ", pos)
+}
+
+@(test)
+ui_example :: proc(t: ^testing.T) {
+    ran := run_example(
+        t,
+        "examples/ui.code",
+        "next\nclick\nprev\nprev\nclick\nnext\nnext\nnext\nclick\nquit\n",
+    )
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+
+    text_expecter := TestingTextExpecter{0, ran.stdout, t}
+    expect_ui_render(&text_expecter, "Initial text", 1)
+    expect_ui_render(&text_expecter, "Initial text", 2) // After next
+    expect_ui_render(&text_expecter, "Text 2", 2) // Affter click
+    expect_ui_render(&text_expecter, "Text 2", 1) // After prev
+    expect_ui_render(&text_expecter, "Text 2", 1) // After prev
+    expect_ui_render(&text_expecter, "Text 1", 1) // After click
+    expect_ui_render(&text_expecter, "Text 1", 2) // After next
+    expect_ui_render(&text_expecter, "Text 1", 3) // After next
+    expect_ui_render(&text_expecter, "Text 1", 3) // After next
+    expect_ui_render(&text_expecter, "Text 3", 3) // After click
+}
+
 //@(test)
 //run_examples :: proc(t: ^testing.T) {
-//    base_dir, ok := filepath.abs(filepath.dir(os2.args[0]))
+//    base_dir, ok := filepath.abs(filepath.dir(os.args[0]))
 //    if !ok {
 //        testing.fail_now(t, "Failed to make path absolute")
 //    }
 //    examples_dir := fmt.aprintf("%s/examples", base_dir)
 //
-//    opened, err := os2.open(examples_dir)
+//    opened, err := os.open(examples_dir)
 //    if err != nil {
 //        testing.fail_now(t, fmt.aprintf("Failed to open examples directory: %#v", err))
 //    }
 //
-//    files: []os2.File_Info
-//    files, err = os2.read_dir(opened, -1, context.allocator)
+//    files: []os.File_Info
+//    files, err = os.read_dir(opened, -1, context.allocator)
 //    if err != nil {
 //        testing.fail_now(t, fmt.aprintf("Failed to read examples directory: %#v", err))
 //    }

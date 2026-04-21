@@ -1,9 +1,10 @@
 factorial = |n: I64| -> I64 { // TODO: Support using U64 as the type for `n`
-	if n <= 1 {return 1}
-	return n * factorial(n-1)
+    if n <= 1 {return 1}
+    return n * factorial(n-1)
 }
 
 main = || -> I64 {
-	println(factorial(5))
-	return 0
+    num = factorial(5)
+    println(num.to_str)
+    return 0
 }

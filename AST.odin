@@ -5,15 +5,15 @@ Import :: struct {
     components: IdentToken,
 }
 
-StructField :: struct {
+StructField :: struct(T: typeid) {
     name: IdentAndPos,
-    type: Type,
+    type: T,
 }
 
-Struct :: struct {
+Struct :: struct(T: typeid) {
     // Stored this way to preserve the order
     fields_map: map[string]uint, // An index into `fields`
-    fields:     #soa[]StructField,
+    fields:     #soa[]StructField(T),
 }
 
 Function :: struct {
@@ -27,29 +27,30 @@ TypeVariable :: struct {
 }
 
 Array :: struct {
-    length:    uint, // 0 means dynamic length
+    length:    u32, // 0 means dynamic length
     item_type: ^Type,
 }
 
-SumTypeVariant :: struct {
-    name:    IdentAndPos,
-    payload: Struct,
+SumTypeVariant :: struct(T: typeid, ExtraData: typeid) {
+    name:       IdentAndPos,
+    payload:    Struct(T),
+    extra_data: ExtraData,
 }
 
-SumType :: struct {
+SumType :: struct(T: typeid, VariantExtraData: typeid) {
     // Stored this way to preserve the order
     variants_map: map[string]uint, // An index into `variants`
-    variants:     #soa[]SumTypeVariant,
+    variants:     #soa[]SumTypeVariant(T, VariantExtraData),
 }
 
 // DynamicType :: distinct ^Type
 
 TypeValue :: union {
-    Struct,
+    Struct(Type),
     Function,
     TypeVariable,
     Array,
-    SumType,
+    SumType(Type, struct {}),
     // DynamicType,
 }
 
@@ -91,7 +92,7 @@ TypeInitialisation :: struct {
 ValueInBrackets :: distinct ^Value
 
 MarkedValue :: struct {
-    value:   ^ValueWithoutPos,
+    value:   ^Value,
     markers: []IdentAndPos,
 }
 
@@ -134,10 +135,13 @@ ValueJoinMethod :: enum {
     IsLessThanOrEqual,
 
     // Prioraty 2
+    Append,
+
+    // Prioraty 3
     Multiplication,
     Division,
 
-    // Prioraty 3
+    // Prioraty 4
     Addition,
     Subtraction,
     Modulo,
@@ -156,10 +160,12 @@ get_prioraty :: proc(join_method: ValueJoinMethod) -> uint {
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual:
         return 1
-    case .Division, .Multiplication:
+    case .Append:
         return 2
-    case .Subtraction, .Addition, .Modulo:
+    case .Division, .Multiplication:
         return 3
+    case .Subtraction, .Addition, .Modulo:
+        return 4
     }
     panic("Unreachable")
 }
@@ -302,8 +308,8 @@ NameAndType :: struct {
 }
 
 FunctionDefinition :: struct {
-    inputs:  []FunctionArg,
-    outputs: []FunctionOutput,
+    inputs:  #soa[]FunctionArg,
+    outputs: #soa[]FunctionOutput,
     body:    []Statement,
     markers: []IdentAndPos,
 }

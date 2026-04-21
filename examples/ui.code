@@ -1,0 +1,89 @@
+UI[State] : <
+    Button {children: []UI[State], onclick: (State) -> State},
+    List {header: String, children: []UI[State]},
+    Text {text: String},
+>
+
+nothing           = |s: String| -> String { return s }
+set_text_to_text1 = |s: String| -> String { return "Text 1" }
+set_text_to_text2 = |s: String| -> String { return "Text 2" }
+set_text_to_text3 = |s: String| -> String { return "Text 3" }
+
+text_picker = |s: String| -> []UI[String] {
+    return []UI[String](
+        .Text(s),
+        .Button([]UI[String](.Text("Text 1")), set_text_to_text1),
+        .Button([]UI[String](.Text("Text 2")), set_text_to_text2),
+        .Button([]UI[String](.Text("Text 3")), set_text_to_text3),
+    )
+}
+
+// TODO
+// Ideally, this would be able to be declared with a generic for the state, but
+// at time of writing, the compiler interprets something like
+// `UIRenderingState[String](index, onclick)` as accessing the index `String` in
+// the array `UIRenderingState` rather than a type initialisation
+UIRenderingState : {
+    button_index: I64,
+    focussed_button_onclick: (String) -> String,
+}
+
+// TODO: Be able to implement `render_ui` with a generic State type rather than String
+render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: UIRenderingState| -> UIRenderingState {
+    mut s = state
+    for elem in ui {
+        for _ in 0..<nesting {
+            print("  ")
+        }
+        print("- ")
+        match elem {
+            button: .Button {
+                if focussed_button_index == s.button_index {
+                    println("Focused button")
+                    // ~s.focussed_button_onclick = button.onclick
+                    ~s = UIRenderingState(s.button_index, button.onclick)
+                } else {
+                    println("Button")
+                }
+                // ~s.button_index += 1
+                ~s = UIRenderingState(s.button_index + 1, s.focussed_button_onclick)
+                ~s = render_ui(button.children, focussed_button_index, nesting + 1, s)
+            }
+            list: .List {
+                println(list.header)
+                ~s = render_ui(list.children, focussed_button_index, nesting + 1, s)
+            }
+            text: .Text {
+                println(text.text)
+            }
+        }
+    }
+    return s
+}
+
+main = || -> I64 {
+    mut focussed_button_index = 0
+    mut state = "Initial text"
+    while true {
+        ui = text_picker(state)
+        clear()
+        rendering_state = render_ui(ui, focussed_button_index, 0, UIRenderingState(0, nothing))
+        max_button_index = rendering_state.button_index - 1
+
+        input = readline("Enter either `next`, `prev`, `click`, or `quit`: ")
+        if input == "next" {
+            if focussed_button_index < max_button_index {
+                ~focussed_button_index += 1
+            }
+        } else if input == "prev" {
+            if focussed_button_index > 0 {
+                ~focussed_button_index -= 1
+            }
+        } else if input == "click" {
+            ~state = rendering_state.focussed_button_onclick(state)
+        } else if input == "quit" {
+            clear()
+            return 0
+        }
+    }
+}

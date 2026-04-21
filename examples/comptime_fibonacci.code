@@ -1,11 +1,9 @@
 build = #comptime || -> I64 {
     threshold = 1000
     mut fibonacci_numbers = []I64(1, 1)
-    while fibonacci_numbers[len(fibonacci_numbers)-1] < threshold {
-        ~fibonacci_numbers = append(
-            fibonacci_numbers,
-            fibonacci_numbers[len(fibonacci_numbers)-1] + fibonacci_numbers[len(fibonacci_numbers)-2],
-        )
+    while fibonacci_numbers[fibonacci_numbers.len-1] < threshold {
+        ~fibonacci_numbers = fibonacci_numbers
+            :: fibonacci_numbers[fibonacci_numbers.len-1] + fibonacci_numbers[fibonacci_numbers.len-2]
     }
 
     // TODO: Be able to use interpolated strings to write to the file
@@ -16,6 +14,7 @@ build = #comptime || -> I64 {
     //     compiler.append_file("fibonacci.txt", "the fibonacci number at index ${index} is ${num}")
     // }
 
-    compiler.write_file("fibonacci.txt", to_str(fibonacci_numbers[len(fibonacci_numbers)-1]))
+    last_fibonacci_number = fibonacci_numbers[fibonacci_numbers.len-1]
+    write_file("fibonacci.txt", last_fibonacci_number.to_str)
     return 0
 }
