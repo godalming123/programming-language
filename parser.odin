@@ -370,7 +370,6 @@ parse_initial_value :: proc(
     case IdentToken:
         value = VariableReference(token)
     case MarkerToken:
-        pos := s.last_token_pos
         markers := [dynamic]IdentAndPos{{string(token), s.last_token_pos}}
         for {
             get_next_token(s, false)
@@ -479,8 +478,8 @@ parse_value :: proc(
             )
             break loop
         case OpenBracketToken:
-            args, ok := parse_values_until_close_bracket(s)
-            if !ok {
+            args, args_ok := parse_values_until_close_bracket(s)
+            if !args_ok {
                 return ParsedValue{ok = false}
             }
             value = new_clone(Value{value_pos, FunctionCall{value, args}})
@@ -575,6 +574,10 @@ parse_value :: proc(
             value_type = .Division
         case "+":
             value_type = .Addition
+        case "++":
+            value_type = .Concat
+        case "&":
+            value_type = .StringConcat
         case "-":
             value_type = .Subtraction
         case "%":
@@ -707,7 +710,6 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
 
 // Does not include the `if`
 parse_if :: proc(s: ^ParserState) -> (^IfElseStatement, [dynamic]string, bool) {
-    if_pos := s.last_token_pos
     get_next_token(&s.tokenizer, true)
     condition := parse_value(s)
     if !condition.ok {
@@ -724,8 +726,8 @@ parse_if :: proc(s: ^ParserState) -> (^IfElseStatement, [dynamic]string, bool) {
         return nil, nil, false
     }
 
-    block, ok := parse_block(s)
-    if !ok {
+    block, block_ok := parse_block(s)
+    if !block_ok {
         return nil, nil, false
     }
 
@@ -868,7 +870,9 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 "`yield`",
                 "`}`",
             )
-            var, other_possible_tokens, ok := parse_managed_variable(s, ..other_possible_tokens[:])
+            ok: bool = ---
+            var: VariableDest = ---
+            var, other_possible_tokens, ok = parse_managed_variable(s, ..other_possible_tokens[:])
             if !ok {
                 return nil, false
             }
@@ -972,7 +976,9 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 )
                 return nil, false
             }
-            stmt, other_possible_tokens, ok := parse_variable_management_after_first_var(
+            stmt: VariableManagement = ---
+            ok: bool = ---
+            stmt, other_possible_tokens, ok = parse_variable_management_after_first_var(
                 s,
                 VariableDest{IdentAndPos{token[0].ident, s.last_token_pos}, .Constant, nil},
             )
@@ -1028,7 +1034,9 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 }
 
                 get_next_token(s, true)
-                type, other_possible_tokens, type_ok := parse_type(s)
+                type: Type = ---
+                type_ok: bool = ---
+                type, other_possible_tokens, type_ok = parse_type(s)
                 if !type_ok {
                     return nil, false
                 }
@@ -1347,10 +1355,9 @@ ParserOutput :: struct {
     globals:                       map[string]ParsedGlobal,
     global_types_without_generics: []GlobalTypeWithoutGeneric,
     global_types_with_generics:    []GlobalTypeWithGeneric,
-    ok:                            bool,
 }
 
-parse :: proc(s: ^ParserState) -> ParserOutput {
+parse :: proc(s: ^ParserState) -> (ParserOutput, bool) {
     imports := [dynamic]Import{}
     globals := make(map[string]ParsedGlobal)
     global_types_without_generics := make([dynamic]GlobalTypeWithoutGeneric)
@@ -1367,15 +1374,15 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
         #partial switch token in s.last_token {
         case:
             wrong_token_err(&s.tokenizer, other_possible_tokens[:])
-            return ParserOutput{ok = false}
+            return ParserOutput{}, false
         case EndOfFileToken:
             return ParserOutput {
-                imports[:],
-                globals,
-                global_types_without_generics[:],
-                global_types_with_generics[:],
-                true,
-            }
+                    imports[:],
+                    globals,
+                    global_types_without_generics[:],
+                    global_types_with_generics[:],
+                },
+                true
         case ImportToken:
             // TODO: Check that all imports are at the top of the file
             import_pos := s.last_token_pos
@@ -1383,7 +1390,7 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
             components, is_ident := s.last_token.(IdentToken)
             if !is_ident {
                 wrong_token_err(s, []string{"An identifier"})
-                return ParserOutput{ok = false}
+                return ParserOutput{}, false
             }
             append_elem(&imports, Import{import_pos, components})
             get_next_token(s, true)
@@ -1392,7 +1399,7 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
             position := s.last_token_pos
             if len(token) != 1 {
                 wrong_token_err(&s.tokenizer, other_possible_tokens[:])
-                return ParserOutput{ok = false}
+                return ParserOutput{}, false
             }
             name := token[0].ident
             if name in globals {
@@ -1405,7 +1412,7 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
                     line,
                     column,
                 )
-                return ParserOutput{ok = false}
+                return ParserOutput{}, false
             }
             get_next_token(&s.tokenizer, false)
             generic := IdentAndPos{}
@@ -1415,7 +1422,7 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
                 segments, is_ident := s.last_token.(IdentToken)
                 if !is_ident || len(segments) != 1 {
                     wrong_token_err(&s.tokenizer, []string{"An identifier with one segment"})
-                    return ParserOutput{ok = false}
+                    return ParserOutput{}, false
                 }
                 generic = segments[0]
 
@@ -1423,7 +1430,7 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
                 _, is_close_square_bracket := s.last_token.(CloseSquareBracketToken)
                 if !is_close_square_bracket {
                     wrong_token_err(&s.tokenizer, []string{"`]`"})
-                    return ParserOutput{ok = false}
+                    return ParserOutput{}, false
                 }
 
                 get_next_token(&s.tokenizer, false)
@@ -1440,14 +1447,14 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
                 } else {
                     wrong_token_err(&s.tokenizer, []string{"`:` to define a global type"})
                 }
-                return ParserOutput{ok = false}
+                return ParserOutput{}, false
             case ColonToken:
                 get_next_token(&s.tokenizer, false)
                 type: Type
                 ok: bool
                 type, other_possible_tokens, ok = parse_type(s)
                 if !ok {
-                    return ParserOutput{ok = false}
+                    return ParserOutput{}, false
                 }
                 if generic.ident == "" {
                     globals[name] = ParsedGlobal {
@@ -1475,12 +1482,12 @@ parse :: proc(s: ^ParserState) -> ParserOutput {
                         s.last_token_pos,
                         "Cannot define global value with generic argument",
                     )
-                    return ParserOutput{ok = false}
+                    return ParserOutput{}, false
                 }
                 get_next_token(&s.tokenizer, false)
                 value := parse_value(s)
                 if !value.ok {
-                    return ParserOutput{ok = false}
+                    return ParserOutput{}, false
                 }
                 globals[name] = ParsedGlobal{position, value.value^}
                 other_possible_tokens = value.descriptions_of_other_possible_tokens

@@ -136,6 +136,8 @@ ValueJoinMethod :: enum {
 
     // Prioraty 2
     Append,
+    Concat,
+    StringConcat,
 
     // Prioraty 3
     Multiplication,
@@ -160,7 +162,7 @@ get_prioraty :: proc(join_method: ValueJoinMethod) -> uint {
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual:
         return 1
-    case .Append:
+    case .Append, .Concat, .StringConcat:
         return 2
     case .Division, .Multiplication:
         return 3

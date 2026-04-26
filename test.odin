@@ -1,7 +1,7 @@
 package main
 
+import "core:bufio"
 import "core:fmt"
-import "core:io"
 import "core:os"
 import "core:path/filepath"
 import "core:testing"
@@ -12,7 +12,11 @@ RanExample :: struct {
     ok:     bool,
 }
 
-run_example :: proc(t: ^testing.T, relative_path: string, stdin_to_send: string) -> RanExample {
+run_normal_example :: proc(
+    t: ^testing.T,
+    relative_path: string,
+    stdin_to_send: string,
+) -> RanExample {
     base_dir, err := filepath.abs(filepath.dir(os.args[0]), context.allocator)
     if err != nil {
         testing.fail_now(t, fmt.aprintf("Failed to make path absolute: %v", err))
@@ -23,6 +27,10 @@ run_example :: proc(t: ^testing.T, relative_path: string, stdin_to_send: string)
     if !build_ok {
         testing.fail(t)
         return RanExample{"", "", false}
+    }
+    if executable == "" {
+        testing.fail(t)
+        return RanExample{ok = false}
     }
 
     // TODO: Check for memory leaks when the process runs
@@ -56,9 +64,29 @@ run_example :: proc(t: ^testing.T, relative_path: string, stdin_to_send: string)
     return RanExample{string(stdout), string(stderr), true}
 }
 
+run_comptime_example :: proc(t: ^testing.T, relative_path: string) -> bool {
+    base_dir, err := filepath.abs(filepath.dir(os.args[0]), context.allocator)
+    if err != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to make path absolute: %v", err))
+    }
+    fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
+
+    executable, ok := build(fullpath)
+    if !ok {
+        testing.fail(t)
+        return false
+    }
+
+    if executable != "" {
+        testing.fail(t)
+        return false
+    }
+    return true
+}
+
 @(test)
 fizzbuzz_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/fizzbuzz.code", "")
+    ran := run_normal_example(t, "examples/fizzbuzz.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -70,7 +98,7 @@ fizzbuzz_example :: proc(t: ^testing.T) {
 
 @(test)
 factorial_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/factorial.code", "")
+    ran := run_normal_example(t, "examples/factorial.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "120\n")
@@ -78,7 +106,7 @@ factorial_example :: proc(t: ^testing.T) {
 
 @(test)
 primes_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/primes.code", "")
+    ran := run_normal_example(t, "examples/primes.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -190,11 +218,9 @@ The number 100 is not prime
 
 @(test)
 comptime_fibonacci_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/comptime_fibonacci.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
-    testing.expect(t, ran.stdout == "")
-    file :: "fibonacci.txt"
+    ok := run_comptime_example(t, "examples/comptime_fibonacci.code")
+    if !ok {return}
+    file :: "examples/fibonacci.txt"
     data, err := os.read_entire_file(file, context.allocator)
     if err != nil {
         testing.fail_now(t, fmt.aprintf("Failed to read `%s`: %#v", file, err))
@@ -205,7 +231,7 @@ comptime_fibonacci_example :: proc(t: ^testing.T) {
 
 @(test)
 linked_list_example :: proc(t: ^testing.T) {
-    ran := run_example(t, "examples/linked_list.code", "")
+    ran := run_normal_example(t, "examples/linked_list.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "1\n2\n3\n")
@@ -231,7 +257,7 @@ expect_ui_render :: proc(
 
 @(test)
 ui_example :: proc(t: ^testing.T) {
-    ran := run_example(
+    ran := run_normal_example(
         t,
         "examples/ui.code",
         "next\nclick\nprev\nprev\nclick\nnext\nnext\nnext\nclick\nquit\n",
@@ -250,6 +276,28 @@ ui_example :: proc(t: ^testing.T) {
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 3", 3) // After click
+}
+
+@(test)
+buffered_pipe_test :: proc(t: ^testing.T) {
+    str :: "Hello world\n"
+    pipe, err := create_buffered_pipe()
+    testing.expect(t, err == nil)
+    defer close_buffered_pipe(pipe)
+    os.write_string(pipe.writer, str)
+    read_str, err2 := bufio.reader_read_string(pipe.bufio_reader, '\n')
+    testing.expect(t, err2 == nil)
+    if str != read_str {
+        testing.fail_now(t, fmt.aprintf("Expected %q, got %q", str, read_str))
+    }
+}
+
+@(test)
+counter_example :: proc(t: ^testing.T) {
+    // TODO: Mock a browser to test the counter
+    ok := run_comptime_example(t, "examples/counter.code")
+    if !ok {return}
+    testing.expect(t, os.exists("examples/counter.html"))
 }
 
 //@(test)

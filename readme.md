@@ -25,12 +25,18 @@ odin test .
 # Todo
 
 - Choose a name
+- Fix some issues in the JS emitter where it emits invalid JS code
+  - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
+- Emit better JS code:
+  - Tree shake the emitted JS code
+  - Minify the emitted JS code
+  - Update the JS emitter to emit less code
 - Implement subtypes/supertypes in the type checker
   - For example:
     - `[]I64` is a supertype of `[32]I64`
     - `I64` is a supertype of `I32`
     - `SumType` is a supertype of `SumType.Variant`
-  - Some things use `value.operation` rather than `operation(value)` because the way that the type of value that is passed to `operation` and/or the type of value that `operation` returns cannot be expressed in the type system
+  - Some things use a different syntax rather than `operation(value)` because the way that the type of value that is passed to `operation` and/or the type of value that `operation` returns cannot be expressed in the type system
   - For example:
     - Currently `x.len` is used rather than `len(x)`
     - Currently `x.to_str` is used rather than `to_str(x)`
@@ -42,17 +48,12 @@ odin test .
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add modules and namespaces
-- Add garbage collection to the emitted C code to stop it from leaking memory
+- Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
 - Do not leak memory in the compiler
-- Replace a couple of the compiler functions with functions in the standard library:
-  - `compiler.write_file`
-  - `compiler.run_executable`
-  - `compiler.read_file`
 - Tell the c compiler the type of the number literals that are emitted
 - Check that number literals aren't too big or small for their type
 - Implement parsing boolean not
-- Implement more types:
-  - Numbers of types other than `I64`
+- Implement number types other than `I64`
 - Design and implement memory management
 - Implement string interpolation
 - Add support for `yield` in if statements (should `yield`ing from a loop be supported?)
@@ -84,7 +85,6 @@ odin test .
     - Should there be an efficient way to store a reference to a particulair item in one of these data structures?
   - Arena backed buffer with an embedded freelist?
   - Arena backed malloc/free/free_all implementation?
-- Deduplicate PMS resize operations
 - Support length based strings as well as null terminated strings
 - Always output error messages and warnings in the order that they appear in the program, rather than a somewhat random order
 
@@ -148,7 +148,7 @@ odin test .
     - Just `{}`, because then you can't distinguish between an identifier value followed by a block and a struct literal
       - This lack of clarity comes up with `for` loops, for example in `for i in ident {...}`, you can't tell if the value being iterated over `ident {...}` or if the `...` is the body of the for loop
     - Just `[]`, because then if you have something like `ident[0]`, then you can't tell if this is a struct literal of type `ident`, or if it is accessing the index `0` of the array `ident`
-    - Just `<>`, because then if you have something like `MyStructType<1, 2>3`, you cannot easily tell whether `2>3` is a boolean comparison or if that code is the value `MyStructType<1, 2>`, and the `3` is a typo
+    - Just `<>`, because then if you have something like `MyStructType<1, 2>3`, you cannot easily tell whether `MyStructType>1` and `2>3` are boolean comparisons or if that code is the value `MyStructType<1, 2>`, and the `3` is a typo
   - Most of the syntaxes that can't be used could be used if there was a distinction in the tokenizer between `CamalCase` identifiers (which would be used for types) and `snake_case` identifiers (which would be used for variables)
   - I'm not sure if adding that distinction is worth the trade off in the quality of the parser's error messages
   - You also can't tell whether something like `JS` is a `CamalCase` or `snake_case` identifier
@@ -212,7 +212,7 @@ odin test .
       - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
   - Type inference?
 - v0.3.0: Investigate [constraints](#what-i-mean-by-constraints)
-- v0.4.0: Mostly stabilize a lower level memory model
+- v0.4.0: Mostly stabilize a lower level memory model (see [here](#programming-language-memory-model))
 - v0.5.0: Implement a backend that goes all the way to assembly code
 
 # Potential zen of this programming language
@@ -230,6 +230,8 @@ Considering all of this, these design principles are tentative and subject to ch
 - It's better to have a feature that covers 90% of it's potential use cases with 10% of the complexity than a feature that covers 99.9% of it's potential use cases with 100% of the complexity
 
 # Programming language memory model
+
+- For stack based memory models, stack resizes should be deduplicated
 
 ## Criteria for a memory model
 

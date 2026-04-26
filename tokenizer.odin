@@ -227,7 +227,7 @@ is_digit_char :: proc(c: byte) -> bool {
 
 is_symbol_char :: proc(c: byte) -> bool {
     switch c {
-    case '=', '+', '-', '*', '/', '.', '<', '>', '%', '~':
+    case '=', '+', '-', '*', '/', '.', '<', '>', '%', '~', '&':
         return true
     case:
         return false

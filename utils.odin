@@ -1,11 +1,48 @@
 package main
 
 import "base:runtime"
+import "core:bufio"
 import "core:fmt"
 import "core:io"
 import "core:os"
 import "core:slice"
 import "core:testing"
+
+EOT :: '\x04'
+
+BufferedPipe :: struct {
+    writer:        ^os.File,
+    file_reader:   ^os.File,
+    stream_reader: io.Stream,
+    bufio_reader:  ^bufio.Reader,
+}
+
+create_buffered_pipe :: proc() -> (BufferedPipe, os.Error) {
+    file_reader, writer, err := os.pipe()
+    if err != nil {
+        return BufferedPipe{}, err
+    }
+    out := BufferedPipe{writer, file_reader, os.to_stream(file_reader), new(bufio.Reader)}
+    bufio.reader_init(out.bufio_reader, out.stream_reader)
+    return out, nil
+}
+
+close_buffered_pipe :: proc(pipe: BufferedPipe) {
+    bufio.reader_destroy(pipe.bufio_reader)
+    free(pipe.bufio_reader)
+    io.close(pipe.stream_reader)
+    os.close(pipe.writer)
+    os.close(pipe.file_reader)
+}
+
+// read_message :: proc(pipe: BufferedPipe) -> (string, bool) {
+//     msg, err := bufio.reader_read_string(pipe.bufio_reader, EOT)
+//     if err != nil {
+//         assert(msg == "")
+//         fmt.eprintln("Failed to read string: %#v", err)
+//         return "", false
+//     }
+// }
 
 TestingTextExpecter :: struct {
     index:    uint,
@@ -164,7 +201,7 @@ debug :: proc(format: string, args: ..any) {
     defer delete_string(formatted)
     assert(formatted != "")
 
-    for i in 0 ..< debug_nesting {
+    for _ in 0 ..< debug_nesting {
         fmt.print("│   ", flush = false)
     }
     fmt.print("├── ", flush = false)

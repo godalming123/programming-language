@@ -171,11 +171,11 @@ emit_type :: proc(
     strings.write_string(&s.b, name)
 }
 
-emit_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
-    emit_value(s, c.function^)
+emit_c_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
+    emit_c_value(s, c.function^)
     strings.write_byte(&s.b, '(')
     for arg, i in c.args {
-        emit_value(s, arg)
+        emit_c_value(s, arg)
         if i + 1 < len(c.args) {
             strings.write_byte(&s.b, ',')
         }
@@ -183,8 +183,33 @@ emit_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
+emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
     switch value in v {
+    case ToString:
+        strings.write_string(&s.b, "asprintf_value(")
+        switch value.from_type {
+        case .BoolType:
+            strings.write_string(&s.b, "\"%b\"")
+        case .I64Type:
+            strings.write_string(&s.b, "\"%\" PRId64")
+        case .I32Type:
+            strings.write_string(&s.b, "\"%\" PRId32")
+        case .I16Type:
+            strings.write_string(&s.b, "\"%\" PRId16")
+        case .I8Type:
+            strings.write_string(&s.b, "\"%\" PRId8")
+        case .U64Type:
+            strings.write_string(&s.b, "\"%\" PRIu64")
+        case .U32Type:
+            strings.write_string(&s.b, "\"%\" PRIu32")
+        case .U16Type:
+            strings.write_string(&s.b, "\"%\" PRIu16")
+        case .U8Type:
+            strings.write_string(&s.b, "\"%\" PRIu8")
+        }
+        strings.write_byte(&s.b, ',')
+        emit_c_value(s, value.value^)
+        strings.write_string(&s.b, ")")
     case uint:
         strings.write_string(&s.b, "&func")
         strings.write_uint(&s.b, value)
@@ -192,7 +217,7 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
         strings.write_string(&s.b, "builtin")
         strings.write_uint(&s.b, uint(value.index))
     case CheckedFieldAccess:
-        emit_value(s, value.value^)
+        emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
         strings.write_uint(&s.b, value.field_index)
     //case CheckedJsFunctionCall:
@@ -200,21 +225,17 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
     //case ArrayValue:
     //    panic("Internal error: Unexpected array value")
     case LengthOfArray:
-        emit_value(s, value.array^)
+        emit_c_value(s, value.array^)
         strings.write_string(&s.b, ".length")
     case CheckedArrayAccess:
-        emit_value(s, value.array^)
+        emit_c_value(s, value.array^)
         strings.write_string(&s.b, ".elems[")
-        emit_value(s, value.index^)
+        emit_c_value(s, value.index^)
         strings.write_byte(&s.b, ']')
     case BoolValue:
-        if value {
-            strings.write_string(&s.b, "true")
-        } else {
-            strings.write_string(&s.b, "false")
-        }
+        strings.write_string(&s.b, value ? "true" : "false")
     case CheckedFunctionCall:
-        emit_func_call(s, value)
+        emit_c_func_call(s, value)
     //case CheckedStructTypeInitialisation:
     //    emit_type(s, "", value.type)
     //    strings.write_byte(&s.b, '{')
@@ -224,7 +245,7 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
     //            strings.write_byte(&s.b, ',')
     //        }
     //        first_value = false
-    //        emit_value(s, v)
+    //        emit_c_value(s, v)
     //    }
     //    strings.write_byte(&s.b, '}')
     case TypeInitFunc:
@@ -251,19 +272,27 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
-        emit_value(s, value)
+        emit_c_value(s, value)
         strings.write_byte(&s.b, ')')
     case StringsAreEqual:
         strings.write_string(&s.b, "(strcmp(")
-        emit_value(s, value.str0^)
+        emit_c_value(s, value.str0^)
         strings.write_byte(&s.b, ',')
-        emit_value(s, value.str1^)
+        emit_c_value(s, value.str1^)
         strings.write_string(&s.b, ")==0)")
     case CheckedJoinedValues:
+        if value.join_method == .StringConcat {
+            strings.write_string(&s.b, "asprintf_value(\"%s%s\",")
+            emit_c_value(s, value.val0^)
+            strings.write_byte(&s.b, ',')
+            emit_c_value(s, value.val1^)
+            strings.write_byte(&s.b, ')')
+            return
+        }
         strings.write_byte(&s.b, '(')
-        emit_value(s, value.val0^)
+        emit_c_value(s, value.val0^)
         switch value.join_method {
-        case .Append:
+        case .Append, .Concat, .StringConcat:
             panic("Unreachable")
         case .BooleanAnd:
             strings.write_string(&s.b, "&&")
@@ -292,17 +321,17 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
         case .Modulo:
             strings.write_byte(&s.b, '%')
         }
-        emit_value(s, value.val1^)
+        emit_c_value(s, value.val1^)
         strings.write_byte(&s.b, ')')
     case VariableRef:
         emit_variable(&s.b, value)
     //case CheckedReadFile:
     //    strings.write_string(&s.b, "compiler_read_file(")
-    //    emit_value(s, value.file_name^)
+    //    emit_c_value(s, value.file_name^)
     //    strings.write_byte(&s.b, ')')
     //case CheckedReadLine:
     //    strings.write_string(&s.b, "readline(")
-    //    emit_value(s, value.prompt^)
+    //    emit_c_value(s, value.prompt^)
     //    strings.write_byte(&s.b, ')')
     case GlobalFuncRef:
         strings.write_string(&s.b, "func")
@@ -310,14 +339,14 @@ emit_value :: proc(s: ^EmitterState, v: CheckedValue) {
     }
 }
 
-emit_block_head :: proc(
+emit_c_block_head :: proc(
     s: ^EmitterState,
     nesting_level: uint,
     variables: []ExactCheckedType,
     loc := #caller_location,
 ) {
     when debug_emitter {
-        print_call(loc, "emit_block_head")
+        print_call(loc, "emit_c_block_head")
     }
     for type, index in variables {
         name := fmt.aprintf(variable_format, nesting_level, index)
@@ -327,14 +356,14 @@ emit_block_head :: proc(
     }
 }
 
-emit_block_body :: proc(
+emit_c_block_body :: proc(
     s: ^EmitterState,
     nesting_level: uint,
     body: []CheckedStatement,
     loc := #caller_location,
 ) {
     when debug_emitter {
-        print_call(loc, "emit_block_body")
+        print_call(loc, "emit_c_block_body")
         print_arg("nesting_level", nesting_level)
         print_arg("body", body)
     }
@@ -343,19 +372,19 @@ emit_block_body :: proc(
         //case CheckedJsFunctionCall, CheckedJsAssignment:
         //    panic("Internal error: JS received by C emitter")
         case CheckedFunctionCall:
-            emit_func_call(s, stmt)
+            emit_c_func_call(s, stmt)
             strings.write_byte(&s.b, ';')
         case CheckedReturn:
             strings.write_string(&s.b, "return ")
-            emit_value(s, stmt.value)
+            emit_c_value(s, stmt.value)
             strings.write_byte(&s.b, ';')
         case CheckedIf:
             strings.write_string(&s.b, "if (")
-            emit_value(s, stmt.condition)
+            emit_c_value(s, stmt.condition)
             strings.write_string(&s.b, "){")
-            emit_block(s, nesting_level + 1, stmt.if_block.variables, stmt.if_block.body)
+            emit_c_block(s, nesting_level + 1, stmt.if_block.variables, stmt.if_block.body)
             strings.write_string(&s.b, "} else {")
-            emit_block(s, nesting_level + 1, stmt.else_block.variables, stmt.else_block.body)
+            emit_c_block(s, nesting_level + 1, stmt.else_block.variables, stmt.else_block.body)
             strings.write_byte(&s.b, '}')
         /*
         case CheckedSumTypeInitialisation:
@@ -378,7 +407,7 @@ emit_block_body :: proc(
                 strings.write_string(&s.b, "->field")
                 strings.write_int(&s.b, i)
                 strings.write_byte(&s.b, '=')
-                emit_value(s, field)
+                emit_c_value(s, field)
                 strings.write_byte(&s.b, ';')
             }
             */
@@ -390,32 +419,28 @@ emit_block_body :: proc(
                 strings.write_string(&s.b, "case ")
                 strings.write_int(&s.b, i)
                 strings.write_string(&s.b, ": {")
-                emit_block_head(s, nesting_level + 1, branch.block.variables)
+                emit_c_block_head(s, nesting_level + 1, branch.block.variables)
                 emit_variable(&s.b, branch.value_var)
                 strings.write_string(&s.b, " = *")
                 emit_variable(&s.b, stmt.value)
                 strings.write_string(&s.b, ".payload.variant")
                 strings.write_int(&s.b, i)
                 strings.write_byte(&s.b, ';')
-                emit_block_body(s, nesting_level + 1, branch.block.body)
+                emit_c_block_body(s, nesting_level + 1, branch.block.body)
                 strings.write_string(&s.b, "break;}")
             }
             strings.write_string(&s.b, "}")
         case CheckedLoop:
             strings.write_byte(&s.b, '{')
-            emit_block(s, nesting_level + 1, stmt.variables, stmt.enter)
+            emit_c_block(s, nesting_level + 1, stmt.variables, stmt.enter)
             strings.write_string(&s.b, "while (1) {")
             strings.write_string(&s.b, "loop")
             strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "start:")
-            emit_block(s, nesting_level + 1, nil, stmt.body)
+            emit_c_block(s, nesting_level + 1, nil, stmt.body)
             strings.write_string(&s.b, "}}loop")
             strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "end:;")
-        case CheckedPrint:
-            strings.write_string(&s.b, "printf(\"%s\",")
-            emit_value(s, CheckedValue(stmt))
-            strings.write_string(&s.b, ");")
         case ContinueLoop:
             strings.write_string(&s.b, "goto loop")
             strings.write_uint(&s.b, stmt.loop_index)
@@ -424,22 +449,6 @@ emit_block_body :: proc(
             strings.write_string(&s.b, "goto loop")
             strings.write_uint(&s.b, stmt.loop_index)
             strings.write_string(&s.b, "end;")
-        case CheckedWriteFile:
-            strings.write_string(&s.b, "compiler_write_file(")
-            emit_value(s, stmt.file_name)
-            strings.write_byte(&s.b, ',')
-            emit_value(s, stmt.file_contents)
-            strings.write_string(&s.b, ");")
-        case StringInterpolation:
-            strings.write_string(&s.b, "asprintf(&")
-            emit_variable(&s.b, stmt.variable)
-            strings.write_byte(&s.b, ',')
-            strings.write_string(&s.b, stmt.format)
-            for elem in stmt.values {
-                strings.write_byte(&s.b, ',')
-                emit_value(s, elem)
-            }
-            strings.write_string(&s.b, ");")
         case CheckedArrayMutation:
             if stmt.variable_type.length == 0 {
                 emit_variable(&s.b, stmt.variable)
@@ -452,7 +461,7 @@ emit_block_body :: proc(
                     case InlineArraySegment:
                         emit_variable(&s.b, stmt.variable)
                         strings.write_string(&s.b, ".length += ")
-                        emit_value(s, segment_value.array_length)
+                        emit_c_value(s, segment_value.array_length)
                         strings.write_byte(&s.b, ';')
                     }
                 }
@@ -479,15 +488,15 @@ emit_block_body :: proc(
                 case SingleElemSegment:
                     emit_variable(&s.b, stmt.variable)
                     strings.write_string(&s.b, ".elems[index] = ")
-                    emit_value(s, segment_value.elem)
+                    emit_c_value(s, segment_value.elem)
                     strings.write_string(&s.b, "; index += 1;")
                 case InlineArraySegment:
                     strings.write_string(&s.b, "{uint64_t index2 = 0; while (index2 < ")
-                    emit_value(s, segment_value.array_length)
+                    emit_c_value(s, segment_value.array_length)
                     strings.write_string(&s.b, ") {")
                     emit_variable(&s.b, stmt.variable)
                     strings.write_string(&s.b, ".elems[index+index2] = ")
-                    emit_value(s, segment_value.array)
+                    emit_c_value(s, segment_value.array)
                     strings.write_string(&s.b, ".elems[index2];index2 += 1;}index += index2;}")
                 }
             }
@@ -496,7 +505,7 @@ emit_block_body :: proc(
             emit_variable(&s.b, stmt.destination.variable)
             if stmt.destination.index != nil {
                 strings.write_string(&s.b, ".elems[")
-                emit_value(s, stmt.destination.index)
+                emit_c_value(s, stmt.destination.index)
                 strings.write_byte(&s.b, ']')
 
             }
@@ -512,13 +521,13 @@ emit_block_body :: proc(
             case .DivideBy:
                 strings.write_string(&s.b, "/=")
             }
-            emit_value(s, stmt.value)
+            emit_c_value(s, stmt.value)
             strings.write_byte(&s.b, ';')
         }
     }
 }
 
-emit_block :: proc(
+emit_c_block :: proc(
     s: ^EmitterState,
     nesting_level: uint,
     variables: []ExactCheckedType,
@@ -526,27 +535,27 @@ emit_block :: proc(
     loc := #caller_location,
 ) {
     when debug_emitter {
-        print_call(loc, "emit_block")
+        print_call(loc, "emit_c_block")
     }
-    emit_block_head(s, nesting_level, variables)
-    emit_block_body(s, nesting_level, body)
+    emit_c_block_head(s, nesting_level, variables)
+    emit_c_block_body(s, nesting_level, body)
 }
 
-emit_global_type :: proc(
+emit_c_global_type :: proc(
     s: ^EmitterState,
     name: string,
     type: ExactCheckedType,
     loc := #caller_location,
 ) {
     when debug_emitter {
-        print_call(loc, "emit_generic_type_def")
+        print_call(loc, "emit_c_global_type")
     }
     sum_type, is_sum_type := type.(SumType(ExactCheckedType, FuncTypeRef))
     if is_sum_type {
         strings.write_string(&s.b, "struct ")
         strings.write_string(&s.b, name)
         strings.write_string(&s.b, "{uint64_t variant; union {")
-        for variant, i in sum_type.variants {
+        for _, i in sum_type.variants {
             strings.write_string(&s.b, "struct ")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")
@@ -579,9 +588,9 @@ emit_global_type :: proc(
                     strings.write_byte(&s.b, ',')
                 }
                 first_arg = false
-                name := fmt.aprintf("field%d", j)
-                emit_type(s, name, field.type)
-                delete_string(name)
+                field_name := fmt.aprintf("field%d", j)
+                defer delete_string(field_name)
+                emit_type(s, field_name, field.type)
             }
             strings.write_string(&s.b, ") {struct ")
             strings.write_string(&s.b, name)
@@ -592,7 +601,7 @@ emit_global_type :: proc(
             strings.write_string(&s.b, " = malloc(sizeof(struct ")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "));")
-            for field, j in variant.payload.fields {
+            for _, j in variant.payload.fields {
                 strings.write_string(&s.b, "out.payload.variant")
                 strings.write_int(&s.b, i)
                 strings.write_string(&s.b, "->field")
@@ -623,14 +632,14 @@ emit_global_type :: proc(
             } else {
                 first_field = false
             }
-            name := fmt.aprintf("field%d", i)
-            defer delete(name)
-            emit_type(s, name, field.type)
+            field_name := fmt.aprintf("field%d", i)
+            defer delete(field_name)
+            emit_type(s, field_name, field.type)
         }
         strings.write_string(&s.b, ") {struct ")
         strings.write_string(&s.b, name)
         strings.write_string(&s.b, " out;")
-        for field, i in struct_type.fields {
+        for _, i in struct_type.fields {
             strings.write_string(&s.b, "out.field")
             strings.write_int(&s.b, i)
             strings.write_string(&s.b, "=field")
@@ -652,6 +661,7 @@ emit_c :: proc(
     array_type_initialisations: ArrayTypeInitialisationsStore,
     func_types: []EquivalencyArrayElem(ExactFuncType),
     main_func_index: uint,
+    main_extra_code: string,
     type_equivalancy_array: []EquivalencyArrayElem(ExactCheckedType),
 ) -> []byte {
     s := EmitterState{strings.builder_make(), func_types, type_equivalancy_array}
@@ -660,7 +670,7 @@ emit_c :: proc(
     for global, index in global_types_without_generics {
         name := fmt.aprintf("Global%d", index)
         defer delete_string(name)
-        emit_global_type(&s, name, global)
+        emit_c_global_type(&s, name, global)
     }
 
     emitted_array_type_defs := map[u64]struct{}{}
@@ -694,10 +704,7 @@ emit_c :: proc(
     emitted_generic_type_defs := map[u64]struct{}{}
     for key, value in generic_type_initialisations {
         global_type_index, generic_arg_ref := seperate_u64(key)
-        generic_arg, simplified_generic_arg_ref := get_info(
-            type_equivalancy_array,
-            uint(generic_arg_ref),
-        )
+        _, simplified_generic_arg_ref := get_info(type_equivalancy_array, uint(generic_arg_ref))
         new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
@@ -715,7 +722,7 @@ emit_c :: proc(
         emitted_generic_type_defs[new_key] = struct{}{}
         name := fmt.aprintf(generic_name_format, global_type_index, simplified_generic_arg_ref)
         defer delete(name)
-        emit_global_type(&s, name, new_value)
+        emit_c_global_type(&s, name, new_value)
     }
 
     for func, index in code {
@@ -745,12 +752,14 @@ emit_c :: proc(
             first_arg = false
         }
         strings.write_string(&s.b, ") {")
-        emit_block(&s, 1, func.variables, func.body)
+        emit_c_block(&s, 1, func.variables, func.body)
         strings.write_byte(&s.b, '}')
     }
-    strings.write_string(&s.b, "int main() {return func")
+    strings.write_string(&s.b, "int main() {int ret = func")
     strings.write_uint(&s.b, main_func_index)
-    strings.write_string(&s.b, "();}")
+    strings.write_string(&s.b, "();")
+    strings.write_string(&s.b, main_extra_code)
+    strings.write_string(&s.b, "return ret;}")
     return transmute([]byte)strings.to_string(s.b)
 }
 

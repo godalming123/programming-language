@@ -1,7 +1,7 @@
 package main
 
+import "core:bufio"
 import "core:fmt"
-import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -28,10 +28,7 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     fmt.printfln("Compiling the C code into an executable at `%s`...", output_executable_path)
     // TODO: Use `CC` environment variable by default, and fallback to `cc` command, than `gcc` command
     command := []string{"gcc", c_code_path, "-o", output_executable_path}
-    state, stdout, stderr, err2 := os.process_exec(
-        os.Process_Desc{command = command},
-        context.allocator,
-    )
+    state, _, _, err2 := os.process_exec(os.Process_Desc{command = command}, context.allocator)
     if err2 != nil {
         fmt.eprintln("Failed to invoke compilation command for `%s`: %#v", c_code_path, err2)
         return "", false
@@ -48,12 +45,15 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     return output_executable_path, true
 }
 
-// The `string` returned is the path to the executable
+done_command :: "done"
+
+// - The `string` returned is the path to the executable
+// - If the program is a metaprogram, it is set to ""
 build :: proc(file_name: string) -> (string, bool) {
     fmt.printfln("Reading `%s`...", file_name)
-    data, err := os.read_entire_file(file_name, context.allocator)
-    if err != nil {
-        fmt.eprintfln("Failed to read `%s`: %#v", file_name, err)
+    data, data_err := os.read_entire_file(file_name, context.allocator)
+    if data_err != nil {
+        fmt.eprintfln("Failed to read `%s`: %#v", file_name, data_err)
         return "", false
     }
     defer delete(data, context.allocator)
@@ -61,8 +61,8 @@ build :: proc(file_name: string) -> (string, bool) {
     file := CompilerFile{string(data), file_name}
     state := ParserState{make([dynamic]FunctionDefinition), TokenizerState{index = 0, file = file}}
     fmt.printfln("Parsing `%s`...", file.file_name)
-    parser_output := parse(&state)
-    if !parser_output.ok {
+    parser_output, ok := parse(&state)
+    if !ok {
         fmt.eprintfln("\nFailed to parse `%s`", file.file_name)
         return "", false
     }
@@ -88,21 +88,28 @@ build :: proc(file_name: string) -> (string, bool) {
         parser_output.global_types_without_generics,
         parser_output.global_types_with_generics,
     )
+
+    errors, warnings: string = ---, ---
+
+    if checker_output.diagnostics_info.number_of_errors == 1 {
+        errors = fmt.aprint("1 error")
+    } else {
+        errors = fmt.aprintf("%d errors", checker_output.diagnostics_info.number_of_errors)
+    }
+    defer delete_string(errors)
+
+    if checker_output.diagnostics_info.number_of_warnings == 1 {
+        warnings = fmt.aprint("1 warning")
+    } else {
+        warnings = fmt.aprintf("%d warnings", checker_output.diagnostics_info.number_of_warnings)
+    }
+    defer delete_string(warnings)
+
     if checker_output.diagnostics_info.number_of_errors > 0 {
-        fmt.eprintfln(
-            "Erroneously checked `%s` with %d errors and %d warnings",
-            file.file_name,
-            checker_output.diagnostics_info.number_of_errors,
-            checker_output.diagnostics_info.number_of_warnings,
-        )
+        fmt.eprintfln("Erroneously checked `%s` with %s and %s", file.file_name, errors, warnings)
         return "", false
     } else {
-        fmt.eprintfln(
-            "Successfully checked `%s` with %d errors and %d warnings",
-            file.file_name,
-            checker_output.diagnostics_info.number_of_errors,
-            checker_output.diagnostics_info.number_of_warnings,
-        )
+        fmt.printfln("Successfully checked `%s` with %s and %s", file.file_name, errors, warnings)
     }
 
     fmt.printfln("Emitting C code for `%s`...", file.file_name)
@@ -113,6 +120,7 @@ build :: proc(file_name: string) -> (string, bool) {
         checker_output.array_type_initialisations,
         checker_output.func_types,
         checker_output.entry_func_index,
+        checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
         checker_output.type_equivalancy_array,
     )
 
@@ -128,11 +136,9 @@ build :: proc(file_name: string) -> (string, bool) {
             fmt.eprintfln("Failed to convert `%s` to an absolute path: %v", file_name, err2)
             return "", false
         }
+        absolute_file_dir := filepath.dir(absolute_file_name)
 
-        dir_in_tmp, err3 := filepath.join(
-            []string{tmp, filepath.dir(absolute_file_name)},
-            context.allocator,
-        )
+        dir_in_tmp, err3 := filepath.join([]string{tmp, absolute_file_dir}, context.allocator)
         if err3 != nil {
             fmt.eprintfln("Failed to join filepath: %v", err3)
             return "", false
@@ -145,15 +151,131 @@ build :: proc(file_name: string) -> (string, bool) {
             }
         }
 
-        fmt.println("TODO: Handle when the entry func is a build func")
         c_path, err4 := filepath.join([]string{tmp, absolute_file_name}, context.allocator)
         if err4 != nil {
             fmt.eprintfln("Failed to join filepath: %v", err4)
             return "", false
         }
-        return write_and_compile_c(c, c_path)
+        executable_path, executable_ok := write_and_compile_c(c, c_path)
+        if !executable_ok {
+            return "", false
+
+        }
+
+        run_metaprogram(absolute_file_dir, executable_path, parser_output, checker_output)
+        return "", true
     } else {
-        return write_and_compile_c(c, file_name)
+        executable_path, executable_ok := write_and_compile_c(c, file_name)
+        if !executable_ok {
+            return "", false
+        }
+        return executable_path, true
+    }
+}
+
+run_metaprogram :: proc(
+    metaprogram_working_dir: string,
+    metaprogram_path: string,
+    parsed: ParserOutput,
+    checked: CheckerOutput,
+) -> bool {
+    stdin_reader, stdin_writer, err := os.pipe()
+    if err != nil {
+        fmt.eprintln("Failed to create pipe: %#v", err)
+        return false
+    }
+    defer os.close(stdin_reader)
+    defer os.close(stdin_writer)
+
+    stdout_pipe, err2 := create_buffered_pipe()
+    if err2 != nil {
+        fmt.eprintln("Failed to create buffered pipe: %#v", err2)
+        return false
+    }
+    defer close_buffered_pipe(stdout_pipe)
+
+    fmt.printfln("Starting metaprogram at `%s`...", metaprogram_path)
+    // TODO: Check the exit code of the process
+    _, err3 := os.process_start(
+        os.Process_Desc {
+            working_dir = metaprogram_working_dir,
+            command = []string{metaprogram_path},
+            stdin = stdin_reader,
+            stdout = stdout_pipe.writer,
+            stderr = os.stderr,
+        },
+    )
+    if err3 != nil {
+        fmt.eprintln("Failed to start %s: %#v", metaprogram_path, err3)
+        return false
+    }
+
+    for {
+        command_raw, err4 := bufio.reader_read_string(stdout_pipe.bufio_reader, EOT)
+        if err4 != nil {
+            assert(command_raw == "")
+            fmt.eprintln("Failed to read string: %#v", err4)
+            return false
+        }
+        defer delete(command_raw)
+        assert(command_raw[len(command_raw) - 1] == EOT)
+        command := command_raw[:len(command_raw) - 1]
+
+        switch command {
+        case done_command:
+            return true
+        case "compiler.emit_js_code":
+            arg_raw, err5 := bufio.reader_read_string(stdout_pipe.bufio_reader, EOT)
+            if err5 != nil {
+                assert(arg_raw == "")
+                fmt.eprintln("Failed to read string: %#v", err5)
+                return false
+            }
+            defer delete(arg_raw)
+            assert(arg_raw[len(arg_raw) - 1] == EOT)
+            arg := arg_raw[:len(arg_raw) - 1]
+            fmt.printfln("Compiler received compiler.emit_js_code(%q) from metaprogram", arg)
+
+            global, exists := parsed.globals[arg]
+            if !exists {
+                fmt.eprintfln("The global %q does not exist", arg)
+                return false
+            }
+
+            value, is_value := global.value.(Value)
+            if !is_value {
+                fmt.eprintfln("The global %q is not a value. Expected a function value.", arg)
+                return false
+            }
+
+            func_ref, is_func := value.value.(uint)
+            if !is_func {
+                fmt.eprintfln("The global %q is a value but not a function value", arg)
+                return false
+            }
+
+            builder := emit_javascript(
+                checked.checked_funcs,
+                checked.checked_global_types_without_generic,
+                checked.generic_type_initialisations,
+                checked.array_type_initialisations,
+                checked.func_types,
+                checked.type_equivalancy_array,
+            )
+            strings.write_string(&builder, "const ")
+            strings.write_string(&builder, arg)
+            strings.write_string(&builder, "=func")
+            strings.write_uint(&builder, func_ref)
+            strings.write_byte(&builder, ';')
+            strings.write_byte(&builder, EOT)
+            str := strings.to_string(builder)
+            defer delete(str)
+            os.write_string(stdin_writer, str)
+            fmt.printfln("Compiler responded to compiler.emit_js_code")
+        case:
+            fmt.eprintfln("Received unrecognized command %q from metaprogram", command)
+            return false
+        }
     }
 }
 
