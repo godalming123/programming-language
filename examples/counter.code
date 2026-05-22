@@ -9,7 +9,7 @@
 // Implemented in the programming language 
 
 CounterState : {
-    count: I64
+    count: I64,
 }
 
 // TODO: Be able to use the `CounterState` struct as the type rather than `I64`

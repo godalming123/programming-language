@@ -79,7 +79,7 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, '(')
         emit_js_value(s, v.val0^)
         switch v.join_method {
-        case .Append, .Concat:
+        case .Append, .Concat, .Colon, .Arrow:
             panic("Unreachable")
         case .BooleanAnd:
             strings.write_string(&s.b, "&&")

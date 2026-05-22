@@ -16,7 +16,7 @@ EquivalencyArrayElem :: union(T: typeid) {
 
 // Returns the element and the simplified index
 get_info :: proc(
-    equivalency_array: $Array/[]EquivalencyArrayElem($Elem),
+    equivalency_array: $ArrayType/[]EquivalencyArrayElem($Elem),
     index: uint,
     loc := #caller_location,
 ) -> (
@@ -45,7 +45,7 @@ get_info :: proc(
 }
 
 mark_elements_equal :: proc(
-    equivalency_array: $Array/[]EquivalencyArrayElem($Elem),
+    equivalency_array: $ArrayType/[]EquivalencyArrayElem($Elem),
     index0: uint,
     index1: uint,
     loc := #caller_location,

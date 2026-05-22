@@ -7,7 +7,7 @@ import "core:path/filepath"
 import "core:strings"
 import "core:time"
 
-debug_tokenizer :: false
+debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
@@ -242,7 +242,7 @@ run_metaprogram :: proc(
                 return false
             }
 
-            value, is_value := global.value.(Value)
+            value, is_value := global.value.(Unit)
             if !is_value {
                 fmt.eprintfln("The global %q is not a value. Expected a function value.", arg)
                 return false

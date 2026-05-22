@@ -88,8 +88,8 @@ argument_count_mismatch :: proc(
 handle_named_type :: proc(
     s: ^CheckerState,
     pos: uint,
-    type_segments: IdentToken,
-    generic_arg: ^Type,
+    type_segments: Ident,
+    generic_args: []Unit,
     generic_arg_name: string,
 ) -> GenericCheckedType {
     if len(type_segments) != 1 {
@@ -126,7 +126,7 @@ handle_named_type :: proc(
         }
 
         if name == generic_arg_name {
-            if generic_arg != nil {
+            if len(generic_args) != 0 {
                 err(s, pos, "TODO: Support generic args that are generic")
                 return nil
             }
@@ -139,27 +139,30 @@ handle_named_type :: proc(
             return nil
         }
 
-        if generic_arg == nil {
+        if len(generic_args) == 0 {
             ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
             if !is_type_without_generic {
                 err(s, pos, "The global `%s` is not a type without a generic arg", name)
                 return nil
             }
             return GlobalTypeWithoutGenericRef{ref.index}
+        } else if len(generic_args) != 1 {
+            err(s, pos, "TODO: Support types with more than 1 generic argument")
+            return nil
         } else {
             ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
             if !is_type_with_generic {
                 err(s, pos, "The global `%s` is not a type with a generic arg", name)
                 return nil
             }
-            checked_generic_arg := check_type(s, generic_arg^, generic_arg_name)
+            checked_generic_arg := check_type(s, generic_args[0], generic_arg_name)
             if checked_generic_arg == nil {
                 return nil
             }
             return GenericType(^GenericCheckedType){ref.index, new_clone(checked_generic_arg)}
         }
     }
-    if generic_arg != nil {
+    if len(generic_args) != 0 {
         err(s, pos, "The builtin type `%s` cannot have a generic argument", name)
         return nil
     }

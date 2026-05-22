@@ -90,6 +90,8 @@ odin test .
 
 # Stuff that may be added
 
+- Be able to use NPM packges easily
+  - Dependency resolution
 - A compiler function to minify JS
   - Simplifies build process as you can create minified JS code without needing a separate JS minifier, and the JS minifier would probably need a JS package manager
 - Some kind of backwards pipe operator like [gleam's use expression](https://tour.gleam.run/advanced-features/use/)
@@ -211,6 +213,9 @@ odin test .
       - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
       - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
   - Type inference?
+    - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value
+      - However this approach has disadvanteges:
+        - You would have to specify what the generic arg is when calling a generic function
 - v0.3.0: Investigate [constraints](#what-i-mean-by-constraints)
 - v0.4.0: Mostly stabilize a lower level memory model (see [here](#programming-language-memory-model))
 - v0.5.0: Implement a backend that goes all the way to assembly code

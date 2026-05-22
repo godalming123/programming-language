@@ -200,6 +200,21 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
     }
 }
 
+is_close_brace :: proc(t: TokenContents) -> bool {
+    _, is_close_brace := t.(CloseBraceToken)
+    return is_close_brace
+}
+
+is_close_bracket :: proc(t: TokenContents) -> bool {
+    _, is_close_bracket := t.(CloseBracketToken)
+    return is_close_bracket
+}
+
+is_close_square_bracket :: proc(t: TokenContents) -> bool {
+    _, is_close_square_bracket := t.(CloseSquareBracketToken)
+    return is_close_square_bracket
+}
+
 CompilerFile :: struct {
     code:      string,
     file_name: string,
@@ -280,6 +295,7 @@ wrong_token_err :: proc(
     state: ^TokenizerState,
     expected_possibilities: []string,
     infos: ..string,
+    loc := #caller_location,
 ) {
     expected_bytes: []byte
     defer delete(expected_bytes)
@@ -320,6 +336,7 @@ wrong_token_err :: proc(
         string(info_bytes),
         string(expected_bytes),
         token_contents_to_string(state.last_token),
+        loc = loc,
     )
 }
 

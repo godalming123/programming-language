@@ -16,21 +16,6 @@ Struct :: struct(T: typeid) {
     fields:     #soa[]StructField(T),
 }
 
-Function :: struct {
-    inputs:  []Type,
-    outputs: []Type,
-}
-
-TypeVariable :: struct {
-    identifier:   IdentToken,
-    generic_type: ^Type, // can be `nil`
-}
-
-Array :: struct {
-    length:    u32, // 0 means dynamic length
-    item_type: ^Type,
-}
-
 SumTypeVariant :: struct(T: typeid, ExtraData: typeid) {
     name:       IdentAndPos,
     payload:    Struct(T),
@@ -43,23 +28,7 @@ SumType :: struct(T: typeid, VariantExtraData: typeid) {
     variants:     #soa[]SumTypeVariant(T, VariantExtraData),
 }
 
-// DynamicType :: distinct ^Type
-
-TypeValue :: union {
-    Struct(Type),
-    Function,
-    TypeVariable,
-    Array,
-    SumType(Type, struct {}),
-    // DynamicType,
-}
-
-Type :: struct {
-    pos:  uint,
-    type: TypeValue,
-}
-
-VariableReference :: distinct IdentToken
+Ident :: distinct IdentToken
 
 Number :: distinct string
 
@@ -69,59 +38,52 @@ Char :: distinct byte
 
 Bool :: distinct bool
 
-SingleElemAccess :: distinct ^Value
-RangedAccess :: struct {
-    start: ^Value,
-    end:   ^Value,
-}
-
-ArrayAccess :: struct {
-    array:     ^Value,
-    index_pos: uint,
-    index:     union {
-        SingleElemAccess,
-        RangedAccess,
-    },
-}
-
-TypeInitialisation :: struct {
-    type: TypeValue,
-    args: []Value,
-}
-
-ValueInBrackets :: distinct ^Value
-
-MarkedValue :: struct {
-    value:   ^Value,
+MarkedUnit :: struct {
+    value:   ^Unit,
     markers: []IdentAndPos,
 }
 
-ValueWithoutPos :: union {
+Tuple :: struct {
+    elements: []Unit,
+}
+
+// - A unit is a value or a type
+// - There is no distinction between a value and a type in the AST because
+//   there are cases where the parser cannot tell whether something is a value
+//   or a type
+// - For example, something like `HtmlElem[State].Text("hello world")`, where
+//   `HtmlElem[State]` could be either:
+//   - A value with a type like `{ Text: (String) -> I64 }`, or;
+//   - A sum type like `< Text{contents: String} >`
+
+UnitWithoutPos :: union {
+    Struct(Unit),
+    SumType(Unit, struct {}),
+    Tuple,
     uint, // an index into the function definitions
-    FunctionCall,
-    JoinedValues,
-    VariableReference,
+    CallWithBrackets,
+    CallWithSquareBrackets,
+    CallWithFrontedSquareBrackets,
+    JoinedUnits,
+    Ident,
     Number,
     String,
     Char,
     Bool,
-    ArrayAccess,
-    ValueInBrackets,
-    TypeInitialisation,
-    MarkedValue,
+    MarkedUnit,
 }
 
-Value :: struct {
+Unit :: struct {
     pos:   uint,
-    value: ValueWithoutPos,
+    value: UnitWithoutPos,
 }
 
 ParsingValue :: struct {
     enclosed_in_brackets: bool,
-    value:                Value,
+    value:                Unit,
 }
 
-ValueJoinMethod :: enum {
+UnitJoinMethod :: enum {
     // Prioraty 0
     BooleanAnd,
     BooleanOr,
@@ -135,9 +97,11 @@ ValueJoinMethod :: enum {
     IsLessThanOrEqual,
 
     // Prioraty 2
-    Append,
-    Concat,
-    StringConcat,
+    Append, // ::
+    Concat, // ++
+    StringConcat, // &
+    Colon, // Used for array indexing (for example `my_array[start_index:end_index]`)
+    Arrow, // Used for function types (for example `(String) -> U64`)
 
     // Prioraty 3
     Multiplication,
@@ -151,7 +115,7 @@ ValueJoinMethod :: enum {
 
 // Operations with higher prioraty (prioraty 3 is the highest prioraty) are executed first
 // See https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
-get_prioraty :: proc(join_method: ValueJoinMethod) -> uint {
+get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
     switch join_method {
     case .BooleanAnd, .BooleanOr:
         return 0
@@ -162,7 +126,7 @@ get_prioraty :: proc(join_method: ValueJoinMethod) -> uint {
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual:
         return 1
-    case .Append, .Concat, .StringConcat:
+    case .Append, .Concat, .StringConcat, .Colon, .Arrow:
         return 2
     case .Division, .Multiplication:
         return 3
@@ -172,16 +136,16 @@ get_prioraty :: proc(join_method: ValueJoinMethod) -> uint {
     panic("Unreachable")
 }
 
-JoinedValues :: struct {
-    join_method: ValueJoinMethod,
-    val0:        ^Value,
-    val1:        ^Value,
+JoinedUnits :: struct {
+    join_method: UnitJoinMethod,
+    unit0:       ^Unit,
+    unit1:       ^Unit,
 }
 
 VariableDefinition :: struct {
     name:  string,
-    type:  Type,
-    value: Value,
+    type:  Unit,
+    value: Unit,
 }
 
 VariableDestType :: enum {
@@ -196,22 +160,26 @@ VariableDestType :: enum {
 VariableDest :: struct {
     name:        IdentAndPos,
     type:        VariableDestType,
-    array_index: ^Value, // nil if there isn't an array index
+    array_index: ^Unit, // nil if there isn't an array index
 }
 
 VariableManagement :: struct {
-    value:         Value,
+    value:         Unit,
     destination:   []VariableDest,
     mutation_type: MutationType,
 }
 
-FunctionCall :: struct {
-    function: ^Value,
-    args:     []Value, // TODO: Add named arguments
+Call :: struct {
+    unit_being_called: ^Unit,
+    args:              []Unit, // TODO: Add named arguments
 }
 
+CallWithBrackets :: distinct Call // A(B, C, D)
+CallWithSquareBrackets :: distinct Call // A[B, C, D]
+CallWithFrontedSquareBrackets :: distinct Call // [B, C, D]A
+
 Iterator :: union {
-    Value,
+    Unit,
     NumericIterator,
 }
 
@@ -221,9 +189,9 @@ NumericIteratorType :: enum {
 }
 
 NumericIterator :: struct {
-    start: Value,
-    end:   Value,
-    step:  ^Value, // nil if the step is 1
+    start: Unit,
+    end:   Unit,
+    step:  ^Unit, // nil if the step is 1
     type:  NumericIteratorType,
 }
 
@@ -237,7 +205,7 @@ ConditionControlledLoop :: struct {
         WhileLoop,
         DoWhileLoop,
     },
-    condition: Value,
+    condition: Unit,
     body:      []Statement,
 }
 
@@ -252,30 +220,30 @@ ForInLoop :: struct {
 }
 
 IfElseStatement :: struct {
-    condition:  Value,
+    condition:  Unit,
     if_block:   []Statement,
     else_block: []Statement,
 }
 
 MatchBranch :: struct {
     name: IdentAndPos,
-    type: Type,
+    type: Unit,
     body: []Statement,
 }
 
 MatchStatement :: struct {
-    value:    Value,
+    value:    Unit,
     branches: []MatchBranch,
 }
 
-ReturnStatement :: distinct []Value
-YieldStatement :: distinct []Value
+ReturnStatement :: distinct []Unit
+YieldStatement :: distinct []Unit
 
 Statement :: struct {
     position: uint,
     value:    union {
         VariableManagement,
-        FunctionCall,
+        CallWithBrackets,
         ConditionControlledLoop,
         ForInLoop,
         IfElseStatement,
@@ -287,7 +255,7 @@ Statement :: struct {
 
 FunctionArg :: struct {
     name:       IdentAndPos,
-    value_type: Type,
+    value_type: Unit,
     arg_type:   enum {
         Normal,
         Mutable,
@@ -295,23 +263,9 @@ FunctionArg :: struct {
     },
 }
 
-FunctionOutput :: struct {
-    name:        IdentAndPos,
-    value_type:  Type,
-    output_type: enum {
-        Normal,
-        AllocatedOntoStack,
-    },
-}
-
-NameAndType :: struct {
-    name: string,
-    type: Type,
-}
-
 FunctionDefinition :: struct {
     inputs:  #soa[]FunctionArg,
-    outputs: #soa[]FunctionOutput,
+    output:  Unit, // if the function has no output, then `output` is `Unit{}`
     body:    []Statement,
     markers: []IdentAndPos,
 }

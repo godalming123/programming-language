@@ -137,7 +137,11 @@ diagnostic :: proc(
     type: string = "Error",
     newline_before: bool = true,
     newline_after: bool = false,
+    loc := #caller_location,
 ) {
+    when debug_tokenizer || debug_checker {
+        print_call(loc, "diagnostic")
+    }
     if newline_before {
         fmt.println("")
     }
@@ -161,7 +165,13 @@ diagnostic :: proc(
     }
 }
 
-err :: proc(s: ^CheckerState, position: uint, message_fmt: string, message_args: ..any) {
+err :: proc(
+    s: ^CheckerState,
+    position: uint,
+    message_fmt: string,
+    message_args: ..any,
+    loc := #caller_location,
+) {
     diagnostic_before :=
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_errors += 1
@@ -173,10 +183,17 @@ err :: proc(s: ^CheckerState, position: uint, message_fmt: string, message_args:
         type = "Error",
         newline_before = !diagnostic_before,
         newline_after = true,
+        loc = loc,
     )
 }
 
-warn :: proc(s: ^CheckerState, position: uint, message_fmt: string, message_args: ..any) {
+warn :: proc(
+    s: ^CheckerState,
+    position: uint,
+    message_fmt: string,
+    message_args: ..any,
+    loc := #caller_location,
+) {
     diagnostic_before :=
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_warnings += 1
@@ -188,6 +205,7 @@ warn :: proc(s: ^CheckerState, position: uint, message_fmt: string, message_args
         type = "Warning",
         newline_before = !diagnostic_before,
         newline_after = true,
+        loc = loc,
     )
 }
 
