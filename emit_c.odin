@@ -185,6 +185,31 @@ emit_c_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
 
 emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
     switch value in v {
+    case CompileTimeValue:
+        switch comptime in value {
+        case NumberValue:
+            if comptime.value.is_negated {
+                strings.write_byte(&s.b, '-')
+            }
+            strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
+        case StringLiteralValue:
+            strings.write_byte(&s.b, '"')
+            for char in comptime {
+                switch char {
+                case '\n':
+                    strings.write_string(&s.b, "\\n")
+                case '"':
+                    strings.write_string(&s.b, "\\\"")
+                case '\\':
+                    strings.write_string(&s.b, "\\\\")
+                case:
+                    strings.write_rune(&s.b, char)
+                }
+            }
+            strings.write_byte(&s.b, '"')
+        case BoolValue:
+            strings.write_string(&s.b, comptime ? "true" : "false")
+        }
     case ToString:
         strings.write_string(&s.b, "asprintf_value(")
         switch value.from_type {
@@ -210,9 +235,6 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
         strings.write_byte(&s.b, ',')
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ")")
-    case uint:
-        strings.write_string(&s.b, "&func")
-        strings.write_uint(&s.b, value)
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
         strings.write_uint(&s.b, uint(value.index))
@@ -232,8 +254,6 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
         strings.write_string(&s.b, ".elems[")
         emit_c_value(s, value.index^)
         strings.write_byte(&s.b, ']')
-    case BoolValue:
-        strings.write_string(&s.b, value ? "true" : "false")
     case CheckedFunctionCall:
         emit_c_func_call(s, value)
     //case CheckedStructTypeInitialisation:
@@ -261,14 +281,6 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
         case:
             panic(fmt.aprintf("TODO: %#v", value.type))
         }
-    case StringLiteralValue:
-        strings.write_byte(&s.b, '"')
-        strings.write_string(&s.b, string(value))
-        strings.write_byte(&s.b, '"')
-    case I64Value:
-        strings.write_i64(&s.b, i64(value))
-    case U8Value:
-        strings.write_uint(&s.b, uint(value))
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
@@ -333,7 +345,7 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
     //    strings.write_string(&s.b, "readline(")
     //    emit_c_value(s, value.prompt^)
     //    strings.write_byte(&s.b, ')')
-    case GlobalFuncRef:
+    case FuncDefinitionRef:
         strings.write_string(&s.b, "func")
         strings.write_uint(&s.b, value.index)
     }
@@ -420,12 +432,14 @@ emit_c_block_body :: proc(
                 strings.write_int(&s.b, i)
                 strings.write_string(&s.b, ": {")
                 emit_c_block_head(s, nesting_level + 1, branch.block.variables)
-                emit_variable(&s.b, branch.value_var)
-                strings.write_string(&s.b, " = *")
-                emit_variable(&s.b, stmt.value)
-                strings.write_string(&s.b, ".payload.variant")
-                strings.write_int(&s.b, i)
-                strings.write_byte(&s.b, ';')
+                if value_var, has_value_var := branch.value_var.(VariableRef); has_value_var {
+                    emit_variable(&s.b, value_var)
+                    strings.write_string(&s.b, " = *")
+                    emit_variable(&s.b, stmt.value)
+                    strings.write_string(&s.b, ".payload.variant")
+                    strings.write_int(&s.b, i)
+                    strings.write_byte(&s.b, ';')
+                }
                 emit_c_block_body(s, nesting_level + 1, branch.block.body)
                 strings.write_string(&s.b, "break;}")
             }
@@ -654,30 +668,50 @@ emit_c_global_type :: proc(
     }
 }
 
-emit_c :: proc(
-    code: []CheckedFunction,
-    global_types_without_generics: []ExactCheckedType,
-    generic_type_initialisations: GenericTypeInitialisationsStore,
-    array_type_initialisations: ArrayTypeInitialisationsStore,
-    func_types: []EquivalencyArrayElem(ExactFuncType),
-    main_func_index: uint,
-    main_extra_code: string,
-    type_equivalancy_array: []EquivalencyArrayElem(ExactCheckedType),
-) -> []byte {
-    s := EmitterState{strings.builder_make(), func_types, type_equivalancy_array}
+emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef) {
+    when debug_emitter {
+        debug("emitting function index %d", index)
+    }
+    info, _ := get_info(s.func_types, type.index)
+    switch len(info.return_types) {
+    case 0:
+        strings.write_string(&s.b, "void")
+    case 1:
+        emit_type(s, "", info.return_types[0])
+    case:
+        panic("Unreachable")
+    }
+    strings.write_string(&s.b, " func")
+    strings.write_int(&s.b, func_index)
+    strings.write_byte(&s.b, '(')
+    first_arg := true
+    for arg, i in info.args {
+        if !first_arg {
+            strings.write_byte(&s.b, ',')
+        }
+        name := fmt.aprintf(variable_format, 0, i)
+        emit_type(s, name, arg)
+        delete_string(name)
+        first_arg = false
+    }
+    strings.write_byte(&s.b, ')')
+}
+
+emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
+    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array}
     strings.write_bytes(&s.b, #load("glue.c"))
 
-    for global, index in global_types_without_generics {
+    for global, index in c.checked_global_types_without_generic {
         name := fmt.aprintf("Global%d", index)
         defer delete_string(name)
         emit_c_global_type(&s, name, global)
     }
 
     emitted_array_type_defs := map[u64]struct{}{}
-    for key in array_type_initialisations {
+    for key in c.array_type_initialisations {
         length, item_type_ref := seperate_u64(key)
         item_type, simplified_item_type_ref := get_info(
-            type_equivalancy_array,
+            c.type_equivalancy_array,
             uint(item_type_ref),
         )
         new_key := combine_u32(length, u32(simplified_item_type_ref))
@@ -702,9 +736,9 @@ emit_c :: proc(
     }
 
     emitted_generic_type_defs := map[u64]struct{}{}
-    for key, value in generic_type_initialisations {
+    for key, value in c.generic_type_initialisations {
         global_type_index, generic_arg_ref := seperate_u64(key)
-        _, simplified_generic_arg_ref := get_info(type_equivalancy_array, uint(generic_arg_ref))
+        _, simplified_generic_arg_ref := get_info(c.type_equivalancy_array, uint(generic_arg_ref))
         new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
@@ -712,7 +746,7 @@ emit_c :: proc(
         }
         new_value: ExactCheckedType = ---
         if value == nil {
-            new_value = generic_type_initialisations[new_key]
+            new_value = c.generic_type_initialisations[new_key]
             if new_value == nil {
                 continue
             }
@@ -725,38 +759,20 @@ emit_c :: proc(
         emit_c_global_type(&s, name, new_value)
     }
 
-    for func, index in code {
-        when debug_emitter {
-            debug("emitting function index %d", index)
-        }
-        info, _ := get_info(func_types, uint(index))
-        switch len(info.return_types) {
-        case 0:
-            strings.write_string(&s.b, "void")
-        case 1:
-            emit_type(&s, "", info.return_types[0])
-        case:
-            panic("Unreachable")
-        }
-        strings.write_string(&s.b, " func")
-        strings.write_int(&s.b, index)
-        strings.write_byte(&s.b, '(')
-        first_arg := true
-        for arg, i in info.args {
-            if !first_arg {
-                strings.write_byte(&s.b, ',')
-            }
-            name := fmt.aprintf(variable_format, 0, i)
-            emit_type(&s, name, arg)
-            delete_string(name)
-            first_arg = false
-        }
-        strings.write_string(&s.b, ") {")
+    for func, index in c.checked_funcs {
+        emit_function_head(&s, index, func.type)
+        strings.write_byte(&s.b, ';')
+    }
+
+    for func, index in c.checked_funcs {
+        emit_function_head(&s, index, func.type)
+        strings.write_byte(&s.b, '{')
         emit_c_block(&s, 1, func.variables, func.body)
         strings.write_byte(&s.b, '}')
     }
+
     strings.write_string(&s.b, "int main() {int ret = func")
-    strings.write_uint(&s.b, main_func_index)
+    strings.write_uint(&s.b, main_func_ref.index)
     strings.write_string(&s.b, "();")
     strings.write_string(&s.b, main_extra_code)
     strings.write_string(&s.b, "return ret;}")

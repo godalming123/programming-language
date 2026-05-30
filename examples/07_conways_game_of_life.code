@@ -1,0 +1,93 @@
+html = import "html.code"
+
+game_width = 15
+game_height = 15
+game_size = game_height * game_width
+
+count_pixel_life = |s: [game_size]Bool, x: I64, y: I64| -> I64 {
+	if x < 0 or x >= game_width or y < 0 or y >= game_height {
+		return 0
+	}
+	if s[(y * game_width) + x] {
+		return 1
+	}
+	return 0
+}
+
+run_tick = |s: [game_size]Bool| -> [game_size]Bool {
+    f = false
+    mut new_state = [game_size]Bool(f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f, f)
+    for was_alive, index in s {
+        x = index % game_width
+        y = (index - x) / game_width
+
+        mut surrounding_alive_pixels = 0
+
+	    ~surrounding_alive_pixels += count_pixel_life(s, x-1, y-1)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x,   y-1)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x+1, y-1)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x-1, y)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x+1, y)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x-1, y+1)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x,   y+1)
+	    ~surrounding_alive_pixels += count_pixel_life(s, x+1, y+1)
+
+		if was_alive {
+		    // TODO: Be able to do `new_state[index] = 2 <= surrounding_alive_pixels && surrounding_alive_pixels <= 3`
+			if 2 <= surrounding_alive_pixels and surrounding_alive_pixels <= 3 {
+			    ~new_state[index] = true
+			} else {
+			    ~new_state[index] = false
+			}
+		} else {
+			if surrounding_alive_pixels == 3 {
+			    ~new_state[index] = true
+			} else {
+			    ~new_state[index] = false
+			}
+		}
+    }
+    return new_state
+}
+
+game_of_life = |s: [game_size]Bool| -> []html.Elem[[game_size]Bool] {
+    mut grid_pixels = []html.Elem[[game_size]Bool]()
+    for pixel in s {
+        if pixel {
+	        ~grid_pixels = grid_pixels :: .Div("background: #FFFFFF;", []html.Elem[[game_size]Bool]())
+        } else {
+	        ~grid_pixels = grid_pixels :: .Div("background: #000000;", []html.Elem[[game_size]Bool]())
+        }
+    }
+	grid_style =
+        "display: grid;"
+        "grid-template-columns: repeat(" & game_width.to_str & ", 1fr);"
+        "grid-template-columns: repeat(" & game_height.to_str & ", 1fr);"
+        "aspect-ratio: 1 / 1;"
+	return []html.Elem[[game_size]Bool](
+        .Button([]html.Elem[[game_size]Bool](.Text("Run tick")), run_tick),
+        .Div(grid_style, grid_pixels),
+    )
+}
+
+build = #comptime || -> I64 {
+    pulsar_initial_state = "[
+        false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, true,  false, false, false, false, true,  false, true,  false, false, false, false, true,  false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+    ]"
+    write_file("conways_game_of_life.html", html.reactive_page(game_of_life.function_id, pulsar_initial_state))
+    return 0
+}

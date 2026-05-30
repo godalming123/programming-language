@@ -23,8 +23,8 @@ run_normal_example :: proc(
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
-    executable, build_ok := build(fullpath)
-    if !build_ok {
+    executable, build_status := build(fullpath)
+    if build_status != .Success {
         testing.fail(t)
         return RanExample{"", "", false}
     }
@@ -71,8 +71,8 @@ run_comptime_example :: proc(t: ^testing.T, relative_path: string) -> bool {
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
-    executable, ok := build(fullpath)
-    if !ok {
+    executable, status := build(fullpath)
+    if status != .Success {
         testing.fail(t)
         return false
     }
@@ -86,7 +86,7 @@ run_comptime_example :: proc(t: ^testing.T, relative_path: string) -> bool {
 
 @(test)
 fizzbuzz_example :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/fizzbuzz.code", "")
+    ran := run_normal_example(t, "examples/00_fizzbuzz.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -98,7 +98,7 @@ fizzbuzz_example :: proc(t: ^testing.T) {
 
 @(test)
 factorial_example :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/factorial.code", "")
+    ran := run_normal_example(t, "examples/01_factorial.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "120\n")
@@ -106,7 +106,7 @@ factorial_example :: proc(t: ^testing.T) {
 
 @(test)
 primes_example :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/primes.code", "")
+    ran := run_normal_example(t, "examples/02_primes.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(
@@ -218,7 +218,7 @@ The number 100 is not prime
 
 @(test)
 comptime_fibonacci_example :: proc(t: ^testing.T) {
-    ok := run_comptime_example(t, "examples/comptime_fibonacci.code")
+    ok := run_comptime_example(t, "examples/03_comptime_fibonacci.code")
     if !ok {return}
     file :: "examples/fibonacci.txt"
     data, err := os.read_entire_file(file, context.allocator)
@@ -231,7 +231,7 @@ comptime_fibonacci_example :: proc(t: ^testing.T) {
 
 @(test)
 linked_list_example :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/linked_list.code", "")
+    ran := run_normal_example(t, "examples/04_linked_list.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
     testing.expect(t, ran.stdout == "1\n2\n3\n")
@@ -259,7 +259,7 @@ expect_ui_render :: proc(
 ui_example :: proc(t: ^testing.T) {
     ran := run_normal_example(
         t,
-        "examples/ui.code",
+        "examples/05_ui.code",
         "next\nclick\nprev\nprev\nclick\nnext\nnext\nnext\nclick\nquit\n",
     )
     if !ran.ok {return}
@@ -292,13 +292,39 @@ buffered_pipe_test :: proc(t: ^testing.T) {
     }
 }
 
+// TODO: Mock a browser to test the counter and conways game of life
+
 @(test)
 counter_example :: proc(t: ^testing.T) {
-    // TODO: Mock a browser to test the counter
-    ok := run_comptime_example(t, "examples/counter.code")
+    ok := run_comptime_example(t, "examples/06_counter.code")
     if !ok {return}
     testing.expect(t, os.exists("examples/counter.html"))
 }
+
+@(test)
+conways_game_of_life :: proc(t: ^testing.T) {
+    ok := run_comptime_example(t, "examples/07_conways_game_of_life.code")
+    if !ok {return}
+    testing.expect(t, os.exists("examples/conways_game_of_life.html"))
+
+}
+
+/*
+// TODO: Add this test back
+@(test)
+basic_fuzz_test :: proc(t: ^testing.T) {
+    for i in 0 ..< 100 {
+        code := random_string(800)
+        fmt.printfln("Randomly generated code is:\n\n```\n%s\n```", code)
+        _, status := build_code(code, "fuzz_test.code")
+        testing.expect(t, status != .FailedDueToCompilerError)
+    }
+}
+*/
+
+// TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
+
+// TODO: Test big numbers implementation
 
 //@(test)
 //run_examples :: proc(t: ^testing.T) {

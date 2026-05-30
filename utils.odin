@@ -4,9 +4,24 @@ import "base:runtime"
 import "core:bufio"
 import "core:fmt"
 import "core:io"
+import "core:math/rand"
 import "core:os"
 import "core:slice"
 import "core:testing"
+
+random_string :: proc(max_length: int, gen := context.random_generator) -> string {
+    context.random_generator = gen
+    length := rand.int_max(max_length / 4)
+    out := make([]byte, length * 4)
+    for i in 0 ..< length {
+        char_group := rand.uint32()
+        out[i * 4] = byte(char_group)
+        out[i * 4 + 1] = byte(char_group >> 8)
+        out[i * 4 + 2] = byte(char_group >> 16)
+        out[i * 4 + 3] = byte(char_group >> 32)
+    }
+    return string(out)
+}
 
 EOT :: '\x04'
 
@@ -148,13 +163,13 @@ diagnostic :: proc(
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
     if position == max(uint) {
-        fmt.eprintf("%s compiling `%s`:\n%s\n", type, file.file_name, message)
+        fmt.eprintf("%s compiling `%s`:\n%s\n", type, file.file_path, message)
     } else {
         line, column := get_location(file.code, position)
         fmt.eprintf(
             "%s compiling `%s`:\nLine %d column %d:\n%s\n",
             type,
-            file.file_name,
+            file.file_path,
             line,
             column,
             message,
@@ -176,7 +191,7 @@ err :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_errors += 1
     diagnostic(
-        s.file,
+        s.files[s.file.index].file,
         position,
         message_fmt,
         ..message_args,
@@ -198,7 +213,7 @@ warn :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_warnings += 1
     diagnostic(
-        s.file,
+        s.files[s.file.index].file,
         position,
         message_fmt,
         ..message_args,

@@ -34,25 +34,25 @@ builtin_emit_js_code :: 11
 get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, ExactCheckedType) {
     switch name {
     case "print":
-        return builtin_print, s.string_to_nil_type
+        return builtin_print, string_to_nil_type
     case "println":
-        return builtin_println, s.string_to_nil_type
+        return builtin_println, string_to_nil_type
     case "eprint":
-        return builtin_eprint, s.string_to_nil_type
+        return builtin_eprint, string_to_nil_type
     case "eprintln":
-        return builtin_eprintln, s.string_to_nil_type
+        return builtin_eprintln, string_to_nil_type
     case "readline":
-        return builtin_readline, s.string_to_string_type
+        return builtin_readline, string_to_string_type
     case "read_file":
-        return builtin_read_file, s.string_to_string_type
+        return builtin_read_file, string_to_string_type
     case "write_file":
-        return builtin_write_file, s.string_string_to_nil_type
+        return builtin_write_file, string_string_to_nil_type
     case "clear":
-        return builtin_clear, s.no_args_to_nil_type
+        return builtin_clear, no_args_to_nil_type
     case "run_executable":
-        return builtin_run_executable, s.array_of_strings_to_nil_type
+        return builtin_run_executable, array_of_strings_to_nil_type
     case "exit":
-        return builtin_exit, s.i64_to_nil_type
+        return builtin_exit, i64_to_nil_type
     case:
         return max(u32), nil
     }
@@ -84,6 +84,52 @@ argument_count_mismatch :: proc(
     )
 }
 
+handle_named_user_defined_type :: proc(
+    s: ^CheckerState,
+    pos: uint,
+    namespace: FileRef,
+    name: string,
+    generic_args: []Unit,
+    generic_arg_name: string,
+) -> GenericCheckedType {
+    if name == generic_arg_name {
+        if len(generic_args) != 0 {
+            err(s, pos, "TODO: Support generic args that are generic")
+            return nil
+        }
+        return TypeOfGenericArg{}
+    }
+
+    global, exists := s.files[namespace.index].globals[name]
+    if !exists {
+        err(s, pos, "There is no global called `%s`", name)
+        return nil
+    }
+
+    if len(generic_args) == 0 {
+        ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
+        if !is_type_without_generic {
+            err(s, pos, "The global `%s` is not a type without a generic arg", name)
+            return nil
+        }
+        return GlobalTypeWithoutGenericRef{ref.index}
+    } else if len(generic_args) != 1 {
+        err(s, pos, "TODO: Support types with more than 1 generic argument")
+        return nil
+    } else {
+        ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
+        if !is_type_with_generic {
+            err(s, pos, "The global `%s` is not a type with a generic arg", name)
+            return nil
+        }
+        checked_generic_arg := check_type(s, generic_args[0], generic_arg_name)
+        if checked_generic_arg == nil {
+            return nil
+        }
+        return GenericType(^GenericCheckedType){ref.index, new_clone(checked_generic_arg)}
+    }
+}
+
 // Returns nil if there are errors in the named type
 handle_named_type :: proc(
     s: ^CheckerState,
@@ -92,10 +138,39 @@ handle_named_type :: proc(
     generic_args: []Unit,
     generic_arg_name: string,
 ) -> GenericCheckedType {
-    if len(type_segments) != 1 {
-        err(s, pos, "TODO: Support compiling type references with `.` in them")
+    if len(type_segments) == 2 {
+        namespace := type_segments[0].ident
+        global, exists := s.files[s.file.index].globals[namespace]
+        if !exists {
+            err(s, pos, "There is no global called `%s`", namespace)
+            return nil
+        }
+
+        value_ref, is_value := global.value.(GlobalValueRef)
+        if !is_value {
+            err(s, pos, "The global `%s` is not a value", namespace)
+            return nil
+        }
+
+        import_value, is_import := s.global_values[value_ref.index].value.(Import)
+        if !is_import {
+            err(s, pos, "The global `%s` is not an import", namespace)
+            return nil
+        }
+
+        return handle_named_user_defined_type(
+            s,
+            type_segments[1].pos,
+            import_value.file,
+            type_segments[1].ident,
+            generic_args,
+            generic_arg_name,
+        )
+    } else if len(type_segments) != 1 {
+        err(s, pos, "TODO: Support compiling type references with more than 1 `.` in them")
         return nil
     }
+
     name := type_segments[0].ident
     builtin_type: GenericCheckedType = ---
     switch name {
@@ -133,34 +208,7 @@ handle_named_type :: proc(
             return TypeOfGenericArg{}
         }
 
-        global, exists := s.globals[name]
-        if !exists {
-            err(s, pos, "There is no global called `%s`", name)
-            return nil
-        }
-
-        if len(generic_args) == 0 {
-            ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
-            if !is_type_without_generic {
-                err(s, pos, "The global `%s` is not a type without a generic arg", name)
-                return nil
-            }
-            return GlobalTypeWithoutGenericRef{ref.index}
-        } else if len(generic_args) != 1 {
-            err(s, pos, "TODO: Support types with more than 1 generic argument")
-            return nil
-        } else {
-            ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
-            if !is_type_with_generic {
-                err(s, pos, "The global `%s` is not a type with a generic arg", name)
-                return nil
-            }
-            checked_generic_arg := check_type(s, generic_args[0], generic_arg_name)
-            if checked_generic_arg == nil {
-                return nil
-            }
-            return GenericType(^GenericCheckedType){ref.index, new_clone(checked_generic_arg)}
-        }
+        return handle_named_user_defined_type(s, pos, s.file, name, generic_args, generic_arg_name)
     }
     if len(generic_args) != 0 {
         err(s, pos, "The builtin type `%s` cannot have a generic argument", name)
@@ -244,7 +292,8 @@ is_builtin :: proc(name: string) -> bool {
          "U8",
          "Bool",
          "String",
-         "to_str":
+         "to_str",
+         "function_id":
         return true
     case:
         return false

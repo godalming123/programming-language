@@ -8,38 +8,25 @@
 //                 |--|
 // Implemented in the programming language 
 
-CounterState : {
-    count: I64,
-}
-
-// TODO: Be able to use the `CounterState` struct as the type rather than `I64`
-counter_initial_state = 1
-
-increment_counter = |s: I64| -> I64 {
-	return s + 1
-}
-
-counter = |s: I64| -> []HtmlElem[I64] {
-    return []HtmlElem[I64](
-        .Button([]HtmlElem[I64](.Text("The count is " & s.to_str)), increment_counter),
-    )
-}
-
-HtmlElem[State] : <
-    Button {children: []HtmlElem[State], onclick: (State) -> State},
-    Div {children: []HtmlElem[State]},
+Elem[State] : <
+    Button {children: []Elem[State], onclick: (State) -> State},
+    Div {syle: String, children: []Elem[State]},
     Text {text: String},
 >
 
-build = #comptime || -> I64 {
-    glue = read_file("counter.js")
+reactive_page = #comptime |
+	reactivity_function_id: U64, // TODO: Check that the type is `(T) -> []Elem[T]`
+	initial_state_js: String, // TODO: Check that the type is `T`
+| -> String {
+    glue = #load "./html.js"
     js =
-        compiler.emit_js_code("counter") &
-        "let state = 1;" // TODO: Actaully use `counter_initial_state` rather than inlining the 1
-        "const state_to_ui = counter;" &
+        compiler.emit_js_code(reactivity_function_id) &
+        "let state = " & initial_state_js & ";"
+        "const state_to_ui = func" & reactivity_function_id.to_str & ";" &
         glue
     // The close tags are split up so that the browser interprets them as JS strings rather than HTML close tags
-    html =
+	// TODO: JS should be tree-shaked so the `reactive_page` function shouldn't even be included in the emitted JS code
+    return
         "<!DOCTYPE html>" &
         "<html lang=\"en\">"
             "<head>"
@@ -49,6 +36,5 @@ build = #comptime || -> I64 {
             "</" & "head>"
             "<body></" & "body>"
         "</" & "html>"
-    write_file("counter.html", html)
-    return 0
 }
+

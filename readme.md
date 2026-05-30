@@ -22,6 +22,22 @@ gcc examples/fizzbuzz.code.c -o fizzbuzz
 odin test .
 ```
 
+# Future slogan
+
+(TODO: Work on the language enough for this slogan to be at least partially correct)
+
+A new language for the web, because it's time to stop working around javascript.
+
+# Mistakes
+
+- I think the JS backend should have been prioratised as the primary backend rather than the C backend
+  - It's easier to write a JS backend than a C backend
+    - JS has automatic garbage collection
+    - JS has inline function definitions
+- Maybe with this emphasis on JS, there should have been more of an emphasis on every value having any type and constraints rather than a type system
+- I think a good language design for writing high level code should be prioratised over being able to write performant code
+- I think maybe some of the syntax should have been copied from JS to make JS devs more at home
+
 # Todo
 
 - Choose a name
@@ -165,6 +181,11 @@ odin test .
       - An executable for a server to handle requests
       - JS code that could run on the edge
   - Metaprogramming:
+    - Decide which metaprogramming capabilities should be ran by the compiler interpreting them and which should be ran by the compiler compiling them into an executable and running the executable
+      - An advantage of the interpreter-based approach is that you can garuntee that the metaprogram does the same thing regardless of:
+        - Which OS it runs on
+        - Which architecture it runs on
+        - Whether the C emitter or the JS emitter was used (because no emitter would be used)
     - It could be nice to be able to define a couple different `build` functions in the standard library for different types of website, and have that be sufficient for building 99%+ of websites
     - There could be a different `build` function for:
       - Static site generation
@@ -207,6 +228,7 @@ odin test .
     - I think that the LSP code actions should also be accessible through a CLI
   - Formatter
   - Automatically generate documentation from code comments
+  - Be able to fully run the compiler in a web browser
   - Nice quality of life features for print debugging:
     - Although using a debugger is probably better, the combination of a couple of language features can create a really nice print debugging experience:
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
@@ -300,4 +322,21 @@ Constraints could also be used for things like:
     names: []string,
     ages: []string,
   } where (.length == .names.len and .length == .ages.len)
+  ```
+
+- If constraints are supported, types could just be functions that take a value and check that it is that specific type
+
+  ```
+  Person = |it| => and(
+    it.age | Number,
+    it.name | String,
+  )
+  ```
+
+  ```
+  // Type is a metaprogram that takes the value of a type and creates a function which checks if any value is that type
+  Person = Type({
+    age: Number,
+    name: String,
+  })
   ```

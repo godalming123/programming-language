@@ -135,8 +135,8 @@ void builtin9(uint64_t code) {
 }
 
 // compiler.emit_js_code
-char* builtin11(char* name) {
-  printf("compiler.emit_js_code" EOT_STR "%s" EOT_STR, name);
+char* builtin11(uint64_t id) {
+  printf("compiler.emit_js_code" EOT_STR "%" PRIu64 EOT_STR, id);
   fflush(stdout);
   return read_until(EOT);
 }

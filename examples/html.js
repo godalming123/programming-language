@@ -15,7 +15,8 @@ function create_elem(elem) {
       return button
     case 1:
       const div = document.createElement("div")
-      for (const child of elem.field0) {
+      div.setAttribute("style", elem.field0)
+      for (const child of elem.field1) {
         div.appendChild(create_elem(child))
       }
       return div

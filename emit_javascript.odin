@@ -17,13 +17,35 @@ emit_js_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
 
 emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
     switch v in value {
+    case CompileTimeValue:
+        switch comptime in v {
+        case StringLiteralValue:
+            strings.write_byte(&s.b, '"')
+            for char in comptime {
+                switch char {
+                case '\n':
+                    strings.write_string(&s.b, "\\n")
+                case '"':
+                    strings.write_string(&s.b, "\\\"")
+                case '\\':
+                    strings.write_string(&s.b, "\\\\")
+                case:
+                    strings.write_rune(&s.b, char)
+                }
+            }
+            strings.write_byte(&s.b, '"')
+        case BoolValue:
+            strings.write_string(&s.b, comptime ? "true" : "false")
+        case NumberValue:
+            if comptime.value.is_negated {
+                strings.write_byte(&s.b, '-')
+            }
+            strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
+        }
     case ToString:
         strings.write_string(&s.b, "String(")
         emit_js_value(s, v.value^)
         strings.write_byte(&s.b, ')')
-    case uint:
-        strings.write_string(&s.b, "func")
-        strings.write_uint(&s.b, v)
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
         strings.write_uint(&s.b, uint(v.index))
@@ -39,8 +61,6 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, '[')
         emit_js_value(s, v.index^)
         strings.write_byte(&s.b, ']')
-    case BoolValue:
-        strings.write_string(&s.b, v ? "true" : "false")
     case CheckedFunctionCall:
         emit_js_func_call(s, v)
     case TypeInitFunc:
@@ -56,14 +76,6 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
         case:
             panic(fmt.aprintf("TODO: %#v", v.type))
         }
-    case StringLiteralValue:
-        strings.write_byte(&s.b, '"')
-        strings.write_string(&s.b, string(v))
-        strings.write_byte(&s.b, '"')
-    case I64Value:
-        strings.write_i64(&s.b, i64(v))
-    case U8Value:
-        strings.write_uint(&s.b, uint(v))
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
@@ -112,7 +124,7 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ')')
     case VariableRef:
         emit_variable(&s.b, v)
-    case GlobalFuncRef:
+    case FuncDefinitionRef:
         strings.write_string(&s.b, "func")
         strings.write_uint(&s.b, v.index)
     }
@@ -207,12 +219,14 @@ emit_js_block_body :: proc(
                 strings.write_int(&s.b, i)
                 strings.write_string(&s.b, ": {")
                 emit_js_block_head(s, nesting_level + 1, branch.block.variables)
-                emit_variable(&s.b, branch.value_var)
-                strings.write_string(&s.b, " = *")
-                emit_variable(&s.b, stmt.value)
-                strings.write_string(&s.b, ".payload.variant")
-                strings.write_int(&s.b, i)
-                strings.write_byte(&s.b, ';')
+                if value_var, has_value_var := branch.value_var.(VariableRef); has_value_var {
+                    emit_variable(&s.b, value_var)
+                    strings.write_string(&s.b, " = *")
+                    emit_variable(&s.b, stmt.value)
+                    strings.write_string(&s.b, ".payload.variant")
+                    strings.write_int(&s.b, i)
+                    strings.write_byte(&s.b, ';')
+                }
                 emit_js_block_body(s, nesting_level + 1, branch.block.body)
                 strings.write_string(&s.b, "break;}")
             }
@@ -220,22 +234,19 @@ emit_js_block_body :: proc(
         case CheckedLoop:
             strings.write_byte(&s.b, '{')
             emit_js_block(s, nesting_level + 1, stmt.variables, stmt.enter)
-            strings.write_string(&s.b, "while (1) {")
             strings.write_string(&s.b, "loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, "start:")
+            strings.write_string(&s.b, ": while (true) {")
             emit_js_block(s, nesting_level + 1, nil, stmt.body)
-            strings.write_string(&s.b, "}}loop")
-            strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, "end:;")
+            strings.write_string(&s.b, "}}")
         case ContinueLoop:
-            strings.write_string(&s.b, "goto loop")
+            strings.write_string(&s.b, "continue loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, "start;")
+            strings.write_byte(&s.b, ';')
         case BreakLoop:
-            strings.write_string(&s.b, "goto loop")
+            strings.write_string(&s.b, "break loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, "end;")
+            strings.write_byte(&s.b, ';')
         case CheckedArrayMutation:
             emit_variable(&s.b, stmt.variable)
             strings.write_string(&s.b, "=[")
@@ -258,7 +269,7 @@ emit_js_block_body :: proc(
         case CheckedMutation:
             emit_variable(&s.b, stmt.destination.variable)
             if stmt.destination.index != nil {
-                strings.write_string(&s.b, ".elems[")
+                strings.write_byte(&s.b, '[')
                 emit_js_value(s, stmt.destination.index)
                 strings.write_byte(&s.b, ']')
 
@@ -308,26 +319,19 @@ emit_js_block :: proc(
     emit_js_block_body(s, nesting_level, body)
 }
 
-emit_javascript :: proc(
-    code: []CheckedFunction,
-    global_types_without_generics: []ExactCheckedType,
-    generic_type_initialisations: GenericTypeInitialisationsStore,
-    array_type_initialisations: ArrayTypeInitialisationsStore,
-    func_types: []EquivalencyArrayElem(ExactFuncType),
-    type_equivalancy_array: []EquivalencyArrayElem(ExactCheckedType),
-) -> strings.Builder {
-    s := EmitterState{strings.builder_make(), func_types, type_equivalancy_array}
+emit_javascript :: proc(c: Checked) -> strings.Builder {
+    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array}
 
-    for global, index in global_types_without_generics {
+    for global, index in c.checked_global_types_without_generic {
         name := fmt.aprintf("Global%d", index)
         defer delete_string(name)
         emit_js_global_type(&s, name, global)
     }
 
     emitted_generic_type_defs := map[u64]struct{}{}
-    for key, value in generic_type_initialisations {
+    for key, value in c.generic_type_initialisations {
         global_type_index, generic_arg_ref := seperate_u64(key)
-        _, simplified_generic_arg_ref := get_info(type_equivalancy_array, uint(generic_arg_ref))
+        _, simplified_generic_arg_ref := get_info(c.type_equivalancy_array, uint(generic_arg_ref))
         new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
@@ -335,7 +339,7 @@ emit_javascript :: proc(
         }
         new_value: ExactCheckedType = ---
         if value == nil {
-            new_value = generic_type_initialisations[new_key]
+            new_value = c.generic_type_initialisations[new_key]
             if new_value == nil {
                 continue
             }
@@ -348,14 +352,14 @@ emit_javascript :: proc(
         emit_js_global_type(&s, name, new_value)
     }
 
-    for func, index in code {
+    for func, index in c.checked_funcs {
         when debug_emitter {
             debug("emitting function index %d", index)
         }
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info, _ := get_info(func_types, uint(index))
+        info, _ := get_info(c.func_types, func.type.index)
         first_arg := true
         for _, i in info.args {
             if first_arg {

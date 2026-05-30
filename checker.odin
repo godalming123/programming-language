@@ -1,7 +1,9 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
-import "core:strconv"
+import "core:os"
+import "core:path/filepath"
 import "core:strings"
 
 VariableRef :: struct {
@@ -56,40 +58,48 @@ CheckerGlobalTypeWithGeneric :: struct {
     generic_type: GenericCheckedType,
 }
 
+CheckedGlobalRuntimeValue :: struct {
+    type:         ExactCheckedType,
+    inline_value: CheckedValue,
+}
+
+CheckedGlobalValue :: union {
+    CheckedGlobalRuntimeValue,
+    Import,
+}
+
+CheckerGlobalValue :: struct {
+    ast_node: GlobalValue,
+    value:    CheckedGlobalValue,
+}
+
 CheckerState :: struct {
     // The following fields do not change while checking
-    file:                           CompilerFile,
-    globals:                        map[string]ParsedGlobal,
-    funcs:                          []FunctionDefinition,
-    global_types_without_generics:  #soa[]CheckerGlobalTypeWithoutGeneric,
-    global_types_with_generics:     #soa[]CheckerGlobalTypeWithGeneric,
-    string_to_nil_type:             FuncTypeRef, // (String)
-    string_string_to_nil_type:      FuncTypeRef, // (String, String)
-    string_to_string_type:          FuncTypeRef, // (String) -> String
-    comptime_string_to_string_type: FuncTypeRef, // #comptime ((String) -> String)
-    no_args_to_nil_type:            FuncTypeRef, // ()
-    array_of_strings_to_nil_type:   FuncTypeRef, // ([]String)
-    i64_to_nil_type:                FuncTypeRef, // (I64)
+    files:                         []File,
+    global_values:                 #soa[]CheckerGlobalValue,
+    global_types_without_generics: #soa[]CheckerGlobalTypeWithoutGeneric,
+    global_types_with_generics:    #soa[]CheckerGlobalTypeWithGeneric,
 
     // The following fields depend on the function currently being checked
-    func_type:                      FunctionType,
-    return_types:                   []ExactCheckedType, // If the function does not return anything, then this is nil
+    file:                          FileRef,
+    func_type:                     FunctionType,
+    return_types:                  []ExactCheckedType, // If the function does not return anything, then this is nil
 
     // The following fields depend on which variables are in scope
-    scopes:                         [dynamic]Scope,
-    variables_map:                  map[string]VariableRef,
+    scopes:                        [dynamic]Scope,
+    variables_map:                 map[string]VariableRef,
 
     // The following fields change while checking
     // TODO: Use some sort of hash map to store the types in a program so that
     // you can figure out if a new type is the same as any type which has already
     // been used in the program in O(1) time.
-    generic_being_initialised:      GenericType(u32), // TODO: Does this need to be an array?
-    type_equivalancy_array:         [dynamic]EquivalencyArrayElem(ExactCheckedType),
-    generic_type_initialisations:   GenericTypeInitialisationsStore,
-    array_type_initialisations:     ArrayTypeInitialisationsStore,
-    func_types:                     [dynamic]EquivalencyArrayElem(ExactFuncType), // The first len(CheckerState.funcs) are associated with that function
-    loop_index:                     uint,
-    diagnostics_info:               DiagnosticsInfo,
+    generic_being_initialised:     GenericType(u32), // TODO: Does this need to be an array?
+    type_equivalancy_array:        [dynamic]EquivalencyArrayElem(ExactCheckedType),
+    generic_type_initialisations:  GenericTypeInitialisationsStore,
+    array_type_initialisations:    ArrayTypeInitialisationsStore,
+    func_types:                    [dynamic]EquivalencyArrayElem(ExactFuncType), // The first len(CheckerState.funcs) are associated with that function
+    loop_index:                    uint,
+    diagnostics_info:              DiagnosticsInfo,
     // TODO: represent the order of the programmer controlled stack
 }
 
@@ -128,9 +138,6 @@ CheckedFieldAccess :: struct {
     field_index: uint,
 }
 BoolValue :: distinct bool
-GlobalFuncRef :: struct {
-    index: uint,
-}
 BuiltinFunction :: struct {
     index: u32,
 }
@@ -138,25 +145,32 @@ StringsAreEqual :: struct {
     str0: ^CheckedValue,
     str1: ^CheckedValue,
 }
-CheckedValue :: union {
+NumberValue :: struct {
+    value: BigInt,
+}
+ImportedFile :: struct {
+    file_index: uint,
+}
+CompileTimeValue :: union {
     StringLiteralValue,
+    NumberValue,
+    BoolValue,
+}
+CheckedValue :: union {
+    CompileTimeValue,
     ToString,
-    U8Value,
-    I64Value,
     VariableRef,
-    GlobalFuncRef,
     BooleanNotValue,
     CheckedJoinedValues,
     CheckedFunctionCall,
     TypeInitFunc,
     BuiltinFunction,
-    BoolValue,
     CheckedArrayAccess,
     CheckedFieldAccess,
     // CheckedJsFunctionCall,
     LengthOfArray,
     StringsAreEqual,
-    uint, // an index into the function definitions
+    FuncDefinitionRef,
 }
 
 StringType :: struct {}
@@ -440,17 +454,20 @@ check_array_type :: proc(
         length = 0
     } else if len(type.args) == 1 {
         body := make([dynamic]CheckedStatement)
-        num_str, is_num := type.args[0].value.(Number)
-        expected :: "Expected an integer (n) where 0 < n <= max(u32)"
-        if !is_num {
-            err(s, pos, expected, type.args[0].pos)
+        value := check_value(s, type.args[0], &body, ExactCheckedType(I64Type{}))
+        if value == nil {
             return nil
         }
-        num, num_ok := strconv.parse_int(string(num_str))
-        if num_ok && 0 < num && num <= int(max(u32)) {
-            length = u32(num)
-        } else {
-            err(s, pos, expected, type.args[0].pos)
+        compile_time_value, ok := value.(CompileTimeValue)
+        if !ok {
+            err(s, type.args[0].pos, "Expected a compile time value got a runtime value")
+            return nil
+        }
+        number := compile_time_value.(NumberValue)
+        assert(len(body) == 0)
+        length, ok = big_int_to_u32(number.value)
+        if !ok {
+            err(s, pos, "Expected an integer (n) where 0 < n <= max(u32)", type.args[0].pos)
             return nil
         }
     } else {
@@ -480,7 +497,10 @@ check_type :: proc(
     // case DynamicType:
     //     err(s, type.pos, "TODO: Support checking dynamic type")
     //     return nil
-    case uint:
+    case Import:
+        err(s, type.pos, err_context + "Cannot use an import as a type")
+        return nil
+    case FuncDefinitionRef:
         err(s, type.pos, err_context + "Cannot use a function definition as a type")
         return nil
     case CallWithBrackets:
@@ -685,7 +705,9 @@ ToString :: struct {
 
 CheckedMatchBranch :: struct {
     block:     CheckedBlock,
-    value_var: VariableRef,
+    value_var: union {
+        VariableRef,
+    }, // May be nil
 }
 
 CheckedMatch :: struct {
@@ -1219,10 +1241,13 @@ type_is_equal2 :: proc(
         return true
     }
     equal := type_is_equal(s, t0, t1, fully_equilize_types)
-    if equal {
-        mark_elements_equal(s.type_equivalancy_array[:], t0_ref, t1_ref)
+    if !equal {
+        return false
     }
-    return equal
+    _, t0_ref2 := get_info(s.type_equivalancy_array[:], t0_ref)
+    _, t1_ref2 := get_info(s.type_equivalancy_array[:], t1_ref)
+    mark_elements_equal(s.type_equivalancy_array[:], t0_ref2, t1_ref2)
+    return true
 }
 
 type_is_equal :: proc(
@@ -1895,18 +1920,18 @@ check_block :: proc(
                 loop_enter[0] = CheckedMutation {
                     CheckedMutationDestination{index_ref, nil},
                     .SetTo,
-                    I64Value(0),
+                    CompileTimeValue(NumberValue{int_zero}),
                 }
                 if_block := make([]CheckedStatement, 1)
                 if_block[0] = BreakLoop{loop_index}
                 append_elem(
                     &loop_body_array,
                     CheckedIf {
-                        CheckedJoinedValues {
+                        create_joined_values(
                             .IsGreaterThanOrEqual,
-                            new_clone(CheckedValue(index_ref)),
-                            new_clone(length_of_array(array, v)),
-                        },
+                            index_ref,
+                            length_of_array(array, v),
+                        ),
                         CheckedBlock{nil, if_block},
                         CheckedBlock{},
                     },
@@ -1923,7 +1948,7 @@ check_block :: proc(
                 loop_end[0] = CheckedMutation {
                     CheckedMutationDestination{index_ref, nil},
                     .IncrementBy,
-                    I64Value(1),
+                    CompileTimeValue(NumberValue{big_int_from_i64(1)}),
                 }
             case NumericIterator:
                 if value.variables[1].ident != "" || value.variables[2].ident != "" {
@@ -1943,8 +1968,12 @@ check_block :: proc(
                 expected_type: ExactCheckedType = I64Type{}
                 start := check_value(s, iter.start, &loop_body_array, expected_type)
                 end := check_value(s, iter.end, &loop_body_array, expected_type)
-                step :=
-                    iter.step == nil ? CheckedValue(I64Value(1)) : check_value(s, iter.step^, &loop_body_array, expected_type)
+                step: CheckedValue = ---
+                if iter.step == nil {
+                    step = CompileTimeValue(NumberValue{big_int_from_i64(1)})
+                } else {
+                    step = check_value(s, iter.step^, &loop_body_array, expected_type)
+                }
                 if !var_ok || start == nil || end == nil || step == nil {
                     return nil, false
                 }
@@ -1959,11 +1988,11 @@ check_block :: proc(
                 append_elem(
                     &loop_body_array,
                     CheckedIf {
-                        CheckedJoinedValues {
+                        create_joined_values(
                             iter.type == .IncludeEndValue ? .IsGreaterThan : .IsGreaterThanOrEqual,
-                            new_clone(CheckedValue(index_variable)),
-                            new_clone(end),
-                        },
+                            index_variable,
+                            end,
+                        ),
                         CheckedBlock{nil, if_block},
                         CheckedBlock{},
                     },
@@ -2068,11 +2097,29 @@ check_block :: proc(
                 append_elem(&s.scopes, Scope{})
                 defer pop_scope(s)
 
-                type_variable, is_variable := branch.type.value.(Ident)
+                branch_type: Unit = ---
+                variable_name: ^Unit = nil
+                if joined, is_joined := branch.label.value.(JoinedUnits); is_joined {
+                    if joined.join_method != .Colon {
+                        err(
+                            s,
+                            branch.label.pos,
+                            "Expected the join method to be `:`, got %v",
+                            joined.join_method,
+                        )
+                        panic("TODO")
+                    }
+                    variable_name = joined.unit0
+                    branch_type = joined.unit1^
+                } else {
+                    branch_type = branch.label
+                }
+
+                type_variable, is_variable := branch_type.value.(Ident)
                 if !is_variable || len(type_variable) != 2 || type_variable[0].ident != "" {
                     err(
                         s,
-                        branch.type.pos,
+                        branch_type.pos,
                         "Expected type variable without a generic type that starts with `.`",
                     )
                     return nil, false
@@ -2083,7 +2130,7 @@ check_block :: proc(
                 if !exists {
                     err(
                         s,
-                        branch.type.pos,
+                        branch_type.pos,
                         "The sum type `%s` does not have the variant `.%s`",
                         type_to_string(s, val_type),
                         variant_name,
@@ -2093,12 +2140,12 @@ check_block :: proc(
 
                 if variant_has_branch[variant_index] {
                     line, column := get_location(
-                        s.file.code,
+                        s.files[s.file.index].file.code,
                         variant_branch_positions[variant_index],
                     )
                     err(
                         s,
-                        branch.type.pos,
+                        branch_type.pos,
                         "The variant `.%s` already has a branch defined at line %d and column %d",
                         variant_name,
                         line,
@@ -2107,14 +2154,25 @@ check_block :: proc(
                     return nil, false
                 }
 
-                var, var_ok := add_variable(
-                    s,
-                    SumVariant(^ExactCheckedType){new_clone(val_type), variant_index},
-                    false,
-                    branch.name,
-                )
-                if !var_ok {
-                    return nil, false
+                var: union {
+                        VariableRef,
+                    } = nil
+                if variable_name != nil {
+                    ident, is_ident := variable_name.value.(Ident)
+                    if !is_ident || len(ident) != 1 {
+                        err(s, variable_name.pos, "Expected an identifier without `.`")
+                        return nil, false
+                    }
+                    var_ok: bool = ---
+                    var, var_ok = add_variable(
+                        s,
+                        SumVariant(^ExactCheckedType){new_clone(val_type), variant_index},
+                        false,
+                        ident[0],
+                    )
+                    if !var_ok {
+                        return nil, false
+                    }
                 }
 
                 body := make([dynamic]CheckedStatement)
@@ -2125,7 +2183,7 @@ check_block :: proc(
 
                 branches[variant_index] = CheckedMatchBranch{CheckedBlock{variables, body[:]}, var}
                 variant_has_branch[variant_index] = true
-                variant_branch_positions[variant_index] = branch.name.pos
+                variant_branch_positions[variant_index] = branch.label.pos
             }
 
             unhandled_variants := false
@@ -2178,6 +2236,71 @@ check_array_index :: proc(
 
 value_err1 :: "Compiler cannot generate a `.` function without knowing the return type of the function"
 
+check_namespaced_var_ref :: proc(
+    s: ^CheckerState,
+    namespace: FileRef,
+    ref: Ident,
+    index: int,
+) -> (
+    CheckedValue,
+    ExactCheckedType,
+    int,
+) {
+    file := s.files[namespace.index]
+    global, global_exists := file.globals[ref[index].ident]
+    if !global_exists {
+        err(
+            s,
+            ref[index].pos,
+            "The variable `%s` is not defined in the file `%s`",
+            ref[index].ident,
+            file.file.file_path,
+        )
+        return nil, nil, 0
+    }
+    switch global_value in global.value {
+    case:
+        panic("Unreachable")
+    case nil:
+        panic("Unreachable")
+    case GlobalValueRef:
+        switch value in s.global_values[global_value.index].value {
+        case:
+            panic("Unreachable")
+        case nil:
+            err(
+                s,
+                ref[index].pos,
+                "Either this global has not been defined yet, there was an error checking this global, or this type of global is not yet supported (TODO)",
+            )
+            return nil, nil, 0
+        case CheckedGlobalRuntimeValue:
+            return value.inline_value, value.type, index + 1
+        case Import:
+            if index + 1 >= len(ref) {
+                err(s, ref[index].pos, import_use_err)
+                return nil, nil, 0
+            }
+            return check_namespaced_var_ref(s, value.file, ref, index + 1)
+        }
+    case GlobalTypeWithGenericRef:
+        err(s, ref[index].pos, "No generic type argument passed to generic type")
+        return nil, nil, 0
+    case GlobalTypeWithoutGenericRef:
+        func_type := s.global_types_without_generics[global_value.index].function_type
+        if func_type.index == max(uint) {
+            err(
+                s,
+                ref[index].pos,
+                "The global type `%s` cannot be initialised like this",
+                ref[index].ident,
+            )
+            return nil, nil, 0
+        }
+        return TypeInitFunc{global_value}, func_type, index + 1
+    }
+}
+
 check_var_ref :: proc(
     s: ^CheckerState,
     ref: Ident,
@@ -2187,7 +2310,7 @@ check_var_ref :: proc(
     loc := #caller_location,
 ) -> CheckedValue {
     when debug_checker {
-        print_call(loc, "check var ref")
+        print_call(loc, "check_var_ref")
         print_arg("ref", ref)
         print_arg("type", type)
     }
@@ -2273,8 +2396,9 @@ check_var_ref :: proc(
         return dest
         */
     }
-    out_type: ExactCheckedType = ---
+
     out: CheckedValue = ---
+    out_type: ExactCheckedType = ---
     start_i := 1
 
     if builtin_func_index, builtin_func_type := get_builtin_func_from_name(s, ref[0].ident);
@@ -2293,38 +2417,16 @@ check_var_ref :: proc(
         start_i = 2
         switch ref[1].ident {
         case "emit_js_code":
-            out_type = s.comptime_string_to_string_type
+            out_type = comptime_u64_to_string_type
             out = BuiltinFunction{builtin_emit_js_code}
         case:
             err(s, pos, "Expected " + compiler_funcs + " got `compiler.%s`", ref[1].ident)
             return nil
         }
     } else {
-        global, global_exists := s.globals[ref[0].ident]
-        if !global_exists {
-            err(s, pos, "The variable `%s` is not defined", ref[0].ident)
+        out, out_type, start_i = check_namespaced_var_ref(s, s.file, ref, 0)
+        if out == nil {
             return nil
-        }
-        switch global_value in global.value {
-        case Unit:
-            func_index, is_func_index := global_value.value.(uint)
-            if !is_func_index {
-                err(s, pos, "TODO: Handle global references that aren't function definitions")
-                return nil
-            }
-            out_type = FuncTypeRef{func_index}
-            out = GlobalFuncRef{func_index}
-        case GlobalTypeWithGenericRef:
-            err(s, pos, "No generic type argument passed to generic type")
-            return nil
-        case GlobalTypeWithoutGenericRef:
-            func_type := s.global_types_without_generics[global_value.index].function_type
-            if func_type.index == max(uint) {
-                err(s, pos, "The global type `%s` cannot be initialised like this", ref[0].ident)
-                return nil
-            }
-            out_type = func_type
-            out = TypeInitFunc{global_value}
         }
     }
     for extra_segment, i in ref[start_i:] {
@@ -2349,6 +2451,20 @@ check_var_ref :: proc(
             }
             out_type = StringType{}
             out = converted
+            continue
+        } else if extra_segment.ident == "function_id" {
+            func_ref, is_func := out.(FuncDefinitionRef)
+            if !is_func {
+                err(
+                    s,
+                    extra_segment.pos,
+                    "Can only use `.function_id` for compile-time known functions",
+                )
+                return nil
+            }
+
+            out_type = U64Type{}
+            out = CompileTimeValue(NumberValue{big_int_from_i64(i64(func_ref.index))})
             continue
         }
         struct_type, ok := get_struct_type(s, ref[i].pos, out_type)
@@ -2486,9 +2602,233 @@ ExpectedType :: union {
     FunctionWithExpectedReturnTypes,
 }
 
+check_value_with_markers :: proc(
+    s: ^CheckerState,
+    v: Unit,
+    markers: []IdentAndPos,
+    body: ^[dynamic]CheckedStatement,
+    type: ExpectedType,
+) -> CheckedValue {
+    if len(markers) == 0 {
+        return check_value(s, v, body, type)
+    }
+    switch markers[0].ident {
+    case "load":
+        value := check_value_with_markers(s, v, markers[1:], body, ExactCheckedType(StringType{}))
+        if value == nil {
+            return nil
+        }
+        comptime_value, is_comptime := value.(CompileTimeValue)
+        if !is_comptime {
+            err(s, v.pos, "Expected a compile time known value")
+            return nil
+        }
+
+        file := s.files[s.file.index].file
+        joined, join_err := filepath.join(
+            []string{file.dir_path, string(comptime_value.(StringLiteralValue))},
+            context.allocator,
+        )
+        data, data_err := os.read_entire_file(joined, context.allocator)
+        if data_err != nil {
+            err(s, markers[0].pos, "Failed to read `%s`: %#v\n", joined, data_err)
+            return nil
+        }
+        if !expect_type(s, markers[0].pos, type, StringType{}, "") {
+            return nil
+        }
+        return CompileTimeValue(StringLiteralValue(data))
+    case "debug_ast":
+        debug_unit(nil, v)
+    case:
+        warn(s, markers[0].pos, "TODO: Handle the `%s` marker", markers[0].ident)
+    }
+
+    return check_value_with_markers(s, v, markers[1:], body, type)
+}
+
+// For `check_value` and `check_joined_unit_value`:
 // - Returns `nil` if there are errors in the value
 // - The `body` arg may be appended to with statements that should be executed
 //   before the value is accessed
+
+check_joined_unit_value :: proc(
+    s: ^CheckerState,
+    pos: uint,
+    value: JoinedUnits,
+    body: ^[dynamic]CheckedStatement,
+    type: ExpectedType,
+) -> CheckedValue {
+    array_err :: "Expected an array type\nGot the type `%s`"
+    switch value.join_method {
+
+    case .Colon:
+        err(s, pos, "Cannot use `:` to join values")
+        return nil
+
+    case .Arrow:
+        err(s, pos, "Cannot use `->` to join values")
+        return nil
+
+    case .BooleanAnd, .BooleanOr:
+        val0 := check_value(s, value.unit0^, body, ExactCheckedType(BoolType{}))
+        val1 := check_value(s, value.unit1^, body, ExactCheckedType(BoolType{}))
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        if expect_type(s, pos, type, BoolType{}, "") {
+            return create_joined_values(value.join_method, val0, val1)
+        }
+        return nil
+
+    case .IsEqual, .IsNotEqual:
+        t: ExactCheckedType = nil
+        val0 := check_value(s, value.unit0^, body, AnyType{&t})
+        if val0 == nil {
+            return nil
+        }
+        val1 := check_value(s, value.unit1^, body, t)
+        if val1 == nil {
+            return nil
+        }
+        if !expect_type(s, pos, type, ExactCheckedType(BoolType{}), "") {
+            return nil
+        }
+        if _, is_string := t.(StringType); is_string {
+            str_comp: CheckedValue = StringsAreEqual{new_clone(val0), new_clone(val1)}
+            if value.join_method == .IsNotEqual {
+                return create_not(str_comp)
+            }
+            return str_comp
+        }
+        return create_joined_values(value.join_method, val0, val1)
+
+    case .Append:
+        t: ExactCheckedType = nil
+        val0 := check_value(s, value.unit0^, body, AnyType{&t})
+        if val0 == nil {
+            return nil
+        }
+        length, item_type_ref, item_type := check_array(s, value.unit0.pos, val0, t, array_err)
+        if length == nil {
+            return nil
+        }
+        val1 := check_value(s, value.unit1^, body, item_type)
+        if val1 == nil {
+            return nil
+        }
+        return_type := ArrayType(u32){0, item_type_ref} // TODO: Maybe `::` should be able to output fixed size arrays
+        s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
+            struct{}{}
+        if expect_type(s, pos, type, return_type, "") {
+            segments := make([]ArraySegment, 2)
+            segments[0] = InlineArraySegment{val0, length}
+            segments[1] = SingleElemSegment{val1}
+            array_ref := add_unnamed_variable(s, return_type, false)
+            append_elem(body, CheckedArrayMutation{array_ref, return_type, segments})
+            return array_ref
+        }
+        return nil
+
+    case .StringConcat:
+        val0 := check_value(s, value.unit0^, body, ExactCheckedType(StringType{}))
+        val1 := check_value(s, value.unit1^, body, ExactCheckedType(StringType{}))
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        if expect_type(s, pos, type, ExactCheckedType(StringType{}), "") {
+            return create_joined_values(.StringConcat, val0, val1)
+        }
+        return nil
+
+    case .Concat:
+        type0: ExactCheckedType = ---
+        type1: ExactCheckedType = ---
+        val0 := check_value(s, value.unit0^, body, AnyType{&type0})
+        val1 := check_value(s, value.unit1^, body, AnyType{&type1})
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        length0, item_type0_ref, item_type0 := check_array(
+            s,
+            value.unit0.pos,
+            val0,
+            type0,
+            array_err,
+        )
+        length1, item_type1_ref, item_type1 := check_array(
+            s,
+            value.unit1.pos,
+            val1,
+            type1,
+            array_err,
+        )
+        if length0 == nil || length1 == nil {
+            return nil
+        }
+        if item_type0_ref != item_type1_ref {
+            if type_is_equal(s, item_type0, item_type1, true) {
+                mark_elements_equal(
+                    s.type_equivalancy_array[:],
+                    uint(item_type0_ref),
+                    uint(item_type1_ref),
+                )
+            } else {
+                err(
+                    s,
+                    pos,
+                    "Array item type mismatch:\nItem type on left is %s\nItem type on right is %s",
+                    type_to_string(s, item_type0),
+                    type_to_string(s, item_type1),
+                )
+                return nil
+            }
+        }
+        return_type := ArrayType(u32){0, item_type0_ref} // TODO: Maybe `++` should be able to output fixed size arrays
+        s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
+            struct{}{}
+        if expect_type(s, pos, type, return_type, "") {
+            segments := make([]ArraySegment, 2)
+            segments[0] = InlineArraySegment{val0, length0}
+            segments[1] = InlineArraySegment{val1, length1}
+            array_ref := add_unnamed_variable(s, return_type, false)
+            append_elem(body, CheckedArrayMutation{array_ref, return_type, segments})
+            return array_ref
+        }
+        return nil
+
+    case .IsGreaterThan, .IsGreaterThanOrEqual, .IsLessThan, .IsLessThanOrEqual:
+        // TODO: Do not assume number types
+        val0 := check_value(s, value.unit0^, body, ExactCheckedType(I64Type{}))
+        val1 := check_value(s, value.unit1^, body, ExactCheckedType(I64Type{}))
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        if expect_type(s, pos, type, ExactCheckedType(BoolType{}), "") {
+            return create_joined_values(value.join_method, val0, val1)
+        }
+        return nil
+
+    case .Multiplication, .Subtraction, .Division, .Addition, .Modulo:
+        // TODO: Do not assume number types
+        val0 := check_value(s, value.unit0^, body, ExactCheckedType(I64Type{}))
+        val1 := check_value(s, value.unit1^, body, ExactCheckedType(I64Type{}))
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        if expect_type(s, pos, type, ExactCheckedType(I64Type{}), "") {
+            return create_joined_values(value.join_method, val0, val1)
+        }
+        return nil
+
+    case:
+        panic("Unreachable")
+    }
+
+}
+
+import_use_err :: "Cannot use an import as a runtime value"
+
 check_value :: proc(
     s: ^CheckerState,
     v: Unit,
@@ -2512,26 +2852,11 @@ check_value :: proc(
     case SumType(Unit, struct {}):
         err(s, v.pos, "Cannot use a sum type as a value")
         return nil
+    case Import:
+        err(s, v.pos, import_use_err)
+        return nil
     case MarkedUnit:
-        debug_types := false
-        for marker in value.markers {
-            if marker.ident == "debug_types" {
-                debug("debugging types")
-                debug_nesting += 1
-                debug("v.pos is %d", v.pos)
-                debug("type is %#v", type)
-                debug_types = true
-            }
-            warn(s, marker.pos, "TODO: Handle the `%s` marker", marker.ident)
-        }
-        out := check_value(s, value.value^, body, type)
-        if debug_types {
-            debug("type is %#v", type)
-            debug("out is %#v", out)
-            debug("finished debugging types")
-            debug_nesting -= 1
-        }
-        return out
+        return check_value_with_markers(s, value.value^, value.markers, body, type)
     case Tuple:
         if len(value.elements) != 1 {
             err(
@@ -2583,9 +2908,9 @@ check_value :: proc(
         if !expect_type(s, v.pos, type, BoolType{}, "") {
             return nil
         }
-        return BoolValue(value)
+        return CompileTimeValue(BoolValue(value))
 
-    case uint:
+    case FuncDefinitionRef:
         // if s.func_type != .JsFunc {
         //     err(
         //         s,
@@ -2631,191 +2956,65 @@ check_value :: proc(
             return nil
         }
         return call
+
     case JoinedUnits:
-        type0: ExactCheckedType = nil
-        type1: ExactCheckedType = nil
-        val0 := check_value(s, value.unit0^, body, AnyType{&type0})
-        val1 := check_value(s, value.unit1^, body, AnyType{&type1})
-        if val0 == nil || val1 == nil {
-            return nil
-        }
+        return check_joined_unit_value(s, v.pos, value, body, type)
 
-        output_type: ExactCheckedType = nil
-        check_types_equal := false
-        array_err :: "Expected an array type\nGot the type `%s`"
-        switch value.join_method {
-        case .Colon:
-            err(s, v.pos, "Cannot use `:` to join values")
-            return nil
-        case .Arrow:
-            err(s, v.pos, "Cannot use `->` to join values")
-            return nil
-        case .BooleanAnd, .BooleanOr:
-            type0 = BoolType{}
-            type1 = BoolType{}
-            output_type = BoolType{}
-        case .IsEqual, .IsNotEqual:
-            if !expect_type(s, value.unit1.pos, type0, type1, "") {
-                return nil
-            }
-            if !expect_type(s, v.pos, type, ExactCheckedType(BoolType{}), "") {
-                return nil
-            }
-            if _, is_string := type0.(StringType); is_string {
-                str_comp: CheckedValue = StringsAreEqual{new_clone(val0), new_clone(val1)}
-                if value.join_method == .IsNotEqual {
-                    return BooleanNotValue(new_clone(str_comp))
-                }
-                return str_comp
-            }
-            return CheckedJoinedValues{value.join_method, new_clone(val0), new_clone(val1)}
-        case .Append:
-            length, item_type_ref, item_type := check_array(
-                s,
-                value.unit0.pos,
-                val0,
-                type0,
-                array_err,
-            )
-            if length == nil {
-                return nil
-            }
-            types_ok := expect_type(s, value.unit1.pos, item_type, type1, "")
-            if !types_ok {
-                return nil
-            }
-            return_type := ArrayType(u32){0, item_type_ref} // TODO: Maybe `::` should be able to output fixed size arrays
-            s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
-                struct{}{}
-            if expect_type(s, v.pos, type, return_type, "") {
-                segments := make([]ArraySegment, 2)
-                segments[0] = InlineArraySegment{val0, length}
-                segments[1] = SingleElemSegment{val1}
-                array_ref := add_unnamed_variable(s, return_type, false)
-                append_elem(body, CheckedArrayMutation{array_ref, return_type, segments})
-                return array_ref
-            }
-            return nil
-
-        case .StringConcat:
-            ok0 := expect_type(s, value.unit0.pos, ExactCheckedType(StringType{}), type0, "")
-            ok1 := expect_type(s, value.unit1.pos, ExactCheckedType(StringType{}), type0, "")
-            if !ok0 || !ok1 {
-                return nil
-            }
-            if expect_type(s, v.pos, type, ExactCheckedType(StringType{}), "") {
-                return CheckedJoinedValues{.StringConcat, new_clone(val0), new_clone(val1)}
-            }
-            return nil
-
-        case .Concat:
-            length0, item_type0_ref, item_type0 := check_array(
-                s,
-                value.unit0.pos,
-                val0,
-                type0,
-                array_err,
-            )
-            length1, item_type1_ref, item_type1 := check_array(
-                s,
-                value.unit1.pos,
-                val1,
-                type1,
-                array_err,
-            )
-            if length0 == nil || length1 == nil {
-                return nil
-            }
-            if item_type0_ref != item_type1_ref {
-                if type_is_equal(s, item_type0, item_type1, true) {
-                    mark_elements_equal(
-                        s.type_equivalancy_array[:],
-                        uint(item_type0_ref),
-                        uint(item_type1_ref),
-                    )
-                } else {
-                    err(
-                        s,
-                        v.pos,
-                        "Array item type mismatch:\nItem type on left is %s\nItem type on right is %s",
-                        type_to_string(s, item_type0),
-                        type_to_string(s, item_type1),
-                    )
-                    return nil
-                }
-            }
-            return_type := ArrayType(u32){0, item_type0_ref} // TODO: Maybe `++` should be able to output fixed size arrays
-            s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
-                struct{}{}
-            if expect_type(s, v.pos, type, return_type, "") {
-                segments := make([]ArraySegment, 2)
-                segments[0] = InlineArraySegment{val0, length0}
-                segments[1] = InlineArraySegment{val1, length1}
-                array_ref := add_unnamed_variable(s, return_type, false)
-                append_elem(body, CheckedArrayMutation{array_ref, return_type, segments})
-                return array_ref
-            }
-            return nil
-        case .IsGreaterThan, .IsGreaterThanOrEqual, .IsLessThan, .IsLessThanOrEqual:
-            // TODO: Do not assume number types
-            type0 = I64Type{}
-            type1 = I64Type{}
-            output_type = BoolType{}
-        case .Multiplication, .Subtraction, .Division, .Addition, .Modulo:
-            // TODO: Do not assume number types
-            type0 = I64Type{}
-            type1 = I64Type{}
-            output_type = I64Type{}
-        case:
-            panic("Unreachable")
-        }
-
-        if check_types_equal && !expect_type(s, value.unit1.pos, type0, type1, "") {
-            return nil
-        }
-        if expect_type(s, v.pos, type, output_type, "") {
-            return CheckedJoinedValues{value.join_method, new_clone(val0), new_clone(val1)}
-        }
-        return nil
     case Ident:
         return check_var_ref(s, value, v.pos, type, body)
+
     case Number:
-        parsed, ok := strconv.parse_i64(string(value))
-        if !ok {
-            err(s, v.pos, "Could not convert number `%s` to I64", value)
+        // TODO: Check that min(i64) <= number <= max(i64)
+        // TODO: Do not assume number type
+        if !expect_type(s, v.pos, type, I64Type{}, "") {
             return nil
         }
-        return expect_type(s, v.pos, type, I64Type{}, "") ? I64Value(parsed) : nil
+        return CompileTimeValue(
+            NumberValue{BigInt{value.is_negated, big_uint_from_string(value.absolute_digits)}},
+        )
+
     case String:
         if expect_type(s, v.pos, type, StringType{}, "") {
-            return StringLiteralValue(strings.join(([]string)(value), ""))
+            return CompileTimeValue(StringLiteralValue(strings.join(([]string)(value), "")))
         }
         return nil
+
     case Char:
-        return expect_type(s, v.pos, type, U8Type{}, "") ? U8Value(value) : nil
+        // TODO: Do not assume number type
+        if !expect_type(s, v.pos, type, U8Type{}, "") {
+            return nil
+        }
+        return CompileTimeValue(NumberValue{BigInt{false, big_uint_from_u64(u64(value))}})
+
     }
 }
 
 // The bool returned is whether the function checked successfully
 check_function :: proc(
     s: ^CheckerState,
-    index: uint,
+    func: FunctionDefinition,
+    type: FuncTypeRef,
     loc := #caller_location,
 ) -> (
     CheckedFunction,
     bool,
 ) {
     when debug_checker {
-        print_call(loc, "check function")
+        print_call(loc, "check_function")
     }
-    f := s.funcs[index]
-    f_props, simplified_index := get_info(s.func_types[:], index)
+    f_props, simplified_index := get_info(s.func_types[:], type.index)
+    s.func_type = f_props.type
     s.return_types = f_props.return_types
+    s.loop_index = 0
     append_elem(&s.scopes, Scope{})
-    defer pop_scope(s)
+    defer {
+        pop_scope(s)
+        assert(len(s.scopes) == 0)
+        assert(len(s.variables_map) == 0)
+    }
     ok := true
     for type, i in f_props.args {
-        arg := f.inputs[i]
+        arg := func.inputs[i]
         _, var_ok := add_variable(s, type, arg.arg_type == .Mutable, arg.name)
         if !var_ok {
             ok = false
@@ -2828,7 +3027,7 @@ check_function :: proc(
     defer pop_scope(s)
     // TODO: Check that the function always returns if it has a return type
     body := make([dynamic]CheckedStatement)
-    variables, block_ok := check_block(s, f.body, &body)
+    variables, block_ok := check_block(s, func.body, &body)
     if !block_ok {
         return CheckedFunction{}, false
     }
@@ -2837,7 +3036,7 @@ check_function :: proc(
 
 length_of_array :: proc(type: ArrayType(u32), value: CheckedValue) -> CheckedValue {
     if type.length != 0 {
-        return I64Value(type.length)
+        return CompileTimeValue(NumberValue{big_int_from_i64(i64(type.length))})
     }
     return LengthOfArray{new_clone(value)}
 }
@@ -2867,7 +3066,9 @@ check_array :: proc(
     }
     item_type, item_type_index := get_info(s.type_equivalancy_array[:], uint(array.item_type))
     if array.length != 0 {
-        return I64Value(array.length), u32(item_type_index), item_type
+        return CompileTimeValue(NumberValue{big_int_from_i64(i64(array.length))}),
+            u32(item_type_index),
+            item_type
     }
     return length_of_array(array, value), u32(item_type_index), item_type
 }
@@ -2878,15 +3079,15 @@ get_global_function :: proc(
     name: string,
     extra_text: string,
 ) -> (
-    uint,
+    FuncDefinitionRef,
     bool,
 ) {
-    global_props, exists := s.globals[name]
+    global_props, exists := s.files[s.file.index].globals[name]
     if !exists {
         err(s, pos, "The global `%s` is not defined%s", name, extra_text)
-        return 0, false
+        return FuncDefinitionRef{}, false
     }
-    value, is_value := global_props.value.(Unit)
+    value_ref, is_value := global_props.value.(GlobalValueRef)
     if !is_value {
         err(
             s,
@@ -2895,9 +3096,9 @@ get_global_function :: proc(
             name,
             extra_text,
         )
-        return 0, false
+        return FuncDefinitionRef{}, false
     }
-    func_index, is_func := value.value.(uint)
+    func_ref, is_func := s.global_values[value_ref.index].ast_node.unit.value.(FuncDefinitionRef)
     if !is_func {
         err(
             s,
@@ -2906,9 +3107,9 @@ get_global_function :: proc(
             name,
             extra_text,
         )
-        return 0, false
+        return FuncDefinitionRef{}, false
     }
-    return func_index, true
+    return func_ref, true
 }
 
 EntryFuncType :: enum {
@@ -2922,52 +3123,48 @@ DiagnosticsInfo :: struct {
 }
 
 CheckerOutput :: struct {
+    checked:          Checked,
+    diagnostics_info: DiagnosticsInfo,
+    entry_func_ref:   FuncDefinitionRef,
+    entry_func_type:  EntryFuncType,
+}
+
+Checked :: struct {
     checked_funcs:                        []CheckedFunction,
     checked_global_types_without_generic: []ExactCheckedType,
     generic_type_initialisations:         GenericTypeInitialisationsStore,
     array_type_initialisations:           ArrayTypeInitialisationsStore,
     func_types:                           []EquivalencyArrayElem(ExactFuncType),
-    entry_func_index:                     uint,
-    entry_func_type:                      EntryFuncType,
-    diagnostics_info:                     DiagnosticsInfo,
     type_equivalancy_array:               []EquivalencyArrayElem(ExactCheckedType),
 }
 
-check :: proc(
-    file: CompilerFile,
-    imports: []Import,
-    globals: map[string]ParsedGlobal,
-    funcs: []FunctionDefinition,
-    global_types_without_generics: []GlobalTypeWithoutGeneric,
-    global_types_with_generics: []GlobalTypeWithGeneric,
-) -> CheckerOutput {
-    state := CheckerState {
-            generic_being_initialised      = GenericType(u32){max(u32), max(u32)},
-            file                           = file,
-            funcs                          = funcs,
-            globals                        = globals,
-            global_types_without_generics  = soa_zip(
-                global_types_without_generics,
-                make([]ExactCheckedType, len(global_types_without_generics)),
-                make([]FuncTypeRef, len(global_types_without_generics)),
-            ),
-            global_types_with_generics     = soa_zip(
-                global_types_with_generics,
-                make([]GenericCheckedType, len(global_types_with_generics)),
-            ),
-            func_types                     = make(
-                [dynamic]EquivalencyArrayElem(ExactFuncType),
-                len(funcs) + 7,
-            ),
+// Function types
+string_to_nil_type :: FuncTypeRef{0} // (String)
+string_string_to_nil_type :: FuncTypeRef{1} // (String, String)
+string_to_string_type :: FuncTypeRef{2} // (String) -> String
+comptime_u64_to_string_type :: FuncTypeRef{3} // #comptime ((U64) -> String)
+no_args_to_nil_type :: FuncTypeRef{4} // ()
+array_of_strings_to_nil_type :: FuncTypeRef{5} // ([]String)
+i64_to_nil_type :: FuncTypeRef{6} // (I64)
 
-            // Function types
-            string_to_nil_type             = FuncTypeRef{len(funcs)},
-            string_string_to_nil_type      = FuncTypeRef{len(funcs) + 1},
-            string_to_string_type          = FuncTypeRef{len(funcs) + 2},
-            comptime_string_to_string_type = FuncTypeRef{len(funcs) + 3},
-            no_args_to_nil_type            = FuncTypeRef{len(funcs) + 4},
-            array_of_strings_to_nil_type   = FuncTypeRef{len(funcs) + 5},
-            i64_to_nil_type                = FuncTypeRef{len(funcs) + 6},
+check :: proc(parsed: ParsedProject) -> CheckerOutput {
+    state := CheckerState {
+            files                         = parsed.files,
+            generic_being_initialised     = GenericType(u32){max(u32), max(u32)},
+            global_values                 = soa_zip(
+                parsed.global_values,
+                make([]CheckedGlobalValue, len(parsed.global_values)),
+            ),
+            global_types_without_generics = soa_zip(
+                parsed.global_types_without_generics,
+                make([]ExactCheckedType, len(parsed.global_types_without_generics)),
+                make([]FuncTypeRef, len(parsed.global_types_without_generics)),
+            ),
+            global_types_with_generics    = soa_zip(
+                parsed.global_types_with_generics,
+                make([]GenericCheckedType, len(parsed.global_types_with_generics)),
+            ),
+            func_types                    = make([dynamic]EquivalencyArrayElem(ExactFuncType), 7),
         }
 
     array_with_string_type := make([]ExactCheckedType, 1)
@@ -2980,6 +3177,9 @@ check :: proc(
     array_with_i64_type := make([]ExactCheckedType, 1)
     array_with_i64_type[0] = I64Type{}
 
+    array_with_u64_type := make([]ExactCheckedType, 1)
+    array_with_u64_type[0] = U64Type{}
+
     array_with_dynamic_array_of_strings := make([]ExactCheckedType, 1)
     array_with_dynamic_array_of_strings[0] = create_array_type(
         &state,
@@ -2988,75 +3188,96 @@ check :: proc(
     )
     append_elem(&state.type_equivalancy_array, ExactCheckedType(StringType{}))
 
-    state.func_types[state.string_to_nil_type.index] = ExactFuncType {
+    state.func_types[string_to_nil_type.index] = ExactFuncType {
         array_with_string_type,
         nil,
         .Normal,
     }
-    state.func_types[state.string_string_to_nil_type.index] = ExactFuncType {
+    state.func_types[string_string_to_nil_type.index] = ExactFuncType {
         array_with_2string_types,
         nil,
         .Normal,
     }
-    state.func_types[state.string_to_string_type.index] = ExactFuncType {
+    state.func_types[string_to_string_type.index] = ExactFuncType {
         array_with_string_type,
         array_with_string_type,
         .Normal,
     }
-    state.func_types[state.comptime_string_to_string_type.index] = ExactFuncType {
-        array_with_string_type,
+    state.func_types[comptime_u64_to_string_type.index] = ExactFuncType {
+        array_with_u64_type,
         array_with_string_type,
         .ComptimeFunc,
     }
-    state.func_types[state.no_args_to_nil_type.index] = ExactFuncType{nil, nil, .Normal}
-    state.func_types[state.array_of_strings_to_nil_type.index] = ExactFuncType {
+    state.func_types[no_args_to_nil_type.index] = ExactFuncType{nil, nil, .Normal}
+    state.func_types[array_of_strings_to_nil_type.index] = ExactFuncType {
         array_with_dynamic_array_of_strings,
         nil,
         .Normal,
     }
-    state.func_types[state.i64_to_nil_type.index] = ExactFuncType {
-        array_with_i64_type,
-        nil,
-        .Normal,
-    }
+    state.func_types[i64_to_nil_type.index] = ExactFuncType{array_with_i64_type, nil, .Normal}
 
-    for file_import in imports {
-        warn(&state, file_import.pos, "TODO: Support modules")
-    }
-
-    for func, i in funcs {
-        func_type: FunctionType
-        if len(func.markers) == 0 {
-            func_type = .Normal
-        } else if len(func.markers) > 1 {
-            err(
+    for value, i in parsed.global_values {
+        state.file = value.file
+        if func_ref, is_func := value.unit.value.(FuncDefinitionRef); is_func {
+            func := parsed.function_defs[func_ref.index]
+            func_type: FunctionType
+            if len(func.markers) == 0 {
+                func_type = .Normal
+            } else if len(func.markers) > 1 {
+                err(
+                    &state,
+                    func.markers[1].pos,
+                    "TODO: Handle function definitions with more than one marker",
+                )
+                continue
+            } else if func.markers[0].ident == "comptime" {
+                func_type = .ComptimeFunc
+            } else {
+                err(
+                    &state,
+                    func.markers[0].pos,
+                    "Expected marker to be `#comptime`\nGot `#%s`",
+                    func.markers[0].ident,
+                )
+                continue
+            }
+            checked_func_type, _ := check_function_type(
                 &state,
-                func.markers[1].pos,
-                "TODO: Handle function definitions with more than one marker",
+                func.inputs.value_type[:len(func.inputs)],
+                func.output^,
+                func_type,
+                "",
             )
-            continue
-        } else if func.markers[0].ident == "comptime" {
-            func_type = .ComptimeFunc
+            state.global_values[i].value = CheckedGlobalRuntimeValue {
+                FuncTypeRef{len(state.func_types)},
+                func_ref,
+            }
+            append_elem(&state.func_types, make_func_type_exact(&state, checked_func_type, nil))
+        } else if import_value, is_import := value.unit.value.(Import); is_import {
+            state.global_values[i].value = import_value
         } else {
-            err(
-                &state,
-                func.markers[0].pos,
-                "Expected marker to be `#comptime`\nGot `#%s`",
-                func.markers[0].ident,
-            )
-            continue
+            body: [dynamic]CheckedStatement = nil
+            type: ExactCheckedType = nil
+            checked_value := check_value(&state, value.unit, &body, AnyType{&type})
+            if checked_value == nil {
+                continue
+            }
+            comptime_value, ok := checked_value.(CompileTimeValue)
+            if !ok {
+                err(
+                    &state,
+                    value.unit.pos,
+                    "All global values must be compile time known constants",
+                )
+                continue
+            }
+            assert(len(body) == 0)
+            state.global_values[i].value = CheckedGlobalRuntimeValue{type, checked_value}
         }
-        checked_func_type, _ := check_function_type(
-            &state,
-            func.inputs.value_type[:len(func.inputs)],
-            func.output,
-            func_type,
-            "",
-        )
-        state.func_types[i] = make_func_type_exact(&state, checked_func_type, nil)
     }
 
     for type, i in state.global_types_with_generics {
+        state.file = type.ast_node.file
         if is_builtin(type.ast_node.generic.ident) {
             err(&state, type.ast_node.generic.pos, builtins_err, type.ast_node.generic.ident)
         } else {
@@ -3070,6 +3291,7 @@ check :: proc(
     }
 
     for type, i in state.global_types_without_generics {
+        state.file = type.ast_node.file
         checked_type := check_type(&state, type.ast_node.value, "")
         generic_elem := create_generic_type_elem(&state, checked_type, nil)
         state.global_types_without_generics[i].exact_type = generic_elem
@@ -3094,38 +3316,41 @@ check :: proc(
         return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
 
-    checked_functions := make([]CheckedFunction, len(funcs))
+    checked_functions := make([]CheckedFunction, len(parsed.function_defs))
 
-    // TODO: Iterating over globals as a map is a big source of the
-    // non-deterministic error ordering in this compiler
-    for global_name, global in globals {
-        if is_builtin(global_name) {
-            err(&state, global.pos, builtins_err, global_name)
-            continue
-        }
-        switch value in global.value {
-        case Unit:
-            expect_snake_case(&state, "variable names", IdentAndPos{global_name, global.pos})
-            func_index, is_func := value.value.(uint)
-            if !is_func {
-                warn(&state, global.pos, "TODO: Handle global values that aren't function defs")
+    for file, i in parsed.files {
+        state.file = FileRef{uint(i)}
+        // TODO: Iterating over globals as a map is a big source of the
+        // non-deterministic error ordering in this compiler
+        for global_name, global in file.globals {
+            if is_builtin(global_name) {
+                err(&state, global.pos, builtins_err, global_name)
                 continue
             }
-            when debug_checker {
-                debug("checking function at index %d", func_index)
+            switch value in global.value {
+            case GlobalValueRef:
+                expect_snake_case(&state, "variable names", IdentAndPos{global_name, global.pos})
+                global_val := state.global_values[value.index]
+                func_ref, is_func := global_val.ast_node.unit.value.(FuncDefinitionRef)
+                if !is_func {
+                    continue
+                }
+                checked_func, func_ok := check_function(
+                    &state,
+                    parsed.function_defs[func_ref.index],
+                    global_val.value.(CheckedGlobalRuntimeValue).type.(FuncTypeRef),
+                )
+                if func_ok {
+                    checked_functions[func_ref.index] = checked_func
+                }
+            case GlobalTypeWithGenericRef, GlobalTypeWithoutGenericRef:
+                expect_camel_case(&state, "type names", IdentAndPos{global_name, global.pos})
             }
-            info, _ := get_info(state.func_types[:], func_index)
-            state.func_type = info.type
-            state.loop_index = 0
-            checked_func, checking_ok := check_function(&state, func_index)
-            assert(len(state.scopes) == 0)
-            assert(len(state.variables_map) == 0)
-            if checking_ok {
-                checked_functions[func_index] = checked_func
-            }
-        case GlobalTypeWithGenericRef, GlobalTypeWithoutGenericRef:
-            expect_camel_case(&state, "type names", IdentAndPos{global_name, global.pos})
         }
+    }
+
+    if state.diagnostics_info.number_of_errors > 0 {
+        return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
 
     // Initialise generic types
@@ -3182,15 +3407,16 @@ check :: proc(
         "```\n\n" +
         "TODO: Add link to docs"
 
-    entry_func_index: uint = ---
+    entry_func_ref: FuncDefinitionRef = ---
     entry_func_type: EntryFuncType = ---
-    if build_props, build_exists := globals["build"]; build_exists {
-        build_value, build_is_value := build_props.value.(Unit)
+    state.file = FileRef{0}
+    if build_props, build_exists := parsed.files[0].globals["build"]; build_exists {
+        build_value, build_is_value := build_props.value.(GlobalValueRef)
         if !build_is_value {
             err(&state, build_props.pos, "`build` is a type\nExpected it to be a function%s", hint)
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        build_index, build_is_func := build_value.value.(uint)
+        build_ref, build_is_func := state.global_values[build_value.index].ast_node.unit.value.(FuncDefinitionRef)
         if !build_is_func {
             err(
                 &state,
@@ -3200,7 +3426,10 @@ check :: proc(
             )
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        build_info, _ := get_info(state.func_types[:], build_index)
+        build_info, _ := get_info(
+            state.func_types[:],
+            checked_functions[build_ref.index].type.index,
+        )
         if build_info.type != .ComptimeFunc {
             err(
                 &state,
@@ -3210,14 +3439,14 @@ check :: proc(
             )
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        entry_func_index = build_index
+        entry_func_ref = build_ref
         entry_func_type = .BuildFunc
     } else {
-        main_index, main_ok := get_global_function(&state, max(uint), "main", hint)
+        main_ref, main_ok := get_global_function(&state, max(uint), "main", hint)
         if !main_ok {
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        main_info, _ := get_info(state.func_types[:], main_index)
+        main_info, _ := get_info(state.func_types[:], checked_functions[main_ref.index].type.index)
         if main_info.type != .Normal {
             err(
                 &state,
@@ -3226,22 +3455,20 @@ check :: proc(
             )
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        entry_func_index = main_index
+        entry_func_ref = main_ref
         entry_func_type = .MainFunc
     }
     if state.diagnostics_info.number_of_errors > 0 {
         return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
-    return CheckerOutput {
+    checked := Checked {
         checked_functions,
         state.global_types_without_generics.exact_type[:len(state.global_types_without_generics)],
         state.generic_type_initialisations,
         state.array_type_initialisations,
         state.func_types[:],
-        entry_func_index,
-        entry_func_type,
-        state.diagnostics_info,
         state.type_equivalancy_array[:],
     }
+    return CheckerOutput{checked, state.diagnostics_info, entry_func_ref, entry_func_type}
 }
 

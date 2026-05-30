@@ -1,10 +1,5 @@
 package main
 
-Import :: struct {
-    pos:        uint,
-    components: IdentToken,
-}
-
 StructField :: struct(T: typeid) {
     name: IdentAndPos,
     type: T,
@@ -30,7 +25,10 @@ SumType :: struct(T: typeid, VariantExtraData: typeid) {
 
 Ident :: distinct IdentToken
 
-Number :: distinct string
+Number :: struct {
+    is_negated:      bool,
+    absolute_digits: string,
+}
 
 String :: distinct []string
 
@@ -47,6 +45,14 @@ Tuple :: struct {
     elements: []Unit,
 }
 
+FuncDefinitionRef :: struct {
+    // an index into:
+    // - `ParserState.function_defs`
+    // - `ParsedProject.function_defs`
+    // - `CheckerOutput.checked_funcs`
+    index: uint,
+}
+
 // - A unit is a value or a type
 // - There is no distinction between a value and a type in the AST because
 //   there are cases where the parser cannot tell whether something is a value
@@ -60,7 +66,7 @@ UnitWithoutPos :: union {
     Struct(Unit),
     SumType(Unit, struct {}),
     Tuple,
-    uint, // an index into the function definitions
+    FuncDefinitionRef,
     CallWithBrackets,
     CallWithSquareBrackets,
     CallWithFrontedSquareBrackets,
@@ -71,6 +77,7 @@ UnitWithoutPos :: union {
     Char,
     Bool,
     MarkedUnit,
+    Import,
 }
 
 Unit :: struct {
@@ -226,9 +233,8 @@ IfElseStatement :: struct {
 }
 
 MatchBranch :: struct {
-    name: IdentAndPos,
-    type: Unit,
-    body: []Statement,
+    label: Unit,
+    body:  []Statement,
 }
 
 MatchStatement :: struct {
@@ -265,9 +271,14 @@ FunctionArg :: struct {
 
 FunctionDefinition :: struct {
     inputs:  #soa[]FunctionArg,
-    output:  Unit, // if the function has no output, then `output` is `Unit{}`
+    output:  ^Unit, // if the function has no output, then `output` is `nil`
     body:    []Statement,
     markers: []IdentAndPos,
+}
+
+File :: struct {
+    globals: map[string]ParsedGlobal,
+    file:    CompilerFile,
 }
 
 //ComponentDefinition :: struct {
@@ -327,66 +338,83 @@ print_output_list :: proc(s: ^TreePrinterState, label: string, list: []FunctionO
         print_type(s, output.value_type)
     }
 }
+*/
 
-print_value :: proc(
-    s: ^TreePrinterState,
-    funcs: []FunctionDefinition,
-    value: Value,
-    label_fmt: string,
-    args: ..any,
-) {
-    list_item(s, label_fmt, ..args)
-    list_item(s, "value at character index %d", value.pos)
-    switch v in value.value {
-    case Bool:
-        if v {
-            list_item(s, "The boolean literal `true`")
-        } else {
-            list_item(s, "The boolean literal `false`")
-        }
-    case uint:
-        list_item(s, "value is a function definition:")
-        print_argument_list(s, "inputs:", funcs[v].inputs)
-        print_output_list(s, "outputs:", funcs[v].outputs)
-        print_block(s, funcs, funcs[v].body, "body:")
-    case TypeInitialisation:
-        list_item(s, "type initialisation")
-        list_item(s, "TODO: Handle printing this")
-    case ValueInBrackets:
-        print_value(s, funcs, v^, "value in brackets")
-    case ArrayAccess:
-        switch index in v.index {
-        case SingleElemAccess:
-            print_value(s, funcs, index^, "single elem array access:")
-            print_value(s, funcs, v.array^, "array:")
-        case RangedAccess:
-            list_item(s, "ranged array access:")
-            print_value(s, funcs, v.array^, "array:")
-            print_value(s, funcs, index.start^, "start:")
-            print_value(s, funcs, index.end^, "end:")
-        }
-    case Number:
-        list_item(s, "number: %s", v)
-    case FunctionCall:
-        list_item(s, "function call")
-        print_value(s, funcs, v.function^, "function value")
-        for arg, index in v.args {
-            print_value(s, funcs, arg, "value %d", index)
-        }
-    case JoinedValues:
-        list_item(s, "joined values:")
-        {list_item(s, "join method: %v", v.join_method)}
-        print_value(s, funcs, v.val0^, "val0:")
-        print_value(s, funcs, v.val1^, "val1:")
-    case VariableReference:
-        list_item(s, "variable: %s", v)
-    case String:
-        list_item(s, "string: %s", v)
-    case Char:
-        list_item(s, "character: %c", v)
+debug_call :: proc(funcs: []FunctionDefinition, c: Call) {
+    debug_nesting += 1
+    debug_unit(funcs, c.unit_being_called^)
+    for arg, i in c.args {
+        debug("arg %d", i)
+        debug_nesting += 1
+        debug_unit(funcs, arg)
+        debug_nesting -= 1
     }
+    debug_nesting -= 1
 }
 
+debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
+    debug("value at character index %d", unit.pos)
+    debug_nesting += 1
+    switch v in unit.value {
+    case Struct(Unit):
+        panic("TODO")
+    case SumType(Unit, struct {}):
+        panic("TODO")
+    case Number:
+        debug("is_negated: %v", v.is_negated)
+        debug("absolute_digits: %s", v.absolute_digits)
+    case Char:
+        panic("TODO")
+    case MarkedUnit:
+        panic("TODO")
+    case Import:
+        panic("TODO")
+    case Bool:
+        if v {
+            debug("The boolean literal `true`")
+        } else {
+            debug("The boolean literal `false`")
+        }
+    case FuncDefinitionRef:
+        debug("value is a function definition (TODO)")
+    // print_argument_list(s, "inputs:", funcs[v].inputs)
+    // print_output_list(s, "outputs:", funcs[v].outputs)
+    // print_block(s, funcs, funcs[v].body, "body:")
+    case Tuple:
+        debug("tuple:")
+        for elem in v.elements {
+            debug_unit(funcs, elem)
+        }
+    case CallWithBrackets:
+        debug("call with brackets")
+        debug_call(funcs, Call(v))
+    case CallWithSquareBrackets:
+        debug("call with square brackets")
+        debug_call(funcs, Call(v))
+    case CallWithFrontedSquareBrackets:
+        debug("call with fronted square brackets")
+        debug_call(funcs, Call(v))
+    case JoinedUnits:
+        debug("joined units")
+        debug_nesting += 1
+        debug("join method: %v", v.join_method)
+        debug_unit(funcs, v.unit0^)
+        debug_unit(funcs, v.unit1^)
+        debug_nesting -= 1
+    case Ident:
+        debug("ident")
+        debug_nesting += 1
+        for segment in v {
+            debug("%q", segment.ident)
+        }
+        debug_nesting -= 1
+    case String:
+        debug("string: %v", v)
+    }
+    debug_nesting -= 1
+}
+
+/*
 print_block :: proc(
     s: ^TreePrinterState,
     funcs: []FunctionDefinition,
