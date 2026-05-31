@@ -14,14 +14,8 @@ debug_checker :: false
 debug_emitter :: false
 debug_equivalency_arrays :: false
 
-Status :: enum {
-    Success,
-    FailedDueToUserError, // Does not cause randomized fuzz tests to fail
-    FailedDueToCompilerError, // Causes randomized fuzz tests to fail
-}
-
 // The `string` returned is the path to the executable
-write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, Status) {
+write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     c_code_path := fmt.aprintf("%s.c", path)
     output_executable_path := fmt.aprintf("%s.bin", path)
 
@@ -29,7 +23,7 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, Status) {
     err := os.write_entire_file(c_code_path, c_code)
     if err != nil {
         fmt.eprintfln("Failed to write to `%s`: %#v", c_code_path, err)
-        return "", .FailedDueToCompilerError
+        return "", false
     }
 
     fmt.printfln("Compiling the C code into an executable at `%s`...", output_executable_path)
@@ -38,7 +32,7 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, Status) {
     state, _, _, err2 := os.process_exec(os.Process_Desc{command = command}, context.allocator)
     if err2 != nil {
         fmt.eprintln("Failed to invoke compilation command for `%s`: %#v", c_code_path, err2)
-        return "", .FailedDueToCompilerError
+        return "", false
     }
     if state.exit_code != 0 {
         fmt.eprintfln(
@@ -47,19 +41,19 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, Status) {
             strings.join(command, " "),
             state.exit_code,
         )
-        return "", .FailedDueToCompilerError
+        return "", false
     }
-    return output_executable_path, .Success
+    return output_executable_path, true
 }
 
 done_command :: "done"
 
 // - The `string` returned is the path to the executable
 // - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string) -> (string, Status) {
-    parsed, status := parse_project(file_name)
-    if status != .Success {
-        return "", status
+build :: proc(file_name: string) -> (string, bool) {
+    parsed, ok := parse_project(file_name)
+    if !ok {
+        return "", false
     }
 
     when debug_parser_output {
@@ -95,7 +89,7 @@ build :: proc(file_name: string) -> (string, Status) {
 
     if checker_output.diagnostics_info.number_of_errors > 0 {
         fmt.eprintfln("Erroneously checked with %s and %s", errors, warnings)
-        return "", .FailedDueToUserError
+        return "", false
     } else {
         fmt.printfln("Successfully checked with %s and %s", errors, warnings)
     }
@@ -111,48 +105,47 @@ build :: proc(file_name: string) -> (string, Status) {
         tmp, err := os.temp_directory(context.allocator)
         if err != nil {
             fmt.eprintfln("Failed to get temporary directory: %#v", file_name, err)
-            return "", .FailedDueToCompilerError
+            return "", false
         }
 
         absolute_file_name, err2 := filepath.abs(file_name, context.allocator)
         if err2 != nil {
             fmt.eprintfln("Failed to convert `%s` to an absolute path: %v", file_name, err2)
-            return "", .FailedDueToCompilerError
+            return "", false
         }
         absolute_file_dir := filepath.dir(absolute_file_name)
 
         dir_in_tmp, err3 := filepath.join([]string{tmp, absolute_file_dir}, context.allocator)
         if err3 != nil {
             fmt.eprintfln("Failed to join filepath: %v", err3)
-            return "", .FailedDueToCompilerError
+            return "", false
         }
         if !os.exists(dir_in_tmp) {
             err = os.make_directory_all(dir_in_tmp)
             if err != nil {
                 fmt.eprintfln("Failed to create directory `%s`: %#v", dir_in_tmp, err)
-                return "", .FailedDueToCompilerError
+                return "", false
             }
         }
 
         c_path, err4 := filepath.join([]string{tmp, absolute_file_name}, context.allocator)
         if err4 != nil {
             fmt.eprintfln("Failed to join filepath: %v", err4)
-            return "", .FailedDueToCompilerError
+            return "", false
         }
-        executable_path, executable_status := write_and_compile_c(c, c_path)
-        if executable_status != .Success {
-            return "", executable_status
-
+        executable_path, ok := write_and_compile_c(c, c_path)
+        if !ok {
+            return "", false
         }
 
         run_metaprogram(absolute_file_dir, executable_path, checker_output.checked)
-        return "", .Success
+        return "", true
     } else {
-        executable_path, executable_status := write_and_compile_c(c, file_name)
-        if executable_status != .Success {
-            return "", executable_status
+        executable_path, ok := write_and_compile_c(c, file_name)
+        if !ok {
+            return "", false
         }
-        return executable_path, .Success
+        return executable_path, true
     }
 }
 
@@ -270,15 +263,10 @@ main :: proc() {
             print_help(1)
         }
         build_start := time.now()
-        _, status := build(os.args[2])
+        _, ok := build(os.args[2])
         fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
-        switch status {
-        case .Success:
-            os.exit(0)
-        case .FailedDueToUserError:
+        if !ok {
             os.exit(1)
-        case .FailedDueToCompilerError:
-            os.exit(2)
         }
     case "help":
         print_help(0)

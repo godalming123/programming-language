@@ -261,10 +261,9 @@ parse_initial_unit :: proc(
                     return Unit{}, nil, false
                 }
                 variant_payload := Struct(Unit){}
-                has_payload := false
                 get_next_token(s, true)
-                #partial switch _ in s.last_token {
-                case OpenBraceToken:
+                _, has_payload := s.last_token.(OpenBraceToken)
+                if has_payload {
                     variant_payload, has_payload = parse_struct(s)
                     if !has_payload {
                         return Unit{}, nil, false
@@ -308,6 +307,7 @@ parse_initial_unit :: proc(
         if !ok2 {
             return Unit{}, nil, false
         }
+        // TODO: Update the syntax so that this exception to the parsed order of operations is not necersarry
         if _, is_open_square_bracket := s.last_token.(OpenSquareBracketToken);
            is_open_square_bracket {
             args, args_ok := parse_units_until(s, is_close_square_bracket, "`]`")
@@ -887,7 +887,6 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             )
         case IdentToken:
             get_next_token(s, true)
-            // TODO: Handle parsing something like `array[index] = value`
             #partial switch token2 in s.last_token {
             case:
                 wrong_token_err(
@@ -1389,18 +1388,18 @@ ParsedProject :: struct {
     function_defs:                 []FunctionDefinition,
 }
 
-parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, Status) {
+parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, bool) {
     first_file_absolute_path, err := filepath.abs(first_file_relative_path, context.allocator)
     if err != nil {
         fmt.eprintfln("Failed to make filepath absolute: %v", err)
-        return ParsedProject{}, .FailedDueToCompilerError
+        return ParsedProject{}, false
     }
 
     fmt.printfln("Reading `%s`...", first_file_absolute_path)
     data, data_err := os.read_entire_file(first_file_absolute_path, context.allocator)
     if data_err != nil {
         fmt.eprintfln("Failed to read `%s`: %#v", first_file_absolute_path, data_err)
-        return ParsedProject{}, .FailedDueToCompilerError
+        return ParsedProject{}, false
     }
 
     state := ParserState{}
@@ -1428,7 +1427,7 @@ parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, Statu
         state.file_ref.index += 1
     }
     if !ok {
-        return ParsedProject{}, .FailedDueToUserError
+        return ParsedProject{}, false
     }
     return ParsedProject {
             state.files_map,
@@ -1438,6 +1437,6 @@ parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, Statu
             state.global_values[:],
             state.function_defs[:],
         },
-        .Success
+        true
 }
 

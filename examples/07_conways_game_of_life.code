@@ -33,18 +33,9 @@ run_tick = |s: [game_size]Bool| -> [game_size]Bool {
 	    ~surrounding_alive_pixels += count_pixel_life(s, x+1, y+1)
 
 		if was_alive {
-		    // TODO: Be able to do `new_state[index] = 2 <= surrounding_alive_pixels && surrounding_alive_pixels <= 3`
-			if 2 <= surrounding_alive_pixels and surrounding_alive_pixels <= 3 {
-			    ~new_state[index] = true
-			} else {
-			    ~new_state[index] = false
-			}
+			~new_state[index] = 2 <= surrounding_alive_pixels and surrounding_alive_pixels <= 3
 		} else {
-			if surrounding_alive_pixels == 3 {
-			    ~new_state[index] = true
-			} else {
-			    ~new_state[index] = false
-			}
+			~new_state[index] = surrounding_alive_pixels == 3
 		}
     }
     return new_state

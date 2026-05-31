@@ -23,10 +23,10 @@ run_normal_example :: proc(
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
-    executable, build_status := build(fullpath)
-    if build_status != .Success {
+    executable, ok := build(fullpath)
+    if !ok {
         testing.fail(t)
-        return RanExample{"", "", false}
+        return RanExample{ok = false}
     }
     if executable == "" {
         testing.fail(t)
@@ -71,8 +71,8 @@ run_comptime_example :: proc(t: ^testing.T, relative_path: string) -> bool {
     }
     fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
 
-    executable, status := build(fullpath)
-    if status != .Success {
+    executable, ok := build(fullpath)
+    if !ok {
         testing.fail(t)
         return false
     }
@@ -309,18 +309,30 @@ conways_game_of_life :: proc(t: ^testing.T) {
 
 }
 
-/*
-// TODO: Add this test back
 @(test)
 basic_fuzz_test :: proc(t: ^testing.T) {
+    tmp_dir, err := os.temp_directory(context.allocator)
+    if err != nil {
+        testing.fail_now(t, "err != nil")
+    }
+
+    tmp_file, err2 := filepath.join([]string{tmp_dir, "fuzz.code"}, context.allocator)
+    if err2 != nil {
+        testing.fail_now(t, "err2 != nil")
+    }
+
+    tmp_file_handle, err3 := os.open(tmp_file, os.File_Flags{.Write, .Create})
+    if err3 != nil {
+        testing.fail_now(t, "err3 != nil")
+    }
+
     for i in 0 ..< 100 {
         code := random_string(800)
         fmt.printfln("Randomly generated code is:\n\n```\n%s\n```", code)
-        _, status := build_code(code, "fuzz_test.code")
-        testing.expect(t, status != .FailedDueToCompilerError)
+        os.write_string(tmp_file_handle, code)
+        build(tmp_file)
     }
 }
-*/
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
 

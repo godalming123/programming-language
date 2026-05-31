@@ -2429,7 +2429,8 @@ check_var_ref :: proc(
             return nil
         }
     }
-    for extra_segment, i in ref[start_i:] {
+    for i := start_i; i < len(ref); i += 1 {
+        extra_segment := ref[i]
         if extra_segment.ident == "len" {
             array, is_array := out_type.(ArrayType(u32))
             if !is_array {
@@ -2843,6 +2844,7 @@ check_value :: proc(
     case:
         err(s, v.pos, "Internal error: got nil value in check_value")
         return nil
+
     case Struct(Unit):
         err(s, v.pos, "Cannot use a struct type as a value")
         return nil
@@ -2852,11 +2854,14 @@ check_value :: proc(
     case SumType(Unit, struct {}):
         err(s, v.pos, "Cannot use a sum type as a value")
         return nil
+
     case Import:
         err(s, v.pos, import_use_err)
         return nil
+
     case MarkedUnit:
         return check_value_with_markers(s, value.value^, value.markers, body, type)
+
     case Tuple:
         if len(value.elements) != 1 {
             err(
@@ -2868,6 +2873,7 @@ check_value :: proc(
             return false
         }
         return check_value(s, value.elements[0], body, type)
+
     case CallWithSquareBrackets:
         array_type: ExactCheckedType = nil
         array_value := check_value(s, value.unit_being_called^, body, AnyType{&array_type})

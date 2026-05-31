@@ -109,7 +109,18 @@ handle_named_user_defined_type :: proc(
     if len(generic_args) == 0 {
         ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
         if !is_type_without_generic {
-            err(s, pos, "The global `%s` is not a type without a generic arg", name)
+            _, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
+            if is_type_with_generic {
+                err(
+                    s,
+                    pos,
+                    "The global type `%s` requieres a generic argument to be specified, for example `%s[String]`",
+                    name,
+                    name,
+                )
+            } else {
+                err(s, pos, "The global `%s` is not a type without a generic arg", name)
+            }
             return nil
         }
         return GlobalTypeWithoutGenericRef{ref.index}
