@@ -708,8 +708,13 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
     }
 
     emitted_array_type_defs := map[u64]struct{}{}
-    for key in c.array_type_initialisations {
-        length, item_type_ref := seperate_u64(key)
+    for value in c.types.values {
+        array_type, is_array := value.value.(ArrayType(Type))
+        if !is_array {
+            continue
+        }
+        length := array_type.length
+        item_type_ref := array_type.item_type.index
         item_type, simplified_item_type_ref := get_info(
             c.type_equivalancy_array,
             uint(item_type_ref),

@@ -45,8 +45,6 @@ ExactFuncType :: FuncType(ExactCheckedType)
 GenericTypeInitialisationsStore :: map[u64]ExactCheckedType
 
 // a is the length of the array and b is an index into type_equivalancy_array
-ArrayTypeInitialisationsStore :: map[u64]struct{}
-
 CheckerGlobalTypeWithoutGeneric :: struct {
     ast_node:      GlobalTypeWithoutGeneric,
     exact_type:    ExactCheckedType,
@@ -90,13 +88,10 @@ CheckerState :: struct {
     variables_map:                 map[string]VariableRef,
 
     // The following fields change while checking
-    // TODO: Use some sort of hash map to store the types in a program so that
-    // you can figure out if a new type is the same as any type which has already
-    // been used in the program in O(1) time.
+    types:                         Types,
     generic_being_initialised:     GenericType(u32), // TODO: Does this need to be an array?
     type_equivalancy_array:        [dynamic]EquivalencyArrayElem(ExactCheckedType),
     generic_type_initialisations:  GenericTypeInitialisationsStore,
-    array_type_initialisations:    ArrayTypeInitialisationsStore,
     func_types:                    [dynamic]EquivalencyArrayElem(ExactFuncType), // The first len(CheckerState.funcs) are associated with that function
     loop_index:                    uint,
     diagnostics_info:              DiagnosticsInfo,
@@ -766,9 +761,17 @@ create_generic_struct_type :: proc(
     }
 }
 
-create_array_type :: proc(s: ^CheckerState, length: u32, item_type: u32) -> ArrayType(u32) {
-    s.array_type_initialisations[combine_u32(length, item_type)] = struct{}{}
-    return ArrayType(u32){length, item_type}
+create_array_type :: proc(s: ^CheckerState, length: u32, item_type: u32) -> Type {
+    value := TypeValue(ArrayType(Type){length, Type{item_type}})
+    hash := length ~ item_type
+    return insert(&s.types, hash, value, proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
+        a_arr, a_ok := a.(ArrayType(Type))
+        b_arr, b_ok := b.(ArrayType(Type))
+        if !a_ok || !b_ok {
+            return false, a
+        }
+        return a_arr.length == b_arr.length && a_arr.item_type.index == b_arr.item_type.index, a
+    })
 }
 
 create_generic_type :: proc(
@@ -841,7 +844,8 @@ create_generic_array_type :: proc(
     }
     item_type := create_generic_type_elem(s, elem.item_type^, generic_arg)
     item_ref := append_to_type_equivalancy_array(s, item_type)
-    array_type := create_array_type(s, elem.length, item_ref)
+    create_array_type(s, elem.length, item_ref)
+    array_type := ArrayType(u32){elem.length, item_ref}
     when debug_checker {
         debug("returned ArrayType(u32) is %#v", array_type)
         debug("returned ExactCheckedType is %#v", item_type)
@@ -2719,8 +2723,6 @@ check_joined_unit_value :: proc(
             return nil
         }
         return_type := ArrayType(u32){0, item_type_ref} // TODO: Maybe `::` should be able to output fixed size arrays
-        s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
-            struct{}{}
         if expect_type(s, pos, type, return_type, "") {
             segments := make([]ArraySegment, 2)
             segments[0] = InlineArraySegment{val0, length}
@@ -2786,8 +2788,6 @@ check_joined_unit_value :: proc(
             }
         }
         return_type := ArrayType(u32){0, item_type0_ref} // TODO: Maybe `++` should be able to output fixed size arrays
-        s.array_type_initialisations[combine_u32(return_type.length, return_type.item_type)] =
-            struct{}{}
         if expect_type(s, pos, type, return_type, "") {
             segments := make([]ArraySegment, 2)
             segments[0] = InlineArraySegment{val0, length0}
@@ -3139,9 +3139,9 @@ Checked :: struct {
     checked_funcs:                        []CheckedFunction,
     checked_global_types_without_generic: []ExactCheckedType,
     generic_type_initialisations:         GenericTypeInitialisationsStore,
-    array_type_initialisations:           ArrayTypeInitialisationsStore,
     func_types:                           []EquivalencyArrayElem(ExactFuncType),
     type_equivalancy_array:               []EquivalencyArrayElem(ExactCheckedType),
+    types:                                Types,
 }
 
 // Function types
@@ -3155,23 +3155,23 @@ i64_to_nil_type :: FuncTypeRef{6} // (I64)
 
 check :: proc(parsed: ParsedProject) -> CheckerOutput {
     state := CheckerState {
-            files                         = parsed.files,
-            generic_being_initialised     = GenericType(u32){max(u32), max(u32)},
-            global_values                 = soa_zip(
-                parsed.global_values,
-                make([]CheckedGlobalValue, len(parsed.global_values)),
-            ),
-            global_types_without_generics = soa_zip(
-                parsed.global_types_without_generics,
-                make([]ExactCheckedType, len(parsed.global_types_without_generics)),
-                make([]FuncTypeRef, len(parsed.global_types_without_generics)),
-            ),
-            global_types_with_generics    = soa_zip(
-                parsed.global_types_with_generics,
-                make([]GenericCheckedType, len(parsed.global_types_with_generics)),
-            ),
-            func_types                    = make([dynamic]EquivalencyArrayElem(ExactFuncType), 7),
-        }
+        files                         = parsed.files,
+        generic_being_initialised     = GenericType(u32){max(u32), max(u32)},
+        global_values                 = soa_zip(
+            parsed.global_values,
+            make([]CheckedGlobalValue, len(parsed.global_values)),
+        ),
+        global_types_without_generics = soa_zip(
+            parsed.global_types_without_generics,
+            make([]ExactCheckedType, len(parsed.global_types_without_generics)),
+            make([]FuncTypeRef, len(parsed.global_types_without_generics)),
+        ),
+        global_types_with_generics    = soa_zip(
+            parsed.global_types_with_generics,
+            make([]GenericCheckedType, len(parsed.global_types_with_generics)),
+        ),
+        func_types                    = make([dynamic]EquivalencyArrayElem(ExactFuncType), 7),
+    }
 
     array_with_string_type := make([]ExactCheckedType, 1)
     array_with_string_type[0] = StringType{}
@@ -3187,11 +3187,11 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     array_with_u64_type[0] = U64Type{}
 
     array_with_dynamic_array_of_strings := make([]ExactCheckedType, 1)
-    array_with_dynamic_array_of_strings[0] = create_array_type(
-        &state,
+    create_array_type(&state, 0, u32(len(state.type_equivalancy_array)))
+    array_with_dynamic_array_of_strings[0] = ArrayType(u32) {
         0,
         u32(len(state.type_equivalancy_array)),
-    )
+    }
     append_elem(&state.type_equivalancy_array, ExactCheckedType(StringType{}))
 
     state.func_types[string_to_nil_type.index] = ExactFuncType {
@@ -3471,9 +3471,9 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         checked_functions,
         state.global_types_without_generics.exact_type[:len(state.global_types_without_generics)],
         state.generic_type_initialisations,
-        state.array_type_initialisations,
         state.func_types[:],
         state.type_equivalancy_array[:],
+        state.types,
     }
     return CheckerOutput{checked, state.diagnostics_info, entry_func_ref, entry_func_type}
 }
