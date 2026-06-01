@@ -106,7 +106,7 @@ emit_type :: proc(
     case SumType(ExactCheckedType, FuncTypeRef):
         panic("TODO: Emit inline checked sum type for C emitter")
     case FuncTypeRef:
-        type_info, _ := get_info(s.func_types, t.index)
+        type_info, _ := get_info(s.func_types, uint(t.index))
         switch len(type_info.return_types) {
         case 0:
             strings.write_string(&s.b, "void")
@@ -672,7 +672,7 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
     when debug_emitter {
         debug("emitting function index %d", index)
     }
-    info, _ := get_info(s.func_types, type.index)
+    info, _ := get_info(s.func_types, uint(type.index))
     switch len(info.return_types) {
     case 0:
         strings.write_string(&s.b, "void")

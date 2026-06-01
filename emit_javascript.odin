@@ -359,7 +359,7 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info, _ := get_info(c.func_types, func.type.index)
+        info, _ := get_info(c.func_types, uint(func.type.index))
         first_arg := true
         for _, i in info.args {
             if first_arg {

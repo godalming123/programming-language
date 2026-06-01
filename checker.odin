@@ -92,7 +92,7 @@ CheckerState :: struct {
     generic_being_initialised:     GenericType(u32), // TODO: Does this need to be an array?
     type_equivalancy_array:        [dynamic]EquivalencyArrayElem(ExactCheckedType),
     generic_type_initialisations:  GenericTypeInitialisationsStore,
-    func_types:                    [dynamic]EquivalencyArrayElem(ExactFuncType), // The first len(CheckerState.funcs) are associated with that function
+    func_types:                    [dynamic]EquivalencyArrayElem(ExactFuncType),
     loop_index:                    uint,
     diagnostics_info:              DiagnosticsInfo,
     // TODO: represent the order of the programmer controlled stack
@@ -179,9 +179,7 @@ U16Type :: struct {}
 U8Type :: struct {}
 BoolType :: struct {}
 TypeOfGenericArg :: struct {}
-FuncTypeRef :: struct {
-    index: uint, // An index into `CheckerState.func_types`
-}
+FuncTypeRef :: distinct Type
 FuncType :: struct(T: typeid) {
     args:         []T,
     return_types: []T,
@@ -865,7 +863,8 @@ create_generic_func_type :: proc(
     elem: FuncType(GenericCheckedType),
     generic_arg: ExactCheckedType,
 ) -> FuncTypeRef {
-    ref := FuncTypeRef{len(s.func_types)}
+    underlying := Type{index = u32(len(s.func_types))}
+    ref := FuncTypeRef(underlying)
     append_elem(&s.func_types, make_func_type_exact(s, elem, generic_arg))
     return ref
 }
@@ -949,7 +948,7 @@ create_generic_type_elem :: proc(
         }
         for variant, i in e.variants {
             variant_payloads[i] = create_generic_struct_type(s, variant.payload, generic_arg)
-            variant_funcs[i] = FuncTypeRef{len(s.func_types)}
+            variant_funcs[i] = FuncTypeRef(Type{index = u32(len(s.func_types))})
             args := make([]ExactCheckedType, len(variant_payloads[i].fields))
             for field, j in variant_payloads[i].fields {
                 args[j] = field.type
@@ -1288,8 +1287,8 @@ type_is_equal :: proc(
         if !is_func_type_ref {
             return false
         }
-        t0_type, t0_ref := get_info(s.func_types[:], t0.index)
-        t1_type, t1_ref := get_info(s.func_types[:], t1.index)
+        t0_type, t0_ref := get_info(s.func_types[:], uint(t0.index))
+        t1_type, t1_ref := get_info(s.func_types[:], uint(t1.index))
         if t0_ref == t1_ref {
             return true
         }
@@ -1451,7 +1450,7 @@ expect_type :: proc(
             err(s, pos, "Expected a function")
             return false
         }
-        func_info, _ := get_info(s.func_types[:], func_ref.index)
+        func_info, _ := get_info(s.func_types[:], uint(func_ref.index))
         if len(func_info.return_types) != len(e.expected_return_types) {
             err(
                 s,
@@ -1584,7 +1583,7 @@ build_type_string :: proc(
         strings.write_byte(b, '.')
         strings.write_string(b, sum_type.variants[type.variant_index].name.ident)
     case FuncTypeRef:
-        func, _ := get_info(s.func_types[:], type.index)
+        func, _ := get_info(s.func_types[:], uint(type.index))
         switch func.type {
         case .Normal:
         // case .JsFunc:
@@ -2279,7 +2278,7 @@ check_namespaced_var_ref :: proc(
         return nil, nil, 0
     case GlobalTypeWithoutGenericRef:
         func_type := s.global_types_without_generics[global_value.index].function_type
-        if func_type.index == max(uint) {
+        if func_type.index == max(u32) {
             err(
                 s,
                 ref[index].pos,
@@ -2995,7 +2994,7 @@ check_function :: proc(
     when debug_checker {
         print_call(loc, "check_function")
     }
-    f_props, simplified_index := get_info(s.func_types[:], type.index)
+    f_props, simplified_index := get_info(s.func_types[:], uint(type.index))
     s.func_type = f_props.type
     s.return_types = f_props.return_types
     s.loop_index = 0
@@ -3024,7 +3023,7 @@ check_function :: proc(
     if !block_ok {
         return CheckedFunction{}, false
     }
-    return CheckedFunction{FuncTypeRef{simplified_index}, variables, body[:]}, true
+    return CheckedFunction{FuncTypeRef(Type{index = u32(simplified_index)}), variables, body[:]}, true
 }
 
 length_of_array :: proc(type: ArrayType(u32), value: CheckedValue) -> CheckedValue {
@@ -3132,13 +3131,13 @@ Checked :: struct {
 }
 
 // Function types
-string_to_nil_type :: FuncTypeRef{0} // (String)
-string_string_to_nil_type :: FuncTypeRef{1} // (String, String)
-string_to_string_type :: FuncTypeRef{2} // (String) -> String
-comptime_u64_to_string_type :: FuncTypeRef{3} // #comptime ((U64) -> String)
-no_args_to_nil_type :: FuncTypeRef{4} // ()
-array_of_strings_to_nil_type :: FuncTypeRef{5} // ([]String)
-i64_to_nil_type :: FuncTypeRef{6} // (I64)
+string_to_nil_type :: FuncTypeRef(Type{index = 0}) // (String)
+string_string_to_nil_type :: FuncTypeRef(Type{index = 1}) // (String, String)
+string_to_string_type :: FuncTypeRef(Type{index = 2}) // (String) -> String
+comptime_u64_to_string_type :: FuncTypeRef(Type{index = 3}) // #comptime ((U64) -> String)
+no_args_to_nil_type :: FuncTypeRef(Type{index = 4}) // ()
+array_of_strings_to_nil_type :: FuncTypeRef(Type{index = 5}) // ([]String)
+i64_to_nil_type :: FuncTypeRef(Type{index = 6}) // (I64)
 
 check :: proc(parsed: ParsedProject) -> CheckerOutput {
     state := CheckerState {
@@ -3242,7 +3241,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
                 "",
             )
             state.global_values[i].value = CheckedGlobalRuntimeValue {
-                FuncTypeRef{len(state.func_types)},
+                FuncTypeRef(Type{index = u32(len(state.func_types))}),
                 func_ref,
             }
             append_elem(&state.func_types, make_func_type_exact(&state, checked_func_type, nil))
@@ -3296,12 +3295,10 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
             }
             return_types := make([]ExactCheckedType, 1)
             return_types[0] = GlobalTypeWithoutGenericRef{uint(i)}
-            state.global_types_without_generics[i].function_type = FuncTypeRef {
-                uint(len(state.func_types)),
-            }
+            state.global_types_without_generics[i].function_type = FuncTypeRef(Type{index = u32(len(state.func_types))})
             append_elem(&state.func_types, ExactFuncType{args, return_types, .Normal})
         } else {
-            state.global_types_without_generics[i].function_type = FuncTypeRef{max(uint)}
+            state.global_types_without_generics[i].function_type = FuncTypeRef(Type{index = max(u32)})
         }
     }
 
@@ -3421,7 +3418,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         }
         build_info, _ := get_info(
             state.func_types[:],
-            checked_functions[build_ref.index].type.index,
+            uint(checked_functions[build_ref.index].type.index),
         )
         if build_info.type != .ComptimeFunc {
             err(
@@ -3439,7 +3436,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         if !main_ok {
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        main_info, _ := get_info(state.func_types[:], checked_functions[main_ref.index].type.index)
+        main_info, _ := get_info(state.func_types[:], uint(checked_functions[main_ref.index].type.index))
         if main_info.type != .Normal {
             err(
                 &state,
