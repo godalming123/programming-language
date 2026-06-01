@@ -761,19 +761,6 @@ create_generic_struct_type :: proc(
     }
 }
 
-create_array_type :: proc(s: ^CheckerState, length: u32, item_type: u32) -> Type {
-    value := TypeValue(ArrayType(Type){length, Type{item_type}})
-    hash := length ~ item_type
-    return insert(&s.types, hash, value, proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
-        a_arr, a_ok := a.(ArrayType(Type))
-        b_arr, b_ok := b.(ArrayType(Type))
-        if !a_ok || !b_ok {
-            return false, a
-        }
-        return a_arr.length == b_arr.length && a_arr.item_type.index == b_arr.item_type.index, a
-    })
-}
-
 create_generic_type :: proc(
     s: ^CheckerState,
     generic_type_index: u32,
@@ -844,7 +831,7 @@ create_generic_array_type :: proc(
     }
     item_type := create_generic_type_elem(s, elem.item_type^, generic_arg)
     item_ref := append_to_type_equivalancy_array(s, item_type)
-    create_array_type(s, elem.length, item_ref)
+    create_type(&s.types, TypeValue(ArrayType(Type){elem.length, Type{item_ref}}))
     array_type := ArrayType(u32){elem.length, item_ref}
     when debug_checker {
         debug("returned ArrayType(u32) is %#v", array_type)
@@ -3187,7 +3174,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     array_with_u64_type[0] = U64Type{}
 
     array_with_dynamic_array_of_strings := make([]ExactCheckedType, 1)
-    create_array_type(&state, 0, u32(len(state.type_equivalancy_array)))
+    create_type(&state.types, TypeValue(ArrayType(Type){0, Type{u32(len(state.type_equivalancy_array))}}))
     array_with_dynamic_array_of_strings[0] = ArrayType(u32) {
         0,
         u32(len(state.type_equivalancy_array)),
