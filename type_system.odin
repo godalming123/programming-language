@@ -2,10 +2,18 @@ package main
 
 Type :: OrderedHashSetSlotRef
 
+GenericTypeValue :: struct {
+    generic_type_index: u32, // an index into CheckerState.global_types_with_generics
+    generic_arg:        Type,
+    is_initialised:     bool,
+    initialised_type:   u32, // an index into type_equivalancy_array
+}
+
 TypeValue :: union {
     ArrayType(Type),
     SumType(Type, struct {}),
     FuncType(Type),
+    GenericTypeValue,
 }
 
 Types :: OrderedHashSet(TypeValue)
@@ -22,8 +30,10 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
         return hash_sum_type(v)
     case FuncType(Type):
         return hash_func_type(v)
+    case GenericTypeValue:
+        return v.generic_type_index ~ v.generic_arg.index
     }
-    return 0
+    panic("Unreachable")
 }
 
 hash_sum_type :: proc(value: SumType(Type, struct {})) -> u32 {
@@ -74,6 +84,18 @@ merge_type_value :: proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
             return false, a
         }
         return func_types_are_equal(va, vb), a
+    case GenericTypeValue:
+        vb, ok := b.(GenericTypeValue)
+        if !ok {
+            return false, a
+        }
+        if va.generic_type_index == vb.generic_type_index && va.generic_arg == vb.generic_arg {
+            if va.is_initialised {
+                assert(!vb.is_initialised)
+                return true, va
+            }
+            return true, vb
+        }
     }
     return false, a
 }

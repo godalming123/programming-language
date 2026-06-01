@@ -38,12 +38,12 @@ GenericType :: struct(T: typeid) {
     generic_arg:        T,
 }
 
+GenericTypeRef :: distinct Type
+
 ExactFuncType :: FuncType(ExactCheckedType)
 
 // a is an index into checked_global_types_with_generics and b is an index into
 // type_equivalancy_array
-GenericTypeInitialisationsStore :: map[u64]ExactCheckedType
-
 // a is the length of the array and b is an index into type_equivalancy_array
 CheckerGlobalTypeWithoutGeneric :: struct {
     ast_node:      GlobalTypeWithoutGeneric,
@@ -89,9 +89,7 @@ CheckerState :: struct {
 
     // The following fields change while checking
     types:                         Types,
-    generic_being_initialised:     GenericType(u32), // TODO: Does this need to be an array?
     type_equivalancy_array:        [dynamic]EquivalencyArrayElem(ExactCheckedType),
-    generic_type_initialisations:  GenericTypeInitialisationsStore,
     func_types:                    [dynamic]EquivalencyArrayElem(ExactFuncType),
     loop_index:                    uint,
     diagnostics_info:              DiagnosticsInfo,
@@ -234,7 +232,7 @@ ExactCheckedType :: union {
     Struct(ExactCheckedType),
     // The `u32` is an index into `CheckerState.type_equivalancy_array
     ArrayType(u32),
-    GenericType(u32),
+    GenericTypeRef,
 
     // References
     FuncTypeRef,
@@ -731,7 +729,7 @@ type_is_numeric :: proc(type: ExactCheckedType) -> bool {
          BoolType,
          ArrayType(u32),
          FuncTypeRef,
-         GenericType(u32),
+         GenericTypeRef,
          GlobalTypeWithoutGenericRef,
          SumType(ExactCheckedType, FuncTypeRef),
          Struct(ExactCheckedType),
@@ -764,36 +762,20 @@ create_generic_type :: proc(
     generic_type_index: u32,
     generic_arg: u32,
     loc := #caller_location,
-) -> GenericType(u32) {
-    when debug_checker {
-        print_call(loc, "create_generic_type")
-        print_arg("generic_type_index", generic_type_index)
-        print_arg("generic_arg", generic_arg)
-        debug("s.generic_being_initialised is %v", s.generic_being_initialised)
-    }
-    mut_generic_arg := generic_arg
-    if s.generic_being_initialised.generic_type_index == generic_type_index {
-        if type_is_equal2(s, s.generic_being_initialised.generic_arg, generic_arg, true) {
-            when debug_checker {
-                debug(
-                    "s.generic_being_initialised is the same as GenericType(u32){{generic_type_index, generic_arg}}",
-                )
-            }
-            if s.generic_being_initialised.generic_arg < mut_generic_arg {
-                mut_generic_arg = s.generic_being_initialised.generic_arg
-            }
-        }
-    }
-    key := combine_u32(generic_type_index, mut_generic_arg)
-    _, exists := s.generic_type_initialisations[key]
-    if !exists {
-        s.generic_type_initialisations[key] = nil
-    }
-    when debug_checker {
-        debug("exists is %t", exists)
-        debug("mut_generic_arg is %d", mut_generic_arg)
-    }
-    return GenericType(u32){generic_type_index, mut_generic_arg}
+) -> GenericTypeRef {
+    return GenericTypeRef(
+        create_type(
+            &s.types,
+            TypeValue(
+                GenericTypeValue {
+                    generic_type_index = generic_type_index,
+                    generic_arg = Type{index = generic_arg},
+                    is_initialised = false,
+                    initialised_type = 0,
+                },
+            ),
+        ),
+    )
 }
 
 // This function should always be used to handle appending to the equivalancy
@@ -803,6 +785,16 @@ append_to_type_equivalancy_array :: proc(
     type: ExactCheckedType,
     loc := #caller_location,
 ) -> u32 {
+    // TODO HACK
+    for elem, i in s.type_equivalancy_array {
+        elem_type, is_type := elem.(ExactCheckedType)
+        if !is_type {
+            continue
+        }
+        if type_is_equal(s, elem_type, type, true) {
+            return u32(i)
+        }
+    }
     ref := u32(len(s.type_equivalancy_array))
     when debug_checker {
         print_call(loc, "append_to_type_equivalancy_array")
@@ -863,62 +855,64 @@ create_generic_func_type :: proc(
     elem: FuncType(GenericCheckedType),
     generic_arg: ExactCheckedType,
 ) -> FuncTypeRef {
-    underlying := Type{index = u32(len(s.func_types))}
+    underlying := Type {
+        index = u32(len(s.func_types)),
+    }
     ref := FuncTypeRef(underlying)
     append_elem(&s.func_types, make_func_type_exact(s, elem, generic_arg))
     return ref
 }
 
-get_generic :: proc(s: ^CheckerState, generic: GenericType(u32)) -> (ExactCheckedType, u64) {
-    combined := combine_u32(generic.generic_type_index, generic.generic_arg)
-    if s.generic_type_initialisations[combined] != nil {
-        return s.generic_type_initialisations[combined], combined
+get_generic :: proc(s: ^CheckerState, generic: GenericTypeRef) -> (ExactCheckedType, u64) {
+    gen_value := get_value(s.types, Type(generic)).(GenericTypeValue)
+    combined := combine_u32(gen_value.generic_type_index, gen_value.generic_arg.index)
+    if gen_value.is_initialised {
+        val, _ := get_info(s.type_equivalancy_array[:], uint(gen_value.initialised_type))
+        return val, combined
     }
-    _, generic_arg := get_info(s.type_equivalancy_array[:], uint(generic.generic_arg))
-    if generic_arg == uint(generic.generic_arg) {
+    _, simplified_arg := get_info(s.type_equivalancy_array[:], uint(gen_value.generic_arg.index))
+    if simplified_arg == uint(gen_value.generic_arg.index) {
         return nil, combined
     }
-    key := combine_u32(generic.generic_type_index, u32(generic_arg))
-    initialised, _ := s.generic_type_initialisations[key]
-    return initialised, key
+    key := combine_u32(gen_value.generic_type_index, u32(simplified_arg))
+    return nil, key
 }
 
 initialise_generic :: proc(
     s: ^CheckerState,
-    generic_type_index: u32,
-    generic_arg: u32,
-    combined: u64,
+    gen_ref: GenericTypeRef,
     loc := #caller_location,
 ) -> ExactCheckedType {
+    gen_value := get_value(s.types, Type(gen_ref)).(GenericTypeValue)
+    combined := combine_u32(gen_value.generic_type_index, gen_value.generic_arg.index)
     when debug_checker {
         print_call(loc, "initialise_generic")
-        print_arg("generic_type_index", generic_type_index)
-        print_arg("generic_arg", generic_arg)
+        print_arg("generic_type_index", gen_value.generic_type_index)
+        print_arg("generic_arg", gen_value.generic_arg.index)
     }
-    if s.generic_type_initialisations[combined] != nil {
-        return s.generic_type_initialisations[combined]
+    if gen_value.is_initialised {
+        val, _ := get_info(s.type_equivalancy_array[:], uint(gen_value.initialised_type))
+        return val
     }
-    arg, generic_arg_uint := get_info(s.type_equivalancy_array[:], uint(generic_arg))
-    key: u64 = ---
-    if generic_arg_uint == uint(generic_arg) {
-        key = combined
-    } else {
-        key = combine_u32(generic_type_index, u32(generic_arg_uint))
-        out, exists := s.generic_type_initialisations[key]
-        if exists && out != nil {
-            return out
-        }
-    }
-    assert(s.generic_being_initialised.generic_type_index == max(u32))
-    assert(s.generic_being_initialised.generic_arg == max(u32))
-    s.generic_being_initialised = GenericType(u32){generic_type_index, u32(generic_arg_uint)}
+    arg, generic_arg_uint := get_info(
+        s.type_equivalancy_array[:],
+        uint(gen_value.generic_arg.index),
+    )
+    simplified_arg := u32(generic_arg_uint)
     out := create_generic_type_elem(
         s,
-        s.global_types_with_generics[generic_type_index].generic_type,
+        s.global_types_with_generics[gen_value.generic_type_index].generic_type,
         arg,
     )
-    s.generic_being_initialised = GenericType(u32){max(u32), max(u32)}
-    s.generic_type_initialisations[key] = out
+    ref := append_to_type_equivalancy_array(s, out)
+    s.types.values[Type(gen_ref).index].value = TypeValue(
+        GenericTypeValue {
+            generic_type_index = gen_value.generic_type_index,
+            generic_arg = Type{index = simplified_arg},
+            is_initialised = true,
+            initialised_type = ref,
+        },
+    )
     return out
 }
 
@@ -1106,13 +1100,8 @@ simplify_type :: proc(
         #partial switch t in cur_type {
         case nil:
             panic("Unreachable")
-        case GenericType(u32):
-            cur_type = initialise_generic(
-                s,
-                t.generic_type_index,
-                t.generic_arg,
-                combine_u32(t.generic_type_index, u32(t.generic_arg)),
-            )
+        case GenericTypeRef:
+            cur_type = initialise_generic(s, t)
         case GlobalTypeWithoutGenericRef:
             cur_type = s.global_types_without_generics[t.index].exact_type
         case SumVariant(^ExactCheckedType):
@@ -1202,7 +1191,7 @@ struct_is_equal :: proc(
     s: ^CheckerState,
     type0: Struct(ExactCheckedType),
     type1: Struct(ExactCheckedType),
-    fully_equilize_types: bool,
+    fully_equilize_types: bool, // TODO HACK
 ) -> bool {
     if len(type0.fields) != len(type1.fields) {
         return false
@@ -1383,12 +1372,14 @@ type_is_equal :: proc(
             return false
         }
         return t0 == t1
-    case GenericType(u32):
-        t1, is_generic_type_ref := type1.(GenericType(u32))
+    case GenericTypeRef:
+        t1, is_generic_type_ref := type1.(GenericTypeRef)
         if !is_generic_type_ref {
             return false
         }
-        if t0.generic_type_index != t1.generic_type_index {
+        tv0 := get_value(s.types, Type(t0)).(GenericTypeValue)
+        tv1 := get_value(s.types, Type(t1)).(GenericTypeValue)
+        if tv0.generic_type_index != tv1.generic_type_index {
             return false
         }
         generic0, key0 := get_generic(s, t0)
@@ -1397,12 +1388,31 @@ type_is_equal :: proc(
             // Compare initialised types rather than generic args so that nested initialised types become equated properly
             return type_is_equal(s, generic0, generic1, false)
         } else {
-            equal := type_is_equal2(s, t0.generic_arg, t1.generic_arg, fully_equilize_types)
+            equal := type_is_equal2(
+                s,
+                tv0.generic_arg.index,
+                tv1.generic_arg.index,
+                fully_equilize_types,
+            )
             if equal {
                 if generic0 != nil && generic1 == nil {
-                    s.generic_type_initialisations[key1] = generic0
+                    s.types.values[Type(t1).index].value = TypeValue(
+                        GenericTypeValue {
+                            generic_type_index = tv1.generic_type_index,
+                            generic_arg = tv1.generic_arg,
+                            is_initialised = true,
+                            initialised_type = tv0.initialised_type,
+                        },
+                    )
                 } else if generic1 != nil && generic0 == nil {
-                    s.generic_type_initialisations[key0] = generic1
+                    s.types.values[Type(t0).index].value = TypeValue(
+                        GenericTypeValue {
+                            generic_type_index = tv0.generic_type_index,
+                            generic_arg = tv0.generic_arg,
+                            is_initialised = true,
+                            initialised_type = tv1.initialised_type,
+                        },
+                    )
                 }
             }
             return equal
@@ -1567,12 +1577,10 @@ build_type_string :: proc(
         build_struct_string(s, b, type)
     case GlobalTypeWithoutGenericRef:
         strings.write_string(b, s.global_types_without_generics[type.index].ast_node.name)
-    case GenericType(u32):
-        generic_arg, _ := get_info(s.type_equivalancy_array[:], uint(type.generic_arg))
-        strings.write_string(
-            b,
-            s.global_types_with_generics[type.generic_type_index].ast_node.name,
-        )
+    case GenericTypeRef:
+        tv := get_value(s.types, Type(type)).(GenericTypeValue)
+        generic_arg, _ := get_info(s.type_equivalancy_array[:], uint(tv.generic_arg.index))
+        strings.write_string(b, s.global_types_with_generics[tv.generic_type_index].ast_node.name)
         strings.write_byte(b, '[')
         build_type_string(s, b, generic_arg)
         strings.write_byte(b, ']')
@@ -3023,7 +3031,8 @@ check_function :: proc(
     if !block_ok {
         return CheckedFunction{}, false
     }
-    return CheckedFunction{FuncTypeRef(Type{index = u32(simplified_index)}), variables, body[:]}, true
+    return CheckedFunction{FuncTypeRef(Type{index = u32(simplified_index)}), variables, body[:]},
+        true
 }
 
 length_of_array :: proc(type: ArrayType(u32), value: CheckedValue) -> CheckedValue {
@@ -3124,7 +3133,6 @@ CheckerOutput :: struct {
 Checked :: struct {
     checked_funcs:                        []CheckedFunction,
     checked_global_types_without_generic: []ExactCheckedType,
-    generic_type_initialisations:         GenericTypeInitialisationsStore,
     func_types:                           []EquivalencyArrayElem(ExactFuncType),
     type_equivalancy_array:               []EquivalencyArrayElem(ExactCheckedType),
     types:                                Types,
@@ -3142,7 +3150,6 @@ i64_to_nil_type :: FuncTypeRef(Type{index = 6}) // (I64)
 check :: proc(parsed: ParsedProject) -> CheckerOutput {
     state := CheckerState {
         files                         = parsed.files,
-        generic_being_initialised     = GenericType(u32){max(u32), max(u32)},
         global_values                 = soa_zip(
             parsed.global_values,
             make([]CheckedGlobalValue, len(parsed.global_values)),
@@ -3173,7 +3180,10 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     array_with_u64_type[0] = U64Type{}
 
     array_with_dynamic_array_of_strings := make([]ExactCheckedType, 1)
-    create_type(&state.types, TypeValue(ArrayType(Type){0, Type{u32(len(state.type_equivalancy_array))}}))
+    create_type(
+        &state.types,
+        TypeValue(ArrayType(Type){0, Type{u32(len(state.type_equivalancy_array))}}),
+    )
     array_with_dynamic_array_of_strings[0] = ArrayType(u32) {
         0,
         u32(len(state.type_equivalancy_array)),
@@ -3295,10 +3305,14 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
             }
             return_types := make([]ExactCheckedType, 1)
             return_types[0] = GlobalTypeWithoutGenericRef{uint(i)}
-            state.global_types_without_generics[i].function_type = FuncTypeRef(Type{index = u32(len(state.func_types))})
+            state.global_types_without_generics[i].function_type = FuncTypeRef(
+                Type{index = u32(len(state.func_types))},
+            )
             append_elem(&state.func_types, ExactFuncType{args, return_types, .Normal})
         } else {
-            state.global_types_without_generics[i].function_type = FuncTypeRef(Type{index = max(u32)})
+            state.global_types_without_generics[i].function_type = FuncTypeRef(
+                Type{index = max(u32)},
+            )
         }
     }
 
@@ -3348,9 +3362,12 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         debug("Initialising uninitialised generic types")
         debug_nesting += 1
     }
-    for key in state.generic_type_initialisations {
-        generic_type_index, generic_arg := seperate_u64(key)
-        initialise_generic(&state, generic_type_index, generic_arg, key)
+    for _, i in state.types.values {
+        tv := state.types.values[i].value
+        gen_value, ok := tv.(GenericTypeValue)
+        if ok && !gen_value.is_initialised {
+            initialise_generic(&state, GenericTypeRef(Type{index = u32(i)}))
+        }
     }
     when debug_checker {
         debug_nesting -= 1
@@ -3436,7 +3453,10 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         if !main_ok {
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
-        main_info, _ := get_info(state.func_types[:], uint(checked_functions[main_ref.index].type.index))
+        main_info, _ := get_info(
+            state.func_types[:],
+            uint(checked_functions[main_ref.index].type.index),
+        )
         if main_info.type != .Normal {
             err(
                 &state,
@@ -3454,7 +3474,6 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     checked := Checked {
         checked_functions,
         state.global_types_without_generics.exact_type[:len(state.global_types_without_generics)],
-        state.generic_type_initialisations,
         state.func_types[:],
         state.type_equivalancy_array[:],
         state.types,

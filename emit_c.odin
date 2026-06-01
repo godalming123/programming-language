@@ -7,6 +7,7 @@ EmitterState :: struct {
     b:                      strings.Builder,
     func_types:             []EquivalencyArrayElem(ExactFuncType),
     type_equivalancy_array: []EquivalencyArrayElem(ExactCheckedType),
+    c:                      Checked,
 }
 
 variable_format :: "nesting_level%dindex%d"
@@ -20,13 +21,14 @@ emit_variable :: proc(b: ^strings.Builder, variable: VariableRef) {
 
 emit_generic_name :: proc(
     b: ^strings.Builder,
-    generic: GenericType(u32),
+    generic_type_index: u32,
+    generic_arg: u32,
     emit_struct_keyword: bool,
 ) {
     if emit_struct_keyword {
         strings.write_string(b, "struct ")
     }
-    name := fmt.aprintf(generic_name_format, generic.generic_type_index, generic.generic_arg)
+    name := fmt.aprintf(generic_name_format, generic_type_index, generic_arg)
     strings.write_string(b, name)
     delete_string(name)
 }
@@ -68,11 +70,13 @@ emit_sum_variant :: proc(
         panic(
             "TODO: Handle inline sum types in checker so that C emitter does not have to emit them",
         )
-    case GenericType(u32):
-        _, simplified_index := get_info(s.type_equivalancy_array, uint(type.generic_arg))
+    case GenericTypeRef:
+        tv := get_value(s.c.types, Type(type)).(GenericTypeValue)
+        _, simplified_index := get_info(s.type_equivalancy_array, uint(tv.generic_arg.index))
         emit_generic_name(
             &s.b,
-            GenericType(u32){type.generic_type_index, u32(simplified_index)},
+            tv.generic_type_index,
+            u32(simplified_index),
             emit_struct_keyword,
         )
         strings.write_string(&s.b, "Variant")
@@ -131,11 +135,13 @@ emit_type :: proc(
     case GlobalTypeWithoutGenericRef:
         strings.write_string(&s.b, "struct Global")
         strings.write_uint(&s.b, t.index)
-    case GenericType(u32):
-        _, simplified_index := get_info(s.type_equivalancy_array, uint(t.generic_arg))
+    case GenericTypeRef:
+        tv := get_value(s.c.types, Type(t)).(GenericTypeValue)
+        _, simplified_index := get_info(s.type_equivalancy_array, uint(tv.generic_arg.index))
         emit_generic_name(
             &s.b,
-            GenericType(u32){t.generic_type_index, u32(simplified_index)},
+            tv.generic_type_index,
+            u32(simplified_index),
             true,
         )
     case SumVariant(^ExactCheckedType):
@@ -698,7 +704,7 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
 }
 
 emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
-    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array}
+    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array, c}
     strings.write_bytes(&s.b, #load("glue.c"))
 
     for global, index in c.checked_global_types_without_generic {
@@ -741,27 +747,23 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
     }
 
     emitted_generic_type_defs := map[u64]struct{}{}
-    for key, value in c.generic_type_initialisations {
-        global_type_index, generic_arg_ref := seperate_u64(key)
-        _, simplified_generic_arg_ref := get_info(c.type_equivalancy_array, uint(generic_arg_ref))
-        new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
+    for _, i in c.types.values {
+        tv := c.types.values[i].value
+        gen_value, ok := tv.(GenericTypeValue)
+        if !ok || !gen_value.is_initialised {
+            continue
+        }
+        _, simplified_arg := get_info(c.type_equivalancy_array, uint(gen_value.generic_arg.index))
+        new_key := combine_u32(gen_value.generic_type_index, u32(simplified_arg))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
             continue
         }
-        new_value: ExactCheckedType = ---
-        if value == nil {
-            new_value = c.generic_type_initialisations[new_key]
-            if new_value == nil {
-                continue
-            }
-        } else {
-            new_value = value
-        }
         emitted_generic_type_defs[new_key] = struct{}{}
-        name := fmt.aprintf(generic_name_format, global_type_index, simplified_generic_arg_ref)
+        name := fmt.aprintf(generic_name_format, gen_value.generic_type_index, simplified_arg)
         defer delete(name)
-        emit_c_global_type(&s, name, new_value)
+        gen_value_type, _ := get_info(c.type_equivalancy_array, uint(gen_value.initialised_type))
+        emit_c_global_type(&s, name, gen_value_type)
     }
 
     for func, index in c.checked_funcs {

@@ -320,7 +320,7 @@ emit_js_block :: proc(
 }
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
-    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array}
+    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array, c}
 
     for global, index in c.checked_global_types_without_generic {
         name := fmt.aprintf("Global%d", index)
@@ -329,27 +329,23 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
     }
 
     emitted_generic_type_defs := map[u64]struct{}{}
-    for key, value in c.generic_type_initialisations {
-        global_type_index, generic_arg_ref := seperate_u64(key)
-        _, simplified_generic_arg_ref := get_info(c.type_equivalancy_array, uint(generic_arg_ref))
-        new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
+    for _, i in c.types.values {
+        tv := c.types.values[i].value
+        gen_value, ok := tv.(GenericTypeValue)
+        if !ok || !gen_value.is_initialised {
+            continue
+        }
+        _, simplified_arg := get_info(c.type_equivalancy_array, uint(gen_value.generic_arg.index))
+        new_key := combine_u32(gen_value.generic_type_index, u32(simplified_arg))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
             continue
         }
-        new_value: ExactCheckedType = ---
-        if value == nil {
-            new_value = c.generic_type_initialisations[new_key]
-            if new_value == nil {
-                continue
-            }
-        } else {
-            new_value = value
-        }
         emitted_generic_type_defs[new_key] = struct{}{}
-        name := fmt.aprintf(generic_name_format, global_type_index, simplified_generic_arg_ref)
+        name := fmt.aprintf(generic_name_format, gen_value.generic_type_index, simplified_arg)
         defer delete(name)
-        emit_js_global_type(&s, name, new_value)
+        gen_value_type, _ := get_info(c.type_equivalancy_array, uint(gen_value.initialised_type))
+        emit_js_global_type(&s, name, gen_value_type)
     }
 
     for func, index in c.checked_funcs {

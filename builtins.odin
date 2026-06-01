@@ -262,7 +262,7 @@ to_str :: proc(
     case FuncTypeRef:
         err(s, pos, "Cannot convert function to string")
         return nil
-    case GenericType(u32):
+    case GenericTypeRef:
         err(s, pos, "Cannot convert generic type to string")
         return nil
     case GlobalTypeWithoutGenericRef:
