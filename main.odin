@@ -13,6 +13,7 @@ debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
 debug_equivalency_arrays :: false
+debug_ordered_hash_sets :: false
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {

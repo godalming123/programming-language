@@ -1,7 +1,7 @@
 package main
 
 // - Zero collision ordered hash set implementation
-// - ALso has "merging", where 2 slightly different values in the has map can be
+// - Also has "merging", where 2 slightly different values in the has map can be
 //   merged into one value with the same reference
 
 // TODO: Benchmarks:
@@ -38,7 +38,15 @@ get_value :: proc(ordered_hash_set: OrderedHashSet($Value), ref: OrderedHashSetS
     return ordered_hash_set.values[ref.index].value
 }
 
-resize :: proc(ordered_hash_set: ^OrderedHashSet($Value), new_slots_len: u32) {
+resize :: proc(
+    ordered_hash_set: ^OrderedHashSet($Value),
+    new_slots_len: u32,
+    loc := #caller_location,
+) {
+    when debug_ordered_hash_sets {
+        print_call(loc, "resize")
+        debug("new_slots_len: %d", new_slots_len)
+    }
     delete(ordered_hash_set.slots)
     ordered_hash_set.slots = make([]OrderedHashSetSlotRef, new_slots_len)
     mem.set(
@@ -46,27 +54,37 @@ resize :: proc(ordered_hash_set: ^OrderedHashSet($Value), new_slots_len: u32) {
         max(u8),
         int(new_slots_len) * size_of(OrderedHashSetSlotRef),
     )
+
     for value, index in ordered_hash_set.values {
-        slot_index := get_index(u32(len(ordered_hash_set.slots)), value.hash)
-
-        for i in slot_index ..< new_slots_len {
-            if ordered_hash_set.slots[index].index == max(u32) {
-                ordered_hash_set.slots[index] = OrderedHashSetSlotRef{i}
-                return
+        find_index_of_free_slot :: proc(
+            slots: []OrderedHashSetSlotRef,
+            start_slot_index: u32,
+        ) -> u32 {
+            for i in start_slot_index ..< u32(len(slots)) {
+                if slots[i].index == max(u32) {
+                    return i
+                }
             }
+            for i in 0 ..< start_slot_index {
+                if slots[i].index == max(u32) {
+                    return i
+                }
+            }
+            panic("Unreachable")
         }
 
-        for i in 0 ..< slot_index {
-            if ordered_hash_set.slots[index].index == max(u32) {
-                ordered_hash_set.slots[index] = OrderedHashSetSlotRef{i}
-                return
-            }
+        start_slot_index := get_index(new_slots_len, value.hash)
+        free_slot_index := find_index_of_free_slot(ordered_hash_set.slots, start_slot_index)
+
+        when debug_ordered_hash_sets {
+            debug("index: %d", index)
+            debug("start_slot_index: %d", start_slot_index)
+            debug("free_slot_index: %d", free_slot_index)
         }
 
-        panic("Unreachable")
+        ordered_hash_set.slots[free_slot_index] = OrderedHashSetSlotRef{u32(index)}
     }
 }
-
 
 insert :: proc(
     ordered_hash_set: ^OrderedHashSet($Value),
@@ -76,7 +94,13 @@ insert :: proc(
     // The `bool` returned is whether the values can be merged
     // The `Value` returned is the merged value
     equal_merge_func: proc(_: Value, _: Value) -> (bool, Value),
+    loc := #caller_location,
 ) -> OrderedHashSetSlotRef {
+    when debug_ordered_hash_sets {
+        print_call(loc, "insert")
+        debug("hash: %d", hash)
+        debug("value: %v", value)
+    }
     if len(ordered_hash_set.values) == 0 {
         append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
         resize(ordered_hash_set, ordered_hash_set_size_with_one_elem)
@@ -86,6 +110,9 @@ insert :: proc(
     i := get_index(len(ordered_hash_set.slots), int(hash))
     for {
         if ordered_hash_set.slots[i].index == max(u32) {
+            when debug_ordered_hash_sets {
+                debug("found empty slot at index %d", i)
+            }
             out := OrderedHashSetSlotRef{u32(len(ordered_hash_set.values))}
             append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
             minimum_number_of_slots :=
@@ -107,6 +134,13 @@ insert :: proc(
             value,
             ordered_hash_set.values[slot_value.index].value,
         )
+        when debug_ordered_hash_sets {
+            debug("equal merge func called")
+            debug("value: %v", value)
+            debug("existing: %v", ordered_hash_set.values[slot_value.index].value)
+            debug("is_equal: %b", is_equal)
+            debug("merged: %v", merged)
+        }
         if is_equal {
             ordered_hash_set.values[slot_value.index].value = merged
             return slot_value

@@ -5,8 +5,8 @@ import "core:strings"
 
 EmitterState :: struct {
     b:                      strings.Builder,
-    func_types:             []EquivalencyArrayElem(ExactFuncType),
-    type_equivalancy_array: []EquivalencyArrayElem(ExactCheckedType),
+    types:                  Types,
+    type_equivalancy_array: []ExactCheckedType,
     c:                      Checked,
 }
 
@@ -33,11 +33,11 @@ emit_generic_name :: proc(
     delete_string(name)
 }
 
-emit_array_type :: proc(b: ^strings.Builder, length: u32, simplified_item_type_ref: u32) {
+emit_array_type :: proc(b: ^strings.Builder, length: u32, item_type: Type) {
     strings.write_string(b, "struct ArrayWhereLengthIs")
     strings.write_uint(b, uint(length))
     strings.write_string(b, "AndUniqueTypeIndexIs")
-    strings.write_uint(b, uint(simplified_item_type_ref))
+    strings.write_uint(b, uint(item_type.index))
 }
 
 // Does not include the `struct`
@@ -70,13 +70,12 @@ emit_sum_variant :: proc(
         panic(
             "TODO: Handle inline sum types in checker so that C emitter does not have to emit them",
         )
-    case GenericTypeRef:
-        tv := get_value(s.c.types, Type(type)).(GenericTypeValue)
-        _, simplified_index := get_info(s.type_equivalancy_array, uint(tv.generic_arg.index))
+    case Type:
+        tv := get_value(s.c.types, type).(GenericTypeValue)
         emit_generic_name(
             &s.b,
             tv.generic_type_index,
-            u32(simplified_index),
+            u32(tv.generic_arg.index),
             emit_struct_keyword,
         )
         strings.write_string(&s.b, "Variant")
@@ -93,6 +92,46 @@ emit_sum_variant :: proc(
     }
 }
 
+emit_type2 :: proc(s: ^EmitterState, name: string, type: Type) {
+    switch t in get_type(s.types, type) {
+    case nil:
+        panic("unreachable")
+    case ArrayType(Type):
+        emit_array_type(&s.b, t.length, t.item_type)
+    case SumType(Type, struct {}):
+        panic("TODO")
+    case TypeEquivilancyArrayRef:
+        emit_type(s, name, s.type_equivalancy_array[t.index])
+        return
+    case FuncType(Type):
+        switch len(t.return_types) {
+        case 0:
+            strings.write_string(&s.b, "void")
+        case 1:
+            emit_type(s, "", t.return_types[0])
+        case:
+            panic("TODO")
+        }
+        strings.write_string(&s.b, " (*")
+        strings.write_string(&s.b, name)
+        strings.write_string(&s.b, ")(")
+        is_first_arg := true
+        for arg in t.args {
+            if !is_first_arg {
+                strings.write_byte(&s.b, ',')
+            }
+            emit_type(s, "", arg)
+            is_first_arg = false
+        }
+        strings.write_byte(&s.b, ')')
+        return
+    case GenericTypeValue:
+        emit_generic_name(&s.b, t.generic_type_index, u32(t.generic_arg.index), true)
+    }
+    strings.write_byte(&s.b, ' ')
+    strings.write_string(&s.b, name)
+}
+
 emit_type :: proc(
     s: ^EmitterState,
     name: string,
@@ -104,46 +143,23 @@ emit_type :: proc(
         print_arg("name", name)
         print_arg("type", type)
     }
-    switch &t in type {
+    switch t in type {
     case:
         panic(fmt.aprintf("Unreachable (type was %v)", type))
     case SumType(ExactCheckedType, FuncTypeRef):
         panic("TODO: Emit inline checked sum type for C emitter")
-    case FuncTypeRef:
-        type_info, _ := get_info(s.func_types, uint(t.index))
-        switch len(type_info.return_types) {
-        case 0:
-            strings.write_string(&s.b, "void")
-        case 1:
-            emit_type(s, "", type_info.return_types[0])
-        case:
-            panic("TODO")
+    case Type:
+        emit_type2(s, name, t)
+        return
+    case TypeEquivilancyArrayRef:
+        when debug_emitter {
+            debug("Type equivalancy array index: %d", t.index)
         }
-        strings.write_string(&s.b, " (*")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, ")(")
-        is_first_arg := true
-        for arg in type_info.args {
-            if !is_first_arg {
-                strings.write_byte(&s.b, ',')
-            }
-            emit_type(s, "", arg)
-            is_first_arg = false
-        }
-        strings.write_byte(&s.b, ')')
+        emit_type(s, name, s.type_equivalancy_array[t.index])
         return
     case GlobalTypeWithoutGenericRef:
         strings.write_string(&s.b, "struct Global")
         strings.write_uint(&s.b, t.index)
-    case GenericTypeRef:
-        tv := get_value(s.c.types, Type(t)).(GenericTypeValue)
-        _, simplified_index := get_info(s.type_equivalancy_array, uint(tv.generic_arg.index))
-        emit_generic_name(
-            &s.b,
-            tv.generic_type_index,
-            u32(simplified_index),
-            true,
-        )
     case SumVariant(^ExactCheckedType):
         emit_sum_variant(s, t.sum_type^, t.variant_index, true)
     case Struct(ExactCheckedType):
@@ -169,9 +185,8 @@ emit_type :: proc(
         strings.write_string(&s.b, "uint16_t")
     case U8Type:
         strings.write_string(&s.b, "uint8_t")
-    case ArrayType(u32):
-        _, simplified_item_type_ref := get_info(s.type_equivalancy_array, uint(t.item_type))
-        emit_array_type(&s.b, t.length, u32(simplified_item_type_ref))
+    // case ArrayType(u32):
+    // emit_array_type(&s.b, t.length, u32(t.item_type))
     }
     strings.write_byte(&s.b, ' ')
     strings.write_string(&s.b, name)
@@ -495,11 +510,7 @@ emit_c_block_body :: proc(
                 strings.write_string(&s.b, ".elems = malloc(")
                 emit_variable(&s.b, stmt.variable)
                 strings.write_string(&s.b, ".length * sizeof(")
-                item_type, _ := get_info(
-                    s.type_equivalancy_array,
-                    uint(stmt.variable_type.item_type),
-                )
-                emit_type(s, "", item_type)
+                emit_type(s, "", stmt.variable_type.item_type)
                 strings.write_string(&s.b, "));")
             }
             strings.write_string(&s.b, "{uint64_t index = 0;")
@@ -676,9 +687,9 @@ emit_c_global_type :: proc(
 
 emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef) {
     when debug_emitter {
-        debug("emitting function index %d", index)
+        debug("emitting function index %d", func_index)
     }
-    info, _ := get_info(s.func_types, uint(type.index))
+    info := get_type(s.types, Type(type)).(FuncType(Type))
     switch len(info.return_types) {
     case 0:
         strings.write_string(&s.b, "void")
@@ -704,7 +715,7 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
 }
 
 emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
-    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array, c}
+    s := EmitterState{strings.builder_make(), c.types, c.type_equivalancy_array, c}
     strings.write_bytes(&s.b, #load("glue.c"))
 
     for global, index in c.checked_global_types_without_generic {
@@ -720,28 +731,23 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
             continue
         }
         length := array_type.length
-        item_type_ref := array_type.item_type.index
-        item_type, simplified_item_type_ref := get_info(
-            c.type_equivalancy_array,
-            uint(item_type_ref),
-        )
-        new_key := combine_u32(length, u32(simplified_item_type_ref))
+        new_key := combine_u32(length, array_type.item_type.index)
         _, emitted := emitted_array_type_defs[new_key]
         if emitted {
             continue
         }
         emitted_array_type_defs[new_key] = struct{}{}
 
-        emit_array_type(&s.b, length, u32(simplified_item_type_ref))
+        emit_array_type(&s.b, length, array_type.item_type)
         if length != 0 {
             strings.write_byte(&s.b, '{')
-            emit_type(&s, "", item_type)
+            emit_type(&s, "", array_type.item_type)
             strings.write_string(&s.b, " elems[")
             strings.write_uint(&s.b, uint(length))
             strings.write_string(&s.b, "];};")
         } else {
             strings.write_string(&s.b, "{uint64_t length;")
-            emit_type(&s, "", item_type)
+            emit_type(&s, "", array_type.item_type)
             strings.write_string(&s.b, "* elems;};")
         }
     }
@@ -753,17 +759,19 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
         if !ok || !gen_value.is_initialised {
             continue
         }
-        _, simplified_arg := get_info(c.type_equivalancy_array, uint(gen_value.generic_arg.index))
-        new_key := combine_u32(gen_value.generic_type_index, u32(simplified_arg))
+        new_key := combine_u32(gen_value.generic_type_index, u32(gen_value.generic_arg.index))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
             continue
         }
         emitted_generic_type_defs[new_key] = struct{}{}
-        name := fmt.aprintf(generic_name_format, gen_value.generic_type_index, simplified_arg)
+        name := fmt.aprintf(
+            generic_name_format,
+            gen_value.generic_type_index,
+            gen_value.generic_arg.index,
+        )
         defer delete(name)
-        gen_value_type, _ := get_info(c.type_equivalancy_array, uint(gen_value.initialised_type))
-        emit_c_global_type(&s, name, gen_value_type)
+        emit_c_global_type(&s, name, gen_value.initialised_type)
     }
 
     for func, index in c.checked_funcs {

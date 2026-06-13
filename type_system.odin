@@ -2,11 +2,24 @@ package main
 
 Type :: OrderedHashSetSlotRef
 
+// TODO: Use these
+string_type :: Type{max(u32)}
+i64_type :: Type{max(u32) - 1}
+i32_type :: Type{max(u32) - 2}
+i16_type :: Type{max(u32) - 3}
+i8_type :: Type{max(u32) - 4}
+u64_type :: Type{max(u32) - 5}
+u32_type :: Type{max(u32) - 6}
+u16_type :: Type{max(u32) - 7}
+u8_type :: Type{max(u32) - 8}
+bool_type :: Type{max(u32) - 9}
+max_index :: max(u32) - 10
+
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
     generic_arg:        Type,
     is_initialised:     bool,
-    initialised_type:   u32, // an index into type_equivalancy_array
+    initialised_type:   ExactCheckedType,
 }
 
 TypeValue :: union {
@@ -14,16 +27,32 @@ TypeValue :: union {
     SumType(Type, struct {}),
     FuncType(Type),
     GenericTypeValue,
+    TypeEquivilancyArrayRef, // TODO: Remove this
 }
 
 Types :: OrderedHashSet(TypeValue)
 
-create_type :: proc(types: ^Types, value: TypeValue) -> Type {
-    return insert(types, hash_type_value(value), value, merge_type_value)
+get_type :: proc(types: Types, t: Type) -> TypeValue {
+    assert(t.index <= max_index)
+    return get_value(types, t)
+}
+
+create_type :: proc(types: ^Types, value: TypeValue, loc := #caller_location) -> Type {
+    when debug_checker {
+        print_call(loc, "create_type")
+        debug("value: %v", value)
+    }
+    out := insert(types, hash_type_value(value), value, merge_type_value)
+    when debug_checker {
+        debug("out: %v", out)
+    }
+    return out
 }
 
 hash_type_value :: proc(value: TypeValue) -> u32 {
     switch v in value {
+    case TypeEquivilancyArrayRef:
+        return v.index
     case ArrayType(Type):
         return v.length ~ v.item_type.index
     case SumType(Type, struct {}):
@@ -66,6 +95,12 @@ hash_func_type :: proc(value: FuncType(Type)) -> u32 {
 
 merge_type_value :: proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
     #partial switch va in a {
+    case TypeEquivilancyArrayRef:
+        vb, ok := b.(TypeEquivilancyArrayRef)
+        if !ok {
+            return false, a
+        }
+        return va == vb, a
     case ArrayType(Type):
         vb, ok := b.(ArrayType(Type))
         if !ok {

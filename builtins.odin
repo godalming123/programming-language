@@ -34,25 +34,25 @@ builtin_emit_js_code :: 11
 get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, ExactCheckedType) {
     switch name {
     case "print":
-        return builtin_print, string_to_nil_type
+        return builtin_print, Type(s.string_to_nil_type)
     case "println":
-        return builtin_println, string_to_nil_type
+        return builtin_println, Type(s.string_to_nil_type)
     case "eprint":
-        return builtin_eprint, string_to_nil_type
+        return builtin_eprint, Type(s.string_to_nil_type)
     case "eprintln":
-        return builtin_eprintln, string_to_nil_type
+        return builtin_eprintln, Type(s.string_to_nil_type)
     case "readline":
-        return builtin_readline, string_to_string_type
+        return builtin_readline, Type(s.string_to_string_type)
     case "read_file":
-        return builtin_read_file, string_to_string_type
+        return builtin_read_file, Type(s.string_to_string_type)
     case "write_file":
-        return builtin_write_file, string_string_to_nil_type
+        return builtin_write_file, Type(s.string_string_to_nil_type)
     case "clear":
-        return builtin_clear, no_args_to_nil_type
+        return builtin_clear, Type(s.no_args_to_nil_type)
     case "run_executable":
-        return builtin_run_executable, array_of_strings_to_nil_type
+        return builtin_run_executable, Type(s.array_of_strings_to_nil_type)
     case "exit":
-        return builtin_exit, i64_to_nil_type
+        return builtin_exit, Type(s.i64_to_nil_type)
     case:
         return max(u32), nil
     }
@@ -235,7 +235,7 @@ to_str :: proc(
     type: ExactCheckedType,
 ) -> CheckedValue {
     from_type: ToStringFromType = ---
-    switch _ in type {
+    switch t in type {
     case BoolType:
         from_type = .BoolType
     case StringType:
@@ -256,15 +256,19 @@ to_str :: proc(
         from_type = .U16Type
     case U8Type:
         from_type = .U8Type
-    case ArrayType(u32):
-        err(s, pos, "Cannot convert array to string")
-        return nil
-    case FuncTypeRef:
-        err(s, pos, "Cannot convert function to string")
-        return nil
-    case GenericTypeRef:
-        err(s, pos, "Cannot convert generic type to string")
-        return nil
+    // case ArrayType(u32):
+    // err(s, pos, "Cannot convert array to string")
+    // return nil
+    case Type:
+        // TODO
+        if ref, is_ref := get_type(s.types, t).(TypeEquivilancyArrayRef); is_ref {
+            return to_str(s, pos, val, s.type_equivalancy_array[ref.index])
+        } else {
+            err(s, pos, "Cannot convert Type to string")
+            return nil
+        }
+    case TypeEquivilancyArrayRef:
+        return to_str(s, pos, val, s.type_equivalancy_array[t.index])
     case GlobalTypeWithoutGenericRef:
         err(s, pos, "Cannot convert global type to string")
         return nil

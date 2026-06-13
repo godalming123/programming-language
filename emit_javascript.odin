@@ -320,7 +320,7 @@ emit_js_block :: proc(
 }
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
-    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array, c}
+    s := EmitterState{strings.builder_make(), c.types, c.type_equivalancy_array, c}
 
     for global, index in c.checked_global_types_without_generic {
         name := fmt.aprintf("Global%d", index)
@@ -335,17 +335,19 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
         if !ok || !gen_value.is_initialised {
             continue
         }
-        _, simplified_arg := get_info(c.type_equivalancy_array, uint(gen_value.generic_arg.index))
-        new_key := combine_u32(gen_value.generic_type_index, u32(simplified_arg))
+        new_key := combine_u32(gen_value.generic_type_index, u32(gen_value.generic_arg.index))
         _, emitted := emitted_generic_type_defs[new_key]
         if emitted {
             continue
         }
         emitted_generic_type_defs[new_key] = struct{}{}
-        name := fmt.aprintf(generic_name_format, gen_value.generic_type_index, simplified_arg)
+        name := fmt.aprintf(
+            generic_name_format,
+            gen_value.generic_type_index,
+            gen_value.generic_arg.index,
+        )
         defer delete(name)
-        gen_value_type, _ := get_info(c.type_equivalancy_array, uint(gen_value.initialised_type))
-        emit_js_global_type(&s, name, gen_value_type)
+        emit_js_global_type(&s, name, gen_value.initialised_type)
     }
 
     for func, index in c.checked_funcs {
@@ -355,7 +357,7 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info, _ := get_info(c.func_types, uint(func.type.index))
+        info := get_type(c.types, Type(func.type)).(FuncType(Type))
         first_arg := true
         for _, i in info.args {
             if first_arg {
