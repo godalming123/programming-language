@@ -343,10 +343,11 @@ basic_type_system_test :: proc(t: ^testing.T) {
     type0 := create_type(&types, TypeEquivilancyArrayRef{0})
     type1 := create_type(&types, TypeEquivilancyArrayRef{1})
     generic0 := create_type(&types, GenericTypeValue{7, type0, false, nil})
-    generic1 := create_type(&types, GenericTypeValue{7, type0, true, I64Type{}})
+    generic1 := create_type(&types, GenericTypeValue{7, type0, true, i64_type})
     generic2 := create_type(&types, GenericTypeValue{7, type1, false, nil})
     assert(generic0 == generic1)
-    generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type.(I64Type)
+    generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
+    assert(generic0_initialised.(Type) == i64_type)
     assert(generic0 != generic2)
 }
 

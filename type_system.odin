@@ -2,7 +2,6 @@ package main
 
 Type :: OrderedHashSetSlotRef
 
-// TODO: Use these
 string_type :: Type{max(u32)}
 i64_type :: Type{max(u32) - 1}
 i32_type :: Type{max(u32) - 2}
@@ -33,7 +32,9 @@ TypeValue :: union {
 Types :: OrderedHashSet(TypeValue)
 
 get_type :: proc(types: Types, t: Type) -> TypeValue {
-    assert(t.index <= max_index)
+    if t.index > max_index {
+        return nil
+    }
     return get_value(types, t)
 }
 

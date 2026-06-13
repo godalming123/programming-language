@@ -236,36 +236,36 @@ to_str :: proc(
 ) -> CheckedValue {
     from_type: ToStringFromType = ---
     switch t in type {
-    case BoolType:
-        from_type = .BoolType
-    case StringType:
-        return val
-    case I64Type:
-        from_type = .I64Type
-    case I32Type:
-        from_type = .I32Type
-    case I16Type:
-        from_type = .I16Type
-    case I8Type:
-        from_type = .I8Type
-    case U64Type:
-        from_type = .U64Type
-    case U32Type:
-        from_type = .U32Type
-    case U16Type:
-        from_type = .U16Type
-    case U8Type:
-        from_type = .U8Type
-    // case ArrayType(u32):
-    // err(s, pos, "Cannot convert array to string")
-    // return nil
     case Type:
-        // TODO
-        if ref, is_ref := get_type(s.types, t).(TypeEquivilancyArrayRef); is_ref {
-            return to_str(s, pos, val, s.type_equivalancy_array[ref.index])
-        } else {
-            err(s, pos, "Cannot convert Type to string")
-            return nil
+        switch t {
+        case bool_type:
+            from_type = .BoolType
+        case string_type:
+            return val
+        case i64_type:
+            from_type = .I64Type
+        case i32_type:
+            from_type = .I32Type
+        case i16_type:
+            from_type = .I16Type
+        case i8_type:
+            from_type = .I8Type
+        case u64_type:
+            from_type = .U64Type
+        case u32_type:
+            from_type = .U32Type
+        case u16_type:
+            from_type = .U16Type
+        case u8_type:
+            from_type = .U8Type
+        case:
+            // TODO
+            if ref, is_ref := get_type(s.types, t).(TypeEquivilancyArrayRef); is_ref {
+                return to_str(s, pos, val, s.type_equivalancy_array[ref.index])
+            } else {
+                err(s, pos, "Cannot convert Type to string")
+                return nil
+            }
         }
     case TypeEquivilancyArrayRef:
         return to_str(s, pos, val, s.type_equivalancy_array[t.index])

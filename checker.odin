@@ -222,16 +222,6 @@ GenericCheckedType :: union {
 
 ExactCheckedType :: union {
     // Same
-    StringType,
-    I64Type,
-    I32Type,
-    I16Type,
-    I8Type,
-    U64Type,
-    U32Type,
-    U16Type,
-    U8Type,
-    BoolType,
     GlobalTypeWithoutGenericRef,
 
     // Different args to generic
@@ -451,7 +441,7 @@ check_array_type :: proc(
         length = 0
     } else if len(type.args) == 1 {
         body := make([dynamic]CheckedStatement)
-        value := check_value(s, type.args[0], &body, ExactCheckedType(I64Type{}))
+        value := check_value(s, type.args[0], &body, i64_type)
         if value == nil {
             return nil
         }
@@ -729,19 +719,19 @@ CheckedStatement :: union {
 // TODO: Rework this with a general Number type
 type_is_numeric :: proc(s: ^CheckerState, type: ExactCheckedType) -> bool {
     switch t in type {
-    case I64Type, I32Type, I16Type, I8Type, U64Type, U32Type, U16Type, U8Type:
-        return true
     case TypeEquivilancyArrayRef:
         return type_is_numeric(s, s.type_equivalancy_array[t.index])
     case Type:
+        switch t {
+        case i64_type, i32_type, i16_type, i8_type, u64_type, u32_type, u16_type, u8_type:
+            return true
+        }
         ref, is_ref := get_type(s.types, t).(TypeEquivilancyArrayRef)
         if is_ref {
             return type_is_numeric(s, s.type_equivalancy_array[ref.index])
         }
         return false
-    case StringType,
-         BoolType,
-         GlobalTypeWithoutGenericRef,
+    case GlobalTypeWithoutGenericRef,
          SumType(ExactCheckedType, FuncTypeRef),
          Struct(ExactCheckedType),
          SumVariant(^ExactCheckedType):
@@ -947,25 +937,25 @@ create_generic_type_elem :: proc(
     case Struct(GenericCheckedType):
         return create_generic_struct_type(s, e, generic_arg)
     case StringType:
-        return StringType{}
+        return string_type
     case I64Type:
-        return I64Type{}
+        return i64_type
     case I32Type:
-        return I32Type{}
+        return i32_type
     case I16Type:
-        return I16Type{}
+        return i16_type
     case I8Type:
-        return I8Type{}
+        return i8_type
     case U64Type:
-        return U64Type{}
+        return u64_type
     case U32Type:
-        return U32Type{}
+        return u32_type
     case U16Type:
-        return U16Type{}
+        return u16_type
     case U8Type:
-        return U8Type{}
+        return u8_type
     case BoolType:
-        return BoolType{}
+        return bool_type
     case GenericType(^GenericCheckedType):
         // TODO
         // append_elem(&s.global_types_with_generics_initialisations[e.generic_type_index], arg_ref)
@@ -1329,39 +1319,6 @@ type_is_equal :: proc(
         return true
     case SumVariant(^ExactCheckedType):
         panic("unreachable")
-    case StringType:
-        _, is_string := type1.(StringType)
-        return is_string
-    case I64Type:
-        _, is_i64 := type1.(I64Type)
-        return is_i64
-    case I32Type:
-        _, is_i32 := type1.(I32Type)
-        return is_i32
-    case I16Type:
-        _, is_i16 := type1.(I16Type)
-        return is_i16
-    case I8Type:
-        _, is_i8 := type1.(I8Type)
-        return is_i8
-    case U64Type:
-        _, is_u64 := type1.(U64Type)
-        return is_u64
-    case U32Type:
-        _, is_u32 := type1.(U32Type)
-        return is_u32
-    case U16Type:
-        _, is_u16 := type1.(U16Type)
-        return is_u16
-    case U8Type:
-        _, is_u8 := type1.(U8Type)
-        return is_u8
-    // case JsObjectType:
-    //     _, is_js_object := type1.(JsObjectType)
-    //     return is_js_object
-    case BoolType:
-        _, is_bool := type1.(BoolType)
-        return is_bool
     case GlobalTypeWithoutGenericRef:
         t1, is_type_ref := type1.(GlobalTypeWithoutGenericRef)
         if !is_type_ref {
@@ -1502,62 +1459,85 @@ build_type_string :: proc(
     case nil:
         panic("Unreachable")
     case Type:
-        switch tv in get_type(s.types, type) {
-        case TypeEquivilancyArrayRef:
-            build_type_string(s, b, s.type_equivalancy_array[tv.index])
-        case GenericTypeValue:
-            strings.write_string(
-                b,
-                s.global_types_with_generics[tv.generic_type_index].ast_node.name,
-            )
-            strings.write_byte(b, '[')
-            build_type_string(s, b, tv.generic_arg)
-            strings.write_byte(b, ']')
-        case FuncType(Type):
-            switch tv.type {
-            case .Normal:
-            // case .JsFunc:
-            //     strings.write_string(b, "#js ")
-            case .ComptimeFunc:
-                strings.write_string(b, "#comptime ")
-            }
-            strings.write_byte(b, '(')
-            for arg, index in tv.args {
-                // TODO: Print the name and whether the arg is mutable
-                build_type_string(s, b, arg)
-                if index + 1 != len(tv.args) {
-                    strings.write_string(b, ", ")
+        switch type {
+        case string_type:
+            strings.write_string(b, "String")
+        case i64_type:
+            strings.write_string(b, "I64")
+        case i32_type:
+            strings.write_string(b, "I32")
+        case i16_type:
+            strings.write_string(b, "I16")
+        case i8_type:
+            strings.write_string(b, "I8")
+        case u64_type:
+            strings.write_string(b, "U64")
+        case u32_type:
+            strings.write_string(b, "U32")
+        case u16_type:
+            strings.write_string(b, "U16")
+        case u8_type:
+            strings.write_string(b, "U8")
+        case bool_type:
+            strings.write_string(b, "Bool")
+        case:
+            switch tv in get_type(s.types, type) {
+            case TypeEquivilancyArrayRef:
+                build_type_string(s, b, s.type_equivalancy_array[tv.index])
+            case GenericTypeValue:
+                strings.write_string(
+                    b,
+                    s.global_types_with_generics[tv.generic_type_index].ast_node.name,
+                )
+                strings.write_byte(b, '[')
+                build_type_string(s, b, tv.generic_arg)
+                strings.write_byte(b, ']')
+            case FuncType(Type):
+                switch tv.type {
+                case .Normal:
+                // case .JsFunc:
+                //     strings.write_string(b, "#js ")
+                case .ComptimeFunc:
+                    strings.write_string(b, "#comptime ")
                 }
-            }
-            strings.write_string(b, ")")
-            switch len(tv.return_types) {
-            case 0:
-            case 1:
-                strings.write_string(b, " -> ")
-                build_type_string(s, b, tv.return_types[0])
-            case:
-                strings.write_string(b, " -> (")
-                first_return_type := true
-                for return_type in tv.return_types {
-                    if first_return_type == false {
+                strings.write_byte(b, '(')
+                for arg, index in tv.args {
+                    // TODO: Print the name and whether the arg is mutable
+                    build_type_string(s, b, arg)
+                    if index + 1 != len(tv.args) {
                         strings.write_string(b, ", ")
                     }
-                    first_return_type = false
-                    build_type_string(s, b, return_type)
                 }
-                strings.write_byte(b, ')')
+                strings.write_string(b, ")")
+                switch len(tv.return_types) {
+                case 0:
+                case 1:
+                    strings.write_string(b, " -> ")
+                    build_type_string(s, b, tv.return_types[0])
+                case:
+                    strings.write_string(b, " -> (")
+                    first_return_type := true
+                    for return_type in tv.return_types {
+                        if first_return_type == false {
+                            strings.write_string(b, ", ")
+                        }
+                        first_return_type = false
+                        build_type_string(s, b, return_type)
+                    }
+                    strings.write_byte(b, ')')
+                }
+            case ArrayType(Type):
+                strings.write_byte(b, '[')
+                if tv.length != 0 {
+                    strings.write_uint(b, uint(tv.length))
+                }
+                strings.write_byte(b, ']')
+                build_type_string(s, b, tv.item_type)
+            case SumType(Type, struct {}):
+                strings.write_string(b, "TODO: Sum type")
+            case nil:
+                panic("Unreachable")
             }
-        case ArrayType(Type):
-            strings.write_byte(b, '[')
-            if tv.length != 0 {
-                strings.write_uint(b, uint(tv.length))
-            }
-            strings.write_byte(b, ']')
-            build_type_string(s, b, tv.item_type)
-        case SumType(Type, struct {}):
-            strings.write_string(b, "TODO: Sum type")
-        case nil:
-            panic("Unreachable")
         }
     case TypeEquivilancyArrayRef:
         build_type_string(s, b, s.type_equivalancy_array[type.index])
@@ -1585,26 +1565,6 @@ build_type_string :: proc(
         strings.write_string(b, sum_type.variants[type.variant_index].name.ident)
     // case JsObjectType:
     //     strings.write_string(b, "js.Object")
-    case StringType:
-        strings.write_string(b, "String")
-    case I64Type:
-        strings.write_string(b, "I64")
-    case I32Type:
-        strings.write_string(b, "I32")
-    case I16Type:
-        strings.write_string(b, "I16")
-    case I8Type:
-        strings.write_string(b, "I8")
-    case U64Type:
-        strings.write_string(b, "U64")
-    case U32Type:
-        strings.write_string(b, "U32")
-    case U16Type:
-        strings.write_string(b, "U16")
-    case U8Type:
-        strings.write_string(b, "U8")
-    case BoolType:
-        strings.write_string(b, "Bool")
     }
 }
 
@@ -1673,7 +1633,7 @@ get_expected_value_type :: proc(
     if !ok {
         return nil, nil, false
     }
-    expected_type: ExactCheckedType = I64Type{}
+    expected_type: ExactCheckedType = i64_type
     index_value := check_value(s, array_index^, body, expected_type)
     if index_value == nil {
         return array.item_type, nil, false
@@ -1824,7 +1784,7 @@ check_block :: proc(
             defer pop_scope(s)
             loop_index := s.loop_index
             s.loop_index += 1
-            condition := check_value(s, value.condition, body, ExactCheckedType(BoolType{}))
+            condition := check_value(s, value.condition, body, bool_type)
 
             loop_body_array := make([dynamic]CheckedStatement)
             exit_loop := make([]CheckedStatement, 1)
@@ -1874,7 +1834,7 @@ check_block :: proc(
                     return nil, false
                 }
                 elem_ref, elem_ok := add_variable(s, array_item_type, false, value.variables[0])
-                index_ref, index_ok := add_variable(s, I64Type{}, false, value.variables[1])
+                index_ref, index_ok := add_variable(s, i64_type, false, value.variables[1])
                 if !elem_ok || !index_ok {
                     return nil, false
                 }
@@ -1923,11 +1883,11 @@ check_block :: proc(
                 }
                 index_variable, var_ok := add_variable(
                     s,
-                    I64Type{}, // TODO: Support types other than I64
+                    i64_type, // TODO: Support types other than I64
                     false,
                     value.variables[0],
                 )
-                expected_type: ExactCheckedType = I64Type{}
+                expected_type: ExactCheckedType = i64_type
                 start := check_value(s, iter.start, &loop_body_array, expected_type)
                 end := check_value(s, iter.end, &loop_body_array, expected_type)
                 step: CheckedValue = ---
@@ -1977,7 +1937,7 @@ check_block :: proc(
             )
 
         case IfElseStatement:
-            expected_type: ExactCheckedType = BoolType{}
+            expected_type: ExactCheckedType = bool_type
             condition := check_value(s, value.condition, body, expected_type)
 
             append_elem(&s.scopes, Scope{})
@@ -2192,7 +2152,7 @@ check_array_index :: proc(
         return nil
     }
     // TODO: Support multi elem array access
-    expected_type: ExactCheckedType = I64Type{} // TODO: Do not assume number type
+    expected_type: ExactCheckedType = i64_type // TODO: Do not assume number type
     return check_value(s, args[0], body, expected_type)
 }
 
@@ -2398,7 +2358,7 @@ check_var_ref :: proc(
             if !ok {
                 return nil
             }
-            out_type = I64Type{}
+            out_type = i64_type
             out = length_of_array(array, out)
             continue
         } else if extra_segment.ident == "to_str" {
@@ -2406,7 +2366,7 @@ check_var_ref :: proc(
             if converted == nil {
                 return nil
             }
-            out_type = StringType{}
+            out_type = string_type
             out = converted
             continue
         } else if extra_segment.ident == "function_id" {
@@ -2420,7 +2380,7 @@ check_var_ref :: proc(
                 return nil
             }
 
-            out_type = U64Type{}
+            out_type = u64_type
             out = CompileTimeValue(NumberValue{big_int_from_i64(i64(func_ref.index))})
             continue
         }
@@ -2575,7 +2535,7 @@ check_value_with_markers :: proc(
     }
     switch markers[0].ident {
     case "load":
-        value := check_value_with_markers(s, v, markers[1:], body, ExactCheckedType(StringType{}))
+        value := check_value_with_markers(s, v, markers[1:], body, string_type)
         if value == nil {
             return nil
         }
@@ -2595,7 +2555,7 @@ check_value_with_markers :: proc(
             err(s, markers[0].pos, "Failed to read `%s`: %#v\n", joined, data_err)
             return nil
         }
-        if !expect_type(s, markers[0].pos, type, StringType{}, "") {
+        if !expect_type(s, markers[0].pos, type, string_type, "") {
             return nil
         }
         return CompileTimeValue(StringLiteralValue(data))
@@ -2632,12 +2592,12 @@ check_joined_unit_value :: proc(
         return nil
 
     case .BooleanAnd, .BooleanOr:
-        val0 := check_value(s, value.unit0^, body, ExactCheckedType(BoolType{}))
-        val1 := check_value(s, value.unit1^, body, ExactCheckedType(BoolType{}))
+        val0 := check_value(s, value.unit0^, body, bool_type)
+        val1 := check_value(s, value.unit1^, body, bool_type)
         if val0 == nil || val1 == nil {
             return nil
         }
-        if expect_type(s, pos, type, BoolType{}, "") {
+        if expect_type(s, pos, type, bool_type, "") {
             return create_joined_values(value.join_method, val0, val1)
         }
         return nil
@@ -2652,12 +2612,12 @@ check_joined_unit_value :: proc(
         if val1 == nil {
             return nil
         }
-        if !expect_type(s, pos, type, ExactCheckedType(BoolType{}), "") {
+        if !expect_type(s, pos, type, bool_type, "") {
             return nil
         }
         t_simplified, ok := simplify_type(s, max(uint), t)
         assert(ok)
-        if _, is_string := t_simplified.(StringType); is_string {
+        if t, ok := t_simplified.(Type); ok && t == string_type {
             str_comp: CheckedValue = StringsAreEqual{new_clone(val0), new_clone(val1)}
             if value.join_method == .IsNotEqual {
                 return create_not(str_comp)
@@ -2693,12 +2653,12 @@ check_joined_unit_value :: proc(
         return nil
 
     case .StringConcat:
-        val0 := check_value(s, value.unit0^, body, ExactCheckedType(StringType{}))
-        val1 := check_value(s, value.unit1^, body, ExactCheckedType(StringType{}))
+        val0 := check_value(s, value.unit0^, body, string_type)
+        val1 := check_value(s, value.unit1^, body, string_type)
         if val0 == nil || val1 == nil {
             return nil
         }
-        if expect_type(s, pos, type, ExactCheckedType(StringType{}), "") {
+        if expect_type(s, pos, type, string_type, "") {
             return create_joined_values(.StringConcat, val0, val1)
         }
         return nil
@@ -2740,24 +2700,24 @@ check_joined_unit_value :: proc(
 
     case .IsGreaterThan, .IsGreaterThanOrEqual, .IsLessThan, .IsLessThanOrEqual:
         // TODO: Do not assume number types
-        val0 := check_value(s, value.unit0^, body, ExactCheckedType(I64Type{}))
-        val1 := check_value(s, value.unit1^, body, ExactCheckedType(I64Type{}))
+        val0 := check_value(s, value.unit0^, body, i64_type)
+        val1 := check_value(s, value.unit1^, body, i64_type)
         if val0 == nil || val1 == nil {
             return nil
         }
-        if expect_type(s, pos, type, ExactCheckedType(BoolType{}), "") {
+        if expect_type(s, pos, type, bool_type, "") {
             return create_joined_values(value.join_method, val0, val1)
         }
         return nil
 
     case .Multiplication, .Subtraction, .Division, .Addition, .Modulo:
         // TODO: Do not assume number types
-        val0 := check_value(s, value.unit0^, body, ExactCheckedType(I64Type{}))
-        val1 := check_value(s, value.unit1^, body, ExactCheckedType(I64Type{}))
+        val0 := check_value(s, value.unit0^, body, i64_type)
+        val1 := check_value(s, value.unit1^, body, i64_type)
         if val0 == nil || val1 == nil {
             return nil
         }
-        if expect_type(s, pos, type, ExactCheckedType(I64Type{}), "") {
+        if expect_type(s, pos, type, i64_type, "") {
             return create_joined_values(value.join_method, val0, val1)
         }
         return nil
@@ -2849,7 +2809,7 @@ check_value :: proc(
         return nil
 
     case Bool:
-        if !expect_type(s, v.pos, type, BoolType{}, "") {
+        if !expect_type(s, v.pos, type, bool_type, "") {
             return nil
         }
         return CompileTimeValue(BoolValue(value))
@@ -2910,7 +2870,7 @@ check_value :: proc(
     case Number:
         // TODO: Check that min(i64) <= number <= max(i64)
         // TODO: Do not assume number type
-        if !expect_type(s, v.pos, type, I64Type{}, "") {
+        if !expect_type(s, v.pos, type, i64_type, "") {
             return nil
         }
         return CompileTimeValue(
@@ -2918,14 +2878,14 @@ check_value :: proc(
         )
 
     case String:
-        if expect_type(s, v.pos, type, StringType{}, "") {
+        if expect_type(s, v.pos, type, string_type, "") {
             return CompileTimeValue(StringLiteralValue(strings.join(([]string)(value), "")))
         }
         return nil
 
     case Char:
         // TODO: Do not assume number type
-        if !expect_type(s, v.pos, type, U8Type{}, "") {
+        if !expect_type(s, v.pos, type, u8_type, "") {
             return nil
         }
         return CompileTimeValue(NumberValue{BigInt{false, big_uint_from_u64(u64(value))}})
@@ -3110,17 +3070,17 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     }
 
     array_with_string_type := make([]Type, 1)
-    array_with_string_type[0] = append_to_type_equivalancy_array(&state, StringType{})
+    array_with_string_type[0] = append_to_type_equivalancy_array(&state, string_type)
 
     array_with_2string_types := make([]Type, 2)
-    array_with_2string_types[0] = append_to_type_equivalancy_array(&state, StringType{})
-    array_with_2string_types[1] = append_to_type_equivalancy_array(&state, StringType{})
+    array_with_2string_types[0] = append_to_type_equivalancy_array(&state, string_type)
+    array_with_2string_types[1] = append_to_type_equivalancy_array(&state, string_type)
 
     array_with_i64_type := make([]Type, 1)
-    array_with_i64_type[0] = append_to_type_equivalancy_array(&state, I64Type{})
+    array_with_i64_type[0] = append_to_type_equivalancy_array(&state, i64_type)
 
     array_with_u64_type := make([]Type, 1)
-    array_with_u64_type[0] = append_to_type_equivalancy_array(&state, U64Type{})
+    array_with_u64_type[0] = append_to_type_equivalancy_array(&state, u64_type)
 
     array_with_dynamic_array_of_strings := make([]Type, 1)
     // TODO
@@ -3130,7 +3090,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     // )
     array_with_dynamic_array_of_strings[0] = create_type(
         &state.types,
-        ArrayType(Type){0, append_to_type_equivalancy_array(&state, StringType{})},
+        ArrayType(Type){0, append_to_type_equivalancy_array(&state, string_type)},
     )
 
     state.string_to_nil_type = create_type(

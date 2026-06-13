@@ -93,40 +93,63 @@ emit_sum_variant :: proc(
 }
 
 emit_type2 :: proc(s: ^EmitterState, name: string, type: Type) {
-    switch t in get_type(s.types, type) {
-    case nil:
-        panic("unreachable")
-    case ArrayType(Type):
-        emit_array_type(&s.b, t.length, t.item_type)
-    case SumType(Type, struct {}):
-        panic("TODO")
-    case TypeEquivilancyArrayRef:
-        emit_type(s, name, s.type_equivalancy_array[t.index])
-        return
-    case FuncType(Type):
-        switch len(t.return_types) {
-        case 0:
-            strings.write_string(&s.b, "void")
-        case 1:
-            emit_type(s, "", t.return_types[0])
-        case:
+    switch type {
+    case bool_type:
+        strings.write_string(&s.b, "bool")
+    case string_type:
+        strings.write_string(&s.b, "char*")
+    case i64_type:
+        strings.write_string(&s.b, "int64_t")
+    case i32_type:
+        strings.write_string(&s.b, "int32_t")
+    case i16_type:
+        strings.write_string(&s.b, "int16_t")
+    case i8_type:
+        strings.write_string(&s.b, "int8_t")
+    case u64_type:
+        strings.write_string(&s.b, "uint64_t")
+    case u32_type:
+        strings.write_string(&s.b, "uint32_t")
+    case u16_type:
+        strings.write_string(&s.b, "uint16_t")
+    case u8_type:
+        strings.write_string(&s.b, "uint8_t")
+    case:
+        switch t in get_type(s.types, type) {
+        case nil:
+            panic("unreachable")
+        case ArrayType(Type):
+            emit_array_type(&s.b, t.length, t.item_type)
+        case SumType(Type, struct {}):
             panic("TODO")
-        }
-        strings.write_string(&s.b, " (*")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, ")(")
-        is_first_arg := true
-        for arg in t.args {
-            if !is_first_arg {
-                strings.write_byte(&s.b, ',')
+        case TypeEquivilancyArrayRef:
+            emit_type(s, name, s.type_equivalancy_array[t.index])
+            return
+        case FuncType(Type):
+            switch len(t.return_types) {
+            case 0:
+                strings.write_string(&s.b, "void")
+            case 1:
+                emit_type(s, "", t.return_types[0])
+            case:
+                panic("TODO")
             }
-            emit_type(s, "", arg)
-            is_first_arg = false
+            strings.write_string(&s.b, " (*")
+            strings.write_string(&s.b, name)
+            strings.write_string(&s.b, ")(")
+            is_first_arg := true
+            for arg in t.args {
+                if !is_first_arg {
+                    strings.write_byte(&s.b, ',')
+                }
+                emit_type(s, "", arg)
+                is_first_arg = false
+            }
+            strings.write_byte(&s.b, ')')
+            return
+        case GenericTypeValue:
+            emit_generic_name(&s.b, t.generic_type_index, u32(t.generic_arg.index), true)
         }
-        strings.write_byte(&s.b, ')')
-        return
-    case GenericTypeValue:
-        emit_generic_name(&s.b, t.generic_type_index, u32(t.generic_arg.index), true)
     }
     strings.write_byte(&s.b, ' ')
     strings.write_string(&s.b, name)
@@ -165,26 +188,6 @@ emit_type :: proc(
     case Struct(ExactCheckedType):
         strings.write_string(&s.b, "struct ")
         emit_struct_type(s, t)
-    case BoolType:
-        strings.write_string(&s.b, "bool")
-    case StringType:
-        strings.write_string(&s.b, "char*")
-    case I64Type:
-        strings.write_string(&s.b, "int64_t")
-    case I32Type:
-        strings.write_string(&s.b, "int32_t")
-    case I16Type:
-        strings.write_string(&s.b, "int16_t")
-    case I8Type:
-        strings.write_string(&s.b, "int8_t")
-    case U64Type:
-        strings.write_string(&s.b, "uint64_t")
-    case U32Type:
-        strings.write_string(&s.b, "uint32_t")
-    case U16Type:
-        strings.write_string(&s.b, "uint16_t")
-    case U8Type:
-        strings.write_string(&s.b, "uint8_t")
     // case ArrayType(u32):
     // emit_array_type(&s.b, t.length, u32(t.item_type))
     }
