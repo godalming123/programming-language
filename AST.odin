@@ -5,22 +5,23 @@ StructField :: struct(T: typeid) {
     type: T,
 }
 
-Struct :: struct(T: typeid) {
+Struct :: struct(T: typeid, ExtraData: typeid) {
+    extra_data: ExtraData,
+
     // Stored this way to preserve the order
     fields_map: map[string]uint, // An index into `fields`
     fields:     #soa[]StructField(T),
 }
 
-SumTypeVariant :: struct(T: typeid, ExtraData: typeid) {
-    name:       IdentAndPos,
-    payload:    Struct(T),
-    extra_data: ExtraData,
+SumTypeVariant :: struct(Payload: typeid) {
+    name:    IdentAndPos,
+    payload: Payload,
 }
 
-SumType :: struct(T: typeid, VariantExtraData: typeid) {
+SumType :: struct(VariantPayload: typeid) {
     // Stored this way to preserve the order
     variants_map: map[string]uint, // An index into `variants`
-    variants:     #soa[]SumTypeVariant(T, VariantExtraData),
+    variants:     #soa[]SumTypeVariant(VariantPayload),
 }
 
 Ident :: distinct IdentToken
@@ -63,8 +64,8 @@ FuncDefinitionRef :: struct {
 //   - A sum type like `< Text{contents: String} >`
 
 UnitWithoutPos :: union {
-    Struct(Unit),
-    SumType(Unit, struct {}),
+    Struct(Unit, struct {}),
+    SumType(Struct(Unit, struct {})),
     Tuple,
     FuncDefinitionRef,
     CallWithBrackets,
@@ -356,9 +357,9 @@ debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
     debug("value at character index %d", unit.pos)
     debug_nesting += 1
     switch v in unit.value {
-    case Struct(Unit):
+    case Struct(Unit, struct {}):
         panic("TODO")
-    case SumType(Unit, struct {}):
+    case SumType(Struct(Unit, struct {})):
         panic("TODO")
     case Number:
         debug("is_negated: %v", v.is_negated)

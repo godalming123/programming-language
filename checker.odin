@@ -45,9 +45,8 @@ TypeEquivilancyArrayRef :: distinct Type
 // type_equivalancy_array
 // a is the length of the array and b is an index into type_equivalancy_array
 CheckerGlobalTypeWithoutGeneric :: struct {
-    ast_node:      GlobalTypeWithoutGeneric,
-    exact_type:    ExactCheckedType,
-    function_type: FuncTypeRef,
+    ast_node:   GlobalTypeWithoutGeneric,
+    exact_type: Type,
 }
 
 CheckerGlobalTypeWithGeneric :: struct {
@@ -123,8 +122,12 @@ CheckedFunctionCall :: struct {
     function: ^CheckedValue,
     args:     []CheckedValue,
 }
-TypeInitFunc :: struct {
-    type: ExactCheckedType,
+StructTypeInitFunc :: struct {
+    type: Type,
+}
+SumTypeVariantInitFunc :: struct {
+    sum_type:      Type,
+    variant_index: uint,
 }
 LengthOfArray :: struct {
     array: ^CheckedValue,
@@ -164,7 +167,8 @@ CheckedValue :: union {
     BooleanNotValue,
     CheckedJoinedValues,
     CheckedFunctionCall,
-    TypeInitFunc,
+    StructTypeInitFunc,
+    SumTypeVariantInitFunc,
     BuiltinFunction,
     CheckedArrayAccess,
     CheckedFieldAccess,
@@ -208,8 +212,8 @@ GenericCheckedType :: union {
 
     // Different args to generic
     SumVariant(^GenericCheckedType),
-    SumType(GenericCheckedType, struct {}),
-    Struct(GenericCheckedType),
+    SumType(Struct(GenericCheckedType, struct {})),
+    Struct(GenericCheckedType, struct {}),
     ArrayType(^GenericCheckedType),
     GenericType(^GenericCheckedType),
 
@@ -221,13 +225,8 @@ GenericCheckedType :: union {
 }
 
 ExactCheckedType :: union {
-    // Same
-    GlobalTypeWithoutGenericRef,
-
     // Different args to generic
-    SumVariant(^ExactCheckedType),
-    SumType(ExactCheckedType, FuncTypeRef),
-    Struct(ExactCheckedType),
+    SumVariant(Type),
     TypeEquivilancyArrayRef,
 
     // TODO: Store all exact checked types in this type
@@ -362,10 +361,10 @@ expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
 
 check_struct_type :: proc(
     s: ^CheckerState,
-    type: Struct(Unit),
+    type: Struct(Unit, struct {}),
     generic_arg_name: string,
 ) -> (
-    Struct(GenericCheckedType),
+    Struct(GenericCheckedType, struct {}),
     bool,
 ) {
     fields := make(#soa[]StructField(GenericCheckedType), len(type.fields))
@@ -380,9 +379,9 @@ check_struct_type :: proc(
         }
     }
     if !ok {
-        return Struct(GenericCheckedType){}, false
+        return Struct(GenericCheckedType, struct {}){}, false
     }
-    return Struct(GenericCheckedType){type.fields_map, fields}, true
+    return Struct(GenericCheckedType, struct {}){struct{}{}, type.fields_map, fields}, true
 }
 
 check_function_type :: proc(
@@ -508,23 +507,25 @@ check_type :: proc(
     case MarkedUnit:
         err(s, type.pos, err_context + "Cannot use a marker as a type")
         return nil
-    case Struct(Unit):
+    case Struct(Unit, struct {}):
         checked_struct, ok := check_struct_type(s, t, generic_arg_name)
         if !ok {
             return nil
         }
         return checked_struct
-    case SumType(Unit, struct {}):
-        variants := make_soa(#soa[]SumTypeVariant(GenericCheckedType, struct {}), len(t.variants))
+    case SumType(Struct(Unit, struct {})):
+        variants := make_soa(
+            #soa[]SumTypeVariant(Struct(GenericCheckedType, struct {})),
+            len(t.variants),
+        )
         ok := true
         for variant, i in t.variants {
             expect_camel_case(s, "the name of a sum type variant", variant.name)
             checked_variant, variant_ok := check_struct_type(s, variant.payload, generic_arg_name)
             if variant_ok {
-                variants[i] = SumTypeVariant(GenericCheckedType, struct {}) {
+                variants[i] = SumTypeVariant(Struct(GenericCheckedType, struct {})) {
                     variant.name,
                     checked_variant,
-                    struct{}{},
                 }
             } else {
                 ok = false
@@ -533,7 +534,7 @@ check_type :: proc(
         if !ok {
             return nil
         }
-        return SumType(GenericCheckedType, struct {}){t.variants_map, variants}
+        return SumType(Struct(GenericCheckedType, struct {})){t.variants_map, variants}
     case Tuple:
         func, ok := check_function_type(s, t.elements, Unit{}, .Normal, generic_arg_name)
         if !ok {
@@ -731,10 +732,7 @@ type_is_numeric :: proc(s: ^CheckerState, type: ExactCheckedType) -> bool {
             return type_is_numeric(s, s.type_equivalancy_array[ref.index])
         }
         return false
-    case GlobalTypeWithoutGenericRef,
-         SumType(ExactCheckedType, FuncTypeRef),
-         Struct(ExactCheckedType),
-         SumVariant(^ExactCheckedType):
+    case SumVariant(Type):
         return false
     case nil:
         panic("Unreachable")
@@ -745,17 +743,45 @@ type_is_numeric :: proc(s: ^CheckerState, type: ExactCheckedType) -> bool {
 
 create_generic_struct_type :: proc(
     s: ^CheckerState,
-    elem: Struct(GenericCheckedType),
+    elem: Struct(GenericCheckedType, struct {}),
     generic_arg: ExactCheckedType,
-) -> Struct(ExactCheckedType) {
-    field_types := make([]ExactCheckedType, len(elem.fields))
+) -> (
+    Type,
+    Struct(Type, Type),
+) {
+    field_types := make([]Type, len(elem.fields))
     for field, i in elem.fields {
-        field_types[i] = create_generic_type_elem(s, field.type, generic_arg)
+        field_types[i] = append_to_type_equivalancy_array(
+            s,
+            create_generic_type_elem(s, field.type, generic_arg),
+        )
     }
-    return Struct(ExactCheckedType) {
-        elem.fields_map,
-        soa_zip(elem.fields.name[0:len(elem.fields)], field_types),
+
+    out, value := create_type_and_get_value(
+        &s.types,
+        Struct(Type, Type) {
+            unknown_type,
+            elem.fields_map,
+            soa_zip(elem.fields.name[0:len(elem.fields)], field_types),
+        },
+    )
+    if value.(Struct(Type, Type)).extra_data != unknown_type {
+        return out, value.(Struct(Type, Type))
     }
+
+    return_types := make([]Type, 1)
+    return_types[0] = out
+
+    out2, value2 := create_type_and_get_value(
+        &s.types,
+        Struct(Type, Type) {
+            create_type(&s.types, FuncType(Type){field_types, return_types, .Normal}),
+            elem.fields_map,
+            soa_zip(elem.fields.name[0:len(elem.fields)], field_types),
+        },
+        can_inesrt = false,
+    )
+    return out2, value2.(Struct(Type, Type))
 }
 
 create_generic_type :: proc(
@@ -771,7 +797,7 @@ create_generic_type :: proc(
                 generic_type_index = generic_type_index,
                 generic_arg = generic_arg,
                 is_initialised = false,
-                initialised_type = Type{},
+                initialised_type = nil,
             },
         ),
     )
@@ -789,7 +815,7 @@ append_to_type_equivalancy_array :: proc(
     }
     // TODO HACK
     for elem, i in s.type_equivalancy_array {
-        if type_is_equal(s, elem, type, true) {
+        if type_is_subset(s, elem, type, true) {
             return create_type(&s.types, TypeEquivilancyArrayRef(Type{u32(i)}))
         }
     }
@@ -884,7 +910,7 @@ initialise_generic :: proc(
         s.global_types_with_generics[gen_value.generic_type_index].generic_type,
         gen_value.generic_arg,
     )
-    s.types.values[Type(gen_ref).index].value = TypeValue(
+    s.types.values[Type(gen_ref).index].value.value = TypeValue(
         GenericTypeValue {
             generic_type_index = gen_value.generic_type_index,
             generic_arg = gen_value.generic_arg,
@@ -893,6 +919,22 @@ initialise_generic :: proc(
         },
     )
     return out
+}
+
+initialise_global_type_without_generic :: proc(s: ^CheckerState, i: uint) -> Type {
+    // TODO: Check for cycles
+    type := s.global_types_without_generics[i]
+    if type.exact_type != unknown_type {
+        return type.exact_type
+    }
+    old_file := s.file
+    s.file = type.ast_node.file
+    checked_type := check_type(s, type.ast_node.value, "")
+    generic_elem := create_generic_type_elem(s, checked_type, nil)
+    generic_elem_type := append_to_type_equivalancy_array(s, generic_elem)
+    s.global_types_without_generics[i].exact_type = generic_elem_type
+    s.file = old_file
+    return generic_elem_type
 }
 
 create_generic_type_elem :: proc(
@@ -912,30 +954,22 @@ create_generic_type_elem :: proc(
         return create_generic_func_type(s, e, generic_arg)
     case SumVariant(^GenericCheckedType):
         panic("TODO: Handle sum variant")
-    case SumType(GenericCheckedType, struct {}):
-        variant_payloads := make([]Struct(ExactCheckedType), len(e.variants))
-        variant_funcs := make([]FuncTypeRef, len(e.variants))
-        sum_type: ExactCheckedType = SumType(ExactCheckedType, FuncTypeRef) {
-            e.variants_map,
-            soa_zip(e.variants.name[0:len(e.variants)], variant_payloads, variant_funcs),
-        }
+    case SumType(Struct(GenericCheckedType, struct {})):
+        variant_payloads := make([]Type, len(e.variants))
+        sum_type := create_type(
+            &s.types,
+            SumType(Type) {
+                e.variants_map,
+                soa_zip(e.variants.name[0:len(e.variants)], variant_payloads),
+            },
+        )
         for variant, i in e.variants {
-            variant_payloads[i] = create_generic_struct_type(s, variant.payload, generic_arg)
-            // variant_funcs[i] = FuncTypeRef(Type{index = u32(len(s.func_types))})
-            args := make([]Type, len(variant_payloads[i].fields))
-            for field, j in variant_payloads[i].fields {
-                args[j] = Type(append_to_type_equivalancy_array(s, field.type))
-            }
-            return_types := make([]Type, 1)
-            return_types[0] = Type(append_to_type_equivalancy_array(s, sum_type))
-            // append_elem(&s.func_types, ExactFuncType{args, return_types, .Normal})
-            variant_funcs[i] = FuncTypeRef(
-                create_type(&s.types, FuncType(Type){args, return_types, .Normal}),
-            )
+            variant_payloads[i], _ = create_generic_struct_type(s, variant.payload, generic_arg)
         }
         return sum_type
-    case Struct(GenericCheckedType):
-        return create_generic_struct_type(s, e, generic_arg)
+    case Struct(GenericCheckedType, struct {}):
+        out, _ := create_generic_struct_type(s, e, generic_arg)
+        return out
     case StringType:
         return string_type
     case I64Type:
@@ -967,7 +1001,7 @@ create_generic_type_elem :: proc(
         out := create_generic_type(s, e.generic_type_index, arg_ref)
         return out
     case GlobalTypeWithoutGenericRef:
-        return e
+        return initialise_global_type_without_generic(s, e.index)
     case ArrayType(^GenericCheckedType):
         out, _, _ := create_generic_array_type(s, e, generic_arg)
         return out
@@ -982,7 +1016,7 @@ get_sum_type_for_generic_checked_type :: proc(
     pos: uint,
     type: Type,
 ) -> (
-    SumType(Type),
+    SumType(Struct(Type)),
     bool,
 ) {
 }
@@ -1100,13 +1134,8 @@ simplify_type :: proc(
             case:
                 return cur_type, true
             }
-        case GlobalTypeWithoutGenericRef:
-            cur_type = s.global_types_without_generics[t.index].exact_type
-        case SumVariant(^ExactCheckedType):
-            sum_type, ok := get_sum_type(s, pos, t.sum_type^)
-            if !ok {
-                return nil, false
-            }
+        case SumVariant(Type):
+            sum_type := get_type(s.types, t.sum_type).(SumType(Type))
             cur_type = sum_type.variants[t.variant_index].payload
         case TypeEquivilancyArrayRef:
             cur_type = s.type_equivalancy_array[t.index]
@@ -1125,7 +1154,8 @@ get_sum_type :: proc(
     type: ExactCheckedType,
     loc := #caller_location,
 ) -> (
-    SumType(ExactCheckedType, FuncTypeRef),
+    SumType(Type),
+    Type,
     bool,
 ) {
     when debug_checker {
@@ -1135,19 +1165,21 @@ get_sum_type :: proc(
     }
     simplified, ok := simplify_type(s, pos, type)
     if !ok {
-        return SumType(ExactCheckedType, FuncTypeRef){}, false
+        return SumType(Type){}, unknown_type, false
     }
-    sum_type, is_sum_type := simplified.(SumType(ExactCheckedType, FuncTypeRef))
-    if !is_sum_type {
-        if pos != max(uint) {
-            err(s, pos, "Expected a sum type, but got the type `%s`", type_to_string(s, type))
+    if type, is_type := simplified.(Type); is_type {
+        sum_type, is_sum_type := get_type(s.types, type).(SumType(Type))
+        if is_sum_type {
+            when debug_checker {
+                debug("returned SumType(Struct(ExactCheckedType)) is %#v", sum_type)
+            }
+            return sum_type, type, true
         }
-        return SumType(ExactCheckedType, FuncTypeRef){}, false
     }
-    when debug_checker {
-        debug("returned SumType(ExactCheckedType) is %#v", sum_type)
+    if pos != max(uint) {
+        err(s, pos, "Expected a sum type, but got the type `%s`", type_to_string(s, type))
     }
-    return sum_type, true
+    return SumType(Type){}, unknown_type, false
 }
 
 get_struct_type :: proc(
@@ -1155,21 +1187,24 @@ get_struct_type :: proc(
     pos: uint,
     type: ExactCheckedType,
 ) -> (
-    Struct(ExactCheckedType),
+    Struct(Type, Type),
     bool,
 ) {
     simplified, ok := simplify_type(s, pos, type)
     if !ok {
-        return Struct(ExactCheckedType){}, false
+        return Struct(Type, Type){}, false
     }
-    struct_type, is_struct_type := simplified.(Struct(ExactCheckedType))
-    if !is_struct_type {
-        if pos != max(uint) {
-            err(s, pos, "Expected a struct type, but got the type `%s`", type_to_string(s, type))
+    if type, is_type := simplified.(Type); is_type {
+        struct_type, is_struct_type := get_type(s.types, type).(Struct(Type, Type))
+        if is_struct_type {
+            return struct_type, true
+
         }
-        return Struct(ExactCheckedType){}, false
     }
-    return struct_type, true
+    if pos != max(uint) {
+        err(s, pos, "Expected a struct type, but got the type `%s`", type_to_string(s, type))
+    }
+    return Struct(Type, Type){}, false
 }
 
 // Always returns a function type
@@ -1178,20 +1213,23 @@ get_func_type :: proc(s: ^CheckerState, pos: uint, type: ExactCheckedType) -> (T
     if !ok {
         return Type{}, false
     }
-    func_type, is_func := simplified.(Type)
-    if !is_func {
-        if pos != max(uint) {
-            err(s, pos, "Expected a func type, but got the type `%s`", type_to_string(s, type))
+    type_value, is_type := simplified.(Type)
+    if is_type {
+        func_type, is_func := get_type(s.types, type_value).(FuncType(Type))
+        if is_func {
+            return type_value, true
         }
-        return Type{}, false
     }
-    // TODO
-    return func_type, true
+    if pos != max(uint) {
+        err(s, pos, "Expected a func type, but got the type `%s`", type_to_string(s, type))
+    }
+    return Type{}, false
 }
 
+/*
 struct_is_equal :: proc(
     s: ^CheckerState,
-    type0: Struct(ExactCheckedType),
+    type0: Struct(ExactCheckedType, struct{}),
     type1: Struct(ExactCheckedType),
     fully_equilize_types: bool, // TODO HACK
 ) -> bool {
@@ -1205,81 +1243,95 @@ struct_is_equal :: proc(
     }
     return true
 }
+*/
 
-type_is_equal2 :: proc(
+type_is_subset2 :: proc(
     s: ^CheckerState,
-    type0: u32,
-    type1: u32,
-    fully_equilize_types: bool,
+    type: Type,
+    superset: Type,
     loc := #caller_location,
 ) -> bool {
     when debug_checker {
-        print_call(loc, "type_is_equal2")
+        print_call(loc, "type_is_subset2")
+        debug("type: %v", get_type(s.types, type))
+        debug("superset: %v", get_type(s.types, superset))
     }
-    return type0 == type1
+    if type == superset {
+        return true
+    }
+    superset_type := get_type(s.types, superset)
+    #partial switch superset_value in superset_type {
+    case nil:
+        panic("Unreachable")
+    case:
+        return false
+    case SumType(Type):
+        for variant in superset_value.variants {
+            if variant.payload == type {
+                return true
+            }
+        }
+        return false
+    case GenericTypeValue:
+        initialised := initialise_generic(s, superset_value, superset)
+        return type_is_subset(s, type, initialised, true)
+    }
 }
 
-type_is_equal :: proc(
+type_is_subset :: proc(
     s: ^CheckerState,
-    type0_unsimplified: ExactCheckedType,
-    type1_unsimplified: ExactCheckedType,
+    type_unsimplified: ExactCheckedType,
+    superset_unsimplified: ExactCheckedType,
     fully_equilize_types: bool,
     loc := #caller_location,
 ) -> bool {
     when debug_checker {
-        print_call(loc, "type_is_equal")
-        print_arg("type0", type0_unsimplified)
-        print_arg("type1", type1_unsimplified)
+        print_call(loc, "type_is_subset")
+        print_arg("type", type_unsimplified)
+        print_arg("superset", superset_unsimplified)
     }
 
-    type0 := simplify_type_safe(s, type0_unsimplified)
-    type1 := simplify_type_safe(s, type1_unsimplified)
+    type := simplify_type_safe(s, type_unsimplified)
+    superset := simplify_type_safe(s, superset_unsimplified)
 
-    type0_type, is_type0 := type0.(TypeEquivilancyArrayRef)
-    type1_type, is_type1 := type1.(TypeEquivilancyArrayRef)
+    type0_type, is_type0 := type.(TypeEquivilancyArrayRef)
+    type1_type, is_type1 := superset.(TypeEquivilancyArrayRef)
     if is_type0 && is_type1 {
         return type0_type == type1_type
     } else if is_type0 {
-        return type_is_equal(
+        return type_is_subset(
             s,
             s.type_equivalancy_array[type0_type.index],
-            type1,
+            superset,
             fully_equilize_types,
         )
     } else if is_type1 {
-        return type_is_equal(
+        return type_is_subset(
             s,
-            type0,
+            type,
             s.type_equivalancy_array[type1_type.index],
             fully_equilize_types,
         )
     }
 
-    sum_variant0, is_sum_variant0 := type0.(SumVariant(^ExactCheckedType))
-    sum_variant1, is_sum_variant1 := type1.(SumVariant(^ExactCheckedType))
+    sum_variant0, is_sum_variant0 := type.(SumVariant(Type))
+    sum_variant1, is_sum_variant1 := superset.(SumVariant(Type))
     if is_sum_variant0 && is_sum_variant1 {
         if sum_variant0.variant_index != sum_variant1.variant_index {
             return false
         }
-        return type_is_equal(
-            s,
-            sum_variant0.sum_type^,
-            sum_variant1.sum_type^,
-            fully_equilize_types,
-        )
+        return type_is_subset2(s, sum_variant0.sum_type, sum_variant1.sum_type)
     } else if is_sum_variant0 {
-        sum_type0, ok := get_sum_type(s, max(uint), sum_variant0.sum_type^)
-        assert(ok)
+        sum_type0 := get_type(s.types, sum_variant0.sum_type).(SumType(Type))
         new_type0 := sum_type0.variants[sum_variant0.variant_index].payload
-        return type_is_equal(s, new_type0, type1, fully_equilize_types)
+        return type_is_subset(s, new_type0, superset, fully_equilize_types)
     } else if is_sum_variant1 {
-        sum_type1, ok := get_sum_type(s, max(uint), sum_variant1.sum_type^)
-        assert(ok)
+        sum_type1, ok := get_type(s.types, sum_variant1.sum_type).(SumType(Type))
         new_type1 := sum_type1.variants[sum_variant1.variant_index].payload
-        return type_is_equal(s, type0, new_type1, fully_equilize_types)
+        return type_is_subset(s, type, new_type1, fully_equilize_types)
     }
 
-    switch &t0 in type0 {
+    switch &type_value in type {
     case:
         panic("Unreachable")
     case nil:
@@ -1288,43 +1340,13 @@ type_is_equal :: proc(
         panic("Unreachable")
     case Type:
         // TODO: Maybe fixed size arrays should coerce into dynamic size arrays
-        t1, is_type := type1.(Type)
-        when debug_checker {
-            debug("type0: %v", get_type(s.types, t0))
-            if is_type {
-                debug("type1: %v", get_type(s.types, t1))
-            }
-        }
-        return t0 == t1
-    case Struct(ExactCheckedType):
-        t1, is_struct := get_struct_type(s, max(uint), type1)
-        if !is_struct {
+        superset_value, is_type := superset.(Type)
+        if !is_type {
             return false
         }
-        return struct_is_equal(s, t0, t1, fully_equilize_types)
-    case SumType(ExactCheckedType, FuncTypeRef):
-        t1, is_sum := get_sum_type(s, max(uint), type1)
-        if !is_sum {
-            return false
-        }
-        if len(t0.variants) != len(t1.variants) {
-            return false
-        }
-        for variant, i in t0.variants {
-            if struct_is_equal(s, variant.payload, t1.variants[i].payload, fully_equilize_types) ==
-               false {
-                return false
-            }
-        }
-        return true
-    case SumVariant(^ExactCheckedType):
+        return type_is_subset2(s, type_value, superset_value)
+    case SumVariant(Type):
         panic("unreachable")
-    case GlobalTypeWithoutGenericRef:
-        t1, is_type_ref := type1.(GlobalTypeWithoutGenericRef)
-        if !is_type_ref {
-            return false
-        }
-        return t0 == t1
     }
 }
 
@@ -1354,7 +1376,6 @@ expect_type :: proc(
     case FunctionWithExpectedReturnTypes:
         func_ref, is_func := get_func_type(s, pos, got)
         if !is_func {
-            err(s, pos, "Expected a function")
             return false
         }
         func_info := get_type(s.types, func_ref).(FuncType(Type))
@@ -1391,7 +1412,7 @@ expect_exact_type :: proc(
     when debug_checker {
         print_call(loc, "expect_exact_type")
     }
-    if !type_is_equal(s, got, expected, true) {
+    if !type_is_subset(s, got, expected, true) {
         err(
             s,
             pos,
@@ -1419,18 +1440,14 @@ get_variable_type :: proc(
 
 type_to_string :: proc(s: ^CheckerState, t: ExactCheckedType, loc := #caller_location) -> string {
     when debug_checker {
-        print_call(loc, "type to string")
+        print_call(loc, "type_to_string")
     }
     builder := strings.builder_make()
     build_type_string(s, &builder, t)
     return strings.to_string(builder)
 }
 
-build_struct_string :: proc(
-    s: ^CheckerState,
-    b: ^strings.Builder,
-    type: Struct(ExactCheckedType),
-) {
+build_struct_string :: proc(s: ^CheckerState, b: ^strings.Builder, type: Struct(Type, Type)) {
     strings.write_byte(b, '{')
     first_field := true
     for field in type.fields {
@@ -1480,10 +1497,32 @@ build_type_string :: proc(
             strings.write_string(b, "U8")
         case bool_type:
             strings.write_string(b, "Bool")
+        case invalid_type:
+            strings.write_string(b, "invalid_type")
+        case unknown_type:
+            strings.write_string(b, "unknown_type")
         case:
             switch tv in get_type(s.types, type) {
             case TypeEquivilancyArrayRef:
                 build_type_string(s, b, s.type_equivalancy_array[tv.index])
+            case Struct(Type, Type):
+                build_struct_string(s, b, tv)
+            case SumType(Type):
+                strings.write_byte(b, '<')
+                first_variant := true
+                for variant in tv.variants {
+                    if !first_variant {
+                        strings.write_string(b, ", ")
+                    }
+                    first_variant = false
+                    strings.write_string(b, variant.name.ident)
+                    build_struct_string(
+                        s,
+                        b,
+                        get_type(s.types, variant.payload).(Struct(Type, Type)),
+                    )
+                }
+                strings.write_byte(b, '>')
             case GenericTypeValue:
                 strings.write_string(
                     b,
@@ -1533,34 +1572,15 @@ build_type_string :: proc(
                 }
                 strings.write_byte(b, ']')
                 build_type_string(s, b, tv.item_type)
-            case SumType(Type, struct {}):
-                strings.write_string(b, "TODO: Sum type")
             case nil:
                 panic("Unreachable")
             }
         }
     case TypeEquivilancyArrayRef:
         build_type_string(s, b, s.type_equivalancy_array[type.index])
-    case SumType(ExactCheckedType, FuncTypeRef):
-        strings.write_byte(b, '<')
-        first_variant := true
-        for variant in type.variants {
-            if !first_variant {
-                strings.write_string(b, ", ")
-            }
-            first_variant = false
-            strings.write_string(b, variant.name.ident)
-            build_struct_string(s, b, variant.payload)
-        }
-        strings.write_byte(b, '>')
-    case Struct(ExactCheckedType):
-        build_struct_string(s, b, type)
-    case GlobalTypeWithoutGenericRef:
-        strings.write_string(b, s.global_types_without_generics[type.index].ast_node.name)
-    case SumVariant(^ExactCheckedType):
-        sum_type, ok := get_sum_type(s, max(uint), type.sum_type^)
-        assert(ok)
-        build_type_string(s, b, type.sum_type^)
+    case SumVariant(Type):
+        sum_type := get_type(s.types, type.sum_type).(SumType(Type))
+        build_type_string(s, b, type.sum_type)
         strings.write_byte(b, '.')
         strings.write_string(b, sum_type.variants[type.variant_index].name.ident)
     // case JsObjectType:
@@ -2000,7 +2020,11 @@ check_block :: proc(
                 return nil, false
             }
 
-            val_sum_type, val_sum_type_ok := get_sum_type(s, value.value.pos, val_type)
+            val_sum_type, val_type_type, val_sum_type_ok := get_sum_type(
+                s,
+                value.value.pos,
+                val_type,
+            )
             if !val_sum_type_ok {
                 return nil, false
             }
@@ -2088,7 +2112,7 @@ check_block :: proc(
                     var_ok: bool = ---
                     var, var_ok = add_variable(
                         s,
-                        SumVariant(^ExactCheckedType){new_clone(val_type), variant_index},
+                        SumVariant(Type){val_type_type, variant_index},
                         false,
                         ident[0],
                     )
@@ -2209,8 +2233,9 @@ check_namespaced_var_ref :: proc(
         err(s, ref[index].pos, "No generic type argument passed to generic type")
         return nil, nil, 0
     case GlobalTypeWithoutGenericRef:
-        func_type := s.global_types_without_generics[global_value.index].function_type
-        if func_type.index == max(u32) {
+        exact_type := s.global_types_without_generics[global_value.index].exact_type
+        struct_type, is_struct := get_type(s.types, exact_type).(Struct(Type, Type))
+        if !is_struct {
             err(
                 s,
                 ref[index].pos,
@@ -2219,7 +2244,7 @@ check_namespaced_var_ref :: proc(
             )
             return nil, nil, 0
         }
-        return TypeInitFunc{global_value}, Type(func_type), index + 1
+        return StructTypeInitFunc{exact_type}, struct_type.extra_data, index + 1
     }
 }
 
@@ -2263,7 +2288,7 @@ check_var_ref :: proc(
             }
         }
 
-        sum_type, sum_type_ok := get_sum_type(s, pos, expected_return_type)
+        sum_type, type_type, sum_type_ok := get_sum_type(s, pos, expected_return_type)
         if !sum_type_ok {
             return nil
         }
@@ -2279,11 +2304,10 @@ check_var_ref :: proc(
             )
             return nil
         }
-        func_ref := sum_type.variants[variant_index].extra_data
+        func_ref :=
+            get_type(s.types, sum_type.variants[variant_index].payload).(Struct(Type, Type)).extra_data
         if expect_type(s, pos, type, Type(func_ref), "") {
-            return TypeInitFunc {
-                SumVariant(^ExactCheckedType){new_clone(expected_return_type), variant_index},
-            }
+            return SumTypeVariantInitFunc{type_type, variant_index}
         }
         return nil
         /*
@@ -2745,13 +2769,13 @@ check_value :: proc(
         err(s, v.pos, "Internal error: got nil value in check_value")
         return nil
 
-    case Struct(Unit):
+    case Struct(Unit, struct {}):
         err(s, v.pos, "Cannot use a struct type as a value")
         return nil
     case CallWithFrontedSquareBrackets:
         err(s, v.pos, "Cannot use a call with fronted square brackets as a value")
         return nil
-    case SumType(Unit, struct {}):
+    case SumType(Struct(Unit, struct {})):
         err(s, v.pos, "Cannot use a sum type as a value")
         return nil
 
@@ -3033,10 +3057,9 @@ CheckerOutput :: struct {
 }
 
 Checked :: struct {
-    checked_funcs:                        []CheckedFunction,
-    checked_global_types_without_generic: []ExactCheckedType,
-    type_equivalancy_array:               []ExactCheckedType,
-    types:                                Types,
+    checked_funcs:          []CheckedFunction,
+    type_equivalancy_array: []ExactCheckedType,
+    types:                  Types,
 }
 
 /*
@@ -3060,13 +3083,16 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         ),
         global_types_without_generics = soa_zip(
             parsed.global_types_without_generics,
-            make([]ExactCheckedType, len(parsed.global_types_without_generics)),
-            make([]FuncTypeRef, len(parsed.global_types_without_generics)),
+            make([]Type, len(parsed.global_types_without_generics)),
         ),
         global_types_with_generics    = soa_zip(
             parsed.global_types_with_generics,
             make([]GenericCheckedType, len(parsed.global_types_with_generics)),
         ),
+    }
+
+    for _, i in state.global_types_without_generics {
+        state.global_types_without_generics[i].exact_type = unknown_type
     }
 
     array_with_string_type := make([]Type, 1)
@@ -3192,30 +3218,8 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         }
     }
 
-    for type, i in state.global_types_without_generics {
-        state.file = type.ast_node.file
-        checked_type := check_type(&state, type.ast_node.value, "")
-        generic_elem := create_generic_type_elem(&state, checked_type, nil)
-        state.global_types_without_generics[i].exact_type = generic_elem
-        struct_type, is_struct := generic_elem.(Struct(ExactCheckedType))
-        if is_struct {
-            args := make([]Type, len(struct_type.fields))
-            for field, j in struct_type.fields {
-                args[j] = append_to_type_equivalancy_array(&state, field.type)
-            }
-            return_types := make([]Type, 1)
-            return_types[0] = append_to_type_equivalancy_array(
-                &state,
-                GlobalTypeWithoutGenericRef{uint(i)},
-            )
-            state.global_types_without_generics[i].function_type = FuncTypeRef(
-                create_type(&state.types, FuncType(Type){args, return_types, .Normal}),
-            )
-        } else {
-            state.global_types_without_generics[i].function_type = FuncTypeRef(
-                Type{index = max(u32)},
-            )
-        }
+    for _, i in state.global_types_without_generics {
+        initialise_global_type_without_generic(&state, uint(i))
     }
 
     if state.diagnostics_info.number_of_errors > 0 {
@@ -3264,8 +3268,8 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         debug("Initialising uninitialised generic types")
         debug_nesting += 1
     }
-    for _, i in state.types.values {
-        tv := state.types.values[i].value
+    for value, i in state.types.values {
+        tv := value.value.value
         gen_value, ok := tv.(GenericTypeValue)
         if ok && !gen_value.is_initialised {
             initialise_generic(&state, gen_value, Type{index = u32(i)})
@@ -3362,12 +3366,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     if state.diagnostics_info.number_of_errors > 0 {
         return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
-    checked := Checked {
-        checked_functions,
-        state.global_types_without_generics.exact_type[:len(state.global_types_without_generics)],
-        state.type_equivalancy_array[:],
-        state.types,
-    }
+    checked := Checked{checked_functions, state.type_equivalancy_array[:], state.types}
     return CheckerOutput{checked, state.diagnostics_info, entry_func_ref, entry_func_type}
 }
 

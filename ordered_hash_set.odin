@@ -9,6 +9,7 @@ package main
 // - without the hash being cached in `OrderedHashSetValue`
 // - different values for `ordered_hash_set_min_scale_factor`
 
+import "base:runtime"
 import "core:mem"
 
 ordered_hash_set_min_scale_factor :: 3 // len(OrderedHashSet.values) * min_scale_factoer <= len(OrderedHashSet.slots)
@@ -93,9 +94,13 @@ insert :: proc(
 
     // The `bool` returned is whether the values can be merged
     // The `Value` returned is the merged value
-    equal_merge_func: proc(_: Value, _: Value) -> (bool, Value),
+    equal_merge_func: proc(_: Value, _: Value, loc: runtime.Source_Code_Location) -> (bool, Value),
+    can_insert: bool = true,
     loc := #caller_location,
-) -> OrderedHashSetSlotRef {
+) -> (
+    OrderedHashSetSlotRef,
+    Value,
+) {
     when debug_ordered_hash_sets {
         print_call(loc, "insert")
         debug("hash: %d", hash)
@@ -104,7 +109,7 @@ insert :: proc(
     if len(ordered_hash_set.values) == 0 {
         append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
         resize(ordered_hash_set, ordered_hash_set_size_with_one_elem)
-        return OrderedHashSetSlotRef{0}
+        return OrderedHashSetSlotRef{0}, value
     }
 
     i := get_index(len(ordered_hash_set.slots), int(hash))
@@ -112,6 +117,9 @@ insert :: proc(
         if ordered_hash_set.slots[i].index == max(u32) {
             when debug_ordered_hash_sets {
                 debug("found empty slot at index %d", i)
+            }
+            if !can_insert {
+                panic("Could not find already existing hash set value to merge with")
             }
             out := OrderedHashSetSlotRef{u32(len(ordered_hash_set.values))}
             append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
@@ -127,12 +135,13 @@ insert :: proc(
             } else {
                 ordered_hash_set.slots[i] = out
             }
-            return out
+            return out, value
         }
         slot_value := ordered_hash_set.slots[i]
         is_equal, merged := equal_merge_func(
             value,
             ordered_hash_set.values[slot_value.index].value,
+            loc,
         )
         when debug_ordered_hash_sets {
             debug("equal merge func called")
@@ -143,7 +152,7 @@ insert :: proc(
         }
         if is_equal {
             ordered_hash_set.values[slot_value.index].value = merged
-            return slot_value
+            return slot_value, merged
         }
         i = (i + 1) % len(ordered_hash_set.slots)
     }

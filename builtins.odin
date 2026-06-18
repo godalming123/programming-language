@@ -123,7 +123,7 @@ handle_named_user_defined_type :: proc(
             }
             return nil
         }
-        return GlobalTypeWithoutGenericRef{ref.index}
+        return ref
     } else if len(generic_args) != 1 {
         err(s, pos, "TODO: Support types with more than 1 generic argument")
         return nil
@@ -269,16 +269,7 @@ to_str :: proc(
         }
     case TypeEquivilancyArrayRef:
         return to_str(s, pos, val, s.type_equivalancy_array[t.index])
-    case GlobalTypeWithoutGenericRef:
-        err(s, pos, "Cannot convert global type to string")
-        return nil
-    case Struct(ExactCheckedType):
-        err(s, pos, "Cannot convert struct type to string")
-        return nil
-    case SumType(ExactCheckedType, FuncTypeRef):
-        err(s, pos, "Cannot convert sum type to string")
-        return nil
-    case SumVariant(^ExactCheckedType):
+    case SumVariant(Type):
         err(s, pos, "Cannot convert sum type variant to string")
         return nil
     }

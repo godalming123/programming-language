@@ -1,5 +1,7 @@
 package main
 
+import "base:runtime"
+
 Type :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
@@ -12,7 +14,9 @@ u32_type :: Type{max(u32) - 6}
 u16_type :: Type{max(u32) - 7}
 u8_type :: Type{max(u32) - 8}
 bool_type :: Type{max(u32) - 9}
-max_index :: max(u32) - 10
+invalid_type :: Type{max(u32) - 10}
+unknown_type :: Type{max(u32) - 11}
+max_index :: max(u32) - 12
 
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
@@ -23,30 +27,66 @@ GenericTypeValue :: struct {
 
 TypeValue :: union {
     ArrayType(Type),
-    SumType(Type, struct {}),
     FuncType(Type),
     GenericTypeValue,
     TypeEquivilancyArrayRef, // TODO: Remove this
+    SumType(Type), // The type is always a struct
+
+    // The extra data is the initialisation function
+    Struct(Type, Type),
 }
 
-Types :: OrderedHashSet(TypeValue)
+TypeSlot :: struct {
+    aliases: ^[dynamic]string,
+    value:   TypeValue,
+}
+
+Types :: OrderedHashSet(TypeSlot)
 
 get_type :: proc(types: Types, t: Type) -> TypeValue {
     if t.index > max_index {
         return nil
     }
-    return get_value(types, t)
+    slot := get_value(types, t)
+    return slot.value
 }
 
-create_type :: proc(types: ^Types, value: TypeValue, loc := #caller_location) -> Type {
+create_type_and_get_value :: proc(
+    types: ^Types,
+    value: TypeValue,
+    aliases: [dynamic]string = nil,
+    can_inesrt: bool = true,
+    loc := #caller_location,
+) -> (
+    Type,
+    TypeValue,
+) {
     when debug_checker {
         print_call(loc, "create_type")
         debug("value: %v", value)
     }
-    out := insert(types, hash_type_value(value), value, merge_type_value)
+    out, type_value := insert(
+        types,
+        hash_type_value(value),
+        TypeSlot{new_clone(aliases), value},
+        merge_type_slot,
+        can_inesrt,
+        loc,
+    )
     when debug_checker {
         debug("out: %v", out)
+        debug("type_value: %v", type_value)
     }
+    return out, type_value.value
+}
+
+create_type :: proc(
+    types: ^Types,
+    value: TypeValue,
+    aliases: [dynamic]string = nil,
+    loc := #caller_location,
+) -> Type {
+    out, _ := create_type_and_get_value(types, value, aliases, true, loc)
     return out
 }
 
@@ -56,8 +96,10 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
         return v.index
     case ArrayType(Type):
         return v.length ~ v.item_type.index
-    case SumType(Type, struct {}):
+    case SumType(Type):
         return hash_sum_type(v)
+    case Struct(Type, Type):
+        return hash_struct_type(v)
     case FuncType(Type):
         return hash_func_type(v)
     case GenericTypeValue:
@@ -66,19 +108,24 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     panic("Unreachable")
 }
 
-hash_sum_type :: proc(value: SumType(Type, struct {})) -> u32 {
+hash_struct_type :: proc(value: Struct(Type, Type)) -> u32 {
     result: u32
-    for key in value.variants_map {
-        for c in key {
+    for field, j in value.fields {
+        for c in field.name.ident {
+            result ~= u32(c) ~ u32(j)
+        }
+        result ~= field.type.index
+    }
+    return result
+}
+
+hash_sum_type :: proc(value: SumType(Type)) -> u32 {
+    result: u32
+    for variant in value.variants {
+        for c in variant.name.ident {
             result ~= u32(c)
         }
-    }
-    for variant in value.variants {
-        for field, j in variant.payload.fields {
-            for c in field.name.ident {
-                result ~= u32(c) ~ u32(j)
-            }
-        }
+        result ~= variant.payload.index
     }
     return result
 }
@@ -94,36 +141,65 @@ hash_func_type :: proc(value: FuncType(Type)) -> u32 {
     return result ~ u32(value.type)
 }
 
-merge_type_value :: proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
+merge_type_slot :: proc(
+    a: TypeSlot,
+    b: TypeSlot,
+    loc: runtime.Source_Code_Location,
+) -> (
+    bool,
+    TypeSlot,
+) {
+    equal, merged := merge_type_value(a.value, b.value, loc)
+    if equal {
+        append_elems(a.aliases, ..b.aliases[:])
+        return true, TypeSlot{a.aliases, merged}
+    }
+    return false, TypeSlot{}
+}
+
+merge_type_value :: proc(
+    a: TypeValue,
+    b: TypeValue,
+    loc: runtime.Source_Code_Location,
+) -> (
+    bool,
+    TypeValue,
+) {
     #partial switch va in a {
     case TypeEquivilancyArrayRef:
         vb, ok := b.(TypeEquivilancyArrayRef)
         if !ok {
-            return false, a
+            return false, nil
         }
         return va == vb, a
     case ArrayType(Type):
         vb, ok := b.(ArrayType(Type))
         if !ok {
-            return false, a
+            return false, nil
         }
         return va.length == vb.length && va.item_type.index == vb.item_type.index, a
-    case SumType(Type, struct {}):
-        vb, ok := b.(SumType(Type, struct {}))
+    case SumType(Type):
+        vb, ok := b.(SumType(Type))
         if !ok {
-            return false, a
+            return false, nil
         }
-        return sum_types_are_equal(va, vb), a
+        return merge_sum_types(va, vb, loc)
+    case Struct(Type, Type):
+        vb, ok := b.(Struct(Type, Type))
+        if !ok {
+            return false, nil
+        }
+        return merge_struct_types(va, vb, loc)
     case FuncType(Type):
         vb, ok := b.(FuncType(Type))
         if !ok {
-            return false, a
+            return false, nil
         }
         return func_types_are_equal(va, vb), a
     case GenericTypeValue:
         vb, ok := b.(GenericTypeValue)
         if !ok {
-            return false, a
+            return false, nil
         }
         if va.generic_type_index == vb.generic_type_index && va.generic_arg == vb.generic_arg {
             if va.is_initialised {
@@ -133,29 +209,60 @@ merge_type_value :: proc(a: TypeValue, b: TypeValue) -> (bool, TypeValue) {
             return true, vb
         }
     }
-    return false, a
+    return false, nil
 }
 
-sum_types_are_equal :: proc(a: SumType(Type, struct {}), b: SumType(Type, struct {})) -> bool {
+merge_struct_types :: proc(
+    a: Struct(Type, Type),
+    b: Struct(Type, Type),
+    loc: runtime.Source_Code_Location,
+) -> (
+    bool,
+    Struct(Type, Type),
+) {
+    if len(a.fields) != len(b.fields) {
+        return false, Struct(Type, Type){}
+    }
+    for a_field, i in a.fields {
+        b_field := b.fields[i]
+        if a_field.name.ident != b_field.name.ident {
+            return false, Struct(Type, Type){}
+        }
+        if a_field.type != b_field.type {
+            return false, Struct(Type, Type){}
+        }
+    }
+    if a.extra_data != unknown_type {
+        if b.extra_data != unknown_type {
+            debug("file %s, line %d, column %d", loc.file_path, loc.line, loc.column)
+            panic("Unreachable")
+        }
+        return true, a
+    }
+    return true, b
+}
+
+merge_sum_types :: proc(
+    a: SumType(Type),
+    b: SumType(Type),
+    loc: runtime.Source_Code_Location,
+) -> (
+    bool,
+    SumType(Type),
+) {
     if len(a.variants) != len(b.variants) {
-        return false
+        return false, SumType(Type){}
     }
-    for key in a.variants_map {
-        _, in_b := b.variants_map[key]
-        if !in_b {
-            return false
-        }
-    }
-    for variant, i in a.variants {
+    for a_variant, i in a.variants {
         b_variant := b.variants[i]
-        if variant.name.ident != b_variant.name.ident {
-            return false
+        if a_variant.name.ident != b_variant.name.ident {
+            return false, SumType(Type){}
         }
-        if len(variant.payload.fields) != len(b_variant.payload.fields) {
-            return false
+        if a_variant.payload != b_variant.payload {
+            return false, SumType(Type){}
         }
     }
-    return true
+    return true, a
 }
 
 func_types_are_equal :: proc(a: FuncType(Type), b: FuncType(Type)) -> bool {
