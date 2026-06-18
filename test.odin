@@ -345,10 +345,10 @@ basic_type_system_test :: proc(t: ^testing.T) {
     generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type})
     generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type})
     generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type})
-    assert(generic0 == generic1)
+    testing.expect(t, generic0 == generic1)
     generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
-    assert(generic0_initialised == i64_type)
-    assert(generic0 != generic2)
+    testing.expect(t, generic0_initialised == i64_type)
+    testing.expect(t, generic0 != generic2)
 }
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors

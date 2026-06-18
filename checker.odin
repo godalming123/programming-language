@@ -751,7 +751,7 @@ create_generic_struct_type :: proc(
             elem.fields_map,
             soa_zip(elem.fields.name[0:len(elem.fields)], field_types),
         },
-        can_inesrt = false,
+        can_insert = false,
     )
     return out2, value2.(Struct(Type, Type))
 }
@@ -790,10 +790,9 @@ create_generic_array_type :: proc(
         print_arg("generic_arg", generic_arg)
     }
     item_type := create_generic_type_elem(s, elem.item_type^, generic_arg)
-    create_type(&s.types, TypeValue(ArrayType(Type){elem.length, Type(item_type)}))
     array_type := ArrayType(Type){elem.length, item_type}
     when debug_checker {
-        debug("returned ArrayType(u32) is %#v", array_type)
+        debug("returned ArrayType(Type) is %#v", array_type)
         debug("returned Type is %#v", item_type)
     }
     return create_type(&s.types, array_type), array_type, item_type
@@ -987,10 +986,9 @@ get_sum_type :: proc(
 
 get_struct_type :: proc(s: ^CheckerState, pos: uint, type: Type) -> (Struct(Type, Type), bool) {
     simplified := simplify_type(s, type)
-    struct_type, is_struct_type := get_type(s.types, type).(Struct(Type, Type))
+    struct_type, is_struct_type := get_type(s.types, simplified).(Struct(Type, Type))
     if is_struct_type {
         return struct_type, true
-
     }
     if pos != max(uint) {
         err(s, pos, "Expected a struct type, but got the type `%s`", type_to_string(s, type))

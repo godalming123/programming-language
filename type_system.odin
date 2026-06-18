@@ -53,7 +53,7 @@ create_type_and_get_value :: proc(
     types: ^Types,
     value: TypeValue,
     aliases: [dynamic]string = nil,
-    can_inesrt: bool = true,
+    can_insert: bool = true,
     loc := #caller_location,
 ) -> (
     Type,
@@ -68,7 +68,7 @@ create_type_and_get_value :: proc(
         hash_type_value(value),
         TypeSlot{new_clone(aliases), value},
         merge_type_slot,
-        can_inesrt,
+        can_insert,
         loc,
     )
     when debug_checker {

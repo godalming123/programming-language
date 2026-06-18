@@ -12,7 +12,7 @@ package main
 import "base:runtime"
 import "core:mem"
 
-ordered_hash_set_min_scale_factor :: 3 // len(OrderedHashSet.values) * min_scale_factoer <= len(OrderedHashSet.slots)
+ordered_hash_set_min_scale_factor :: 3 // len(OrderedHashSet.values) * min_scale_factor <= len(OrderedHashSet.slots)
 ordered_hash_set_size_with_one_elem :: 4 // math.next_power_of_two(ordered_hash_set_min_scale_factor)
 
 OrderedHashSetSlotRef :: struct {
@@ -87,6 +87,8 @@ resize :: proc(
     }
 }
 
+insert_err :: "Could not find already existing hash set value to merge with"
+
 insert :: proc(
     ordered_hash_set: ^OrderedHashSet($Value),
     hash: u32,
@@ -107,6 +109,9 @@ insert :: proc(
         debug("value: %v", value)
     }
     if len(ordered_hash_set.values) == 0 {
+        if !can_insert {
+            panic(insert_err)
+        }
         append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
         resize(ordered_hash_set, ordered_hash_set_size_with_one_elem)
         return OrderedHashSetSlotRef{0}, value
@@ -119,7 +124,7 @@ insert :: proc(
                 debug("found empty slot at index %d", i)
             }
             if !can_insert {
-                panic("Could not find already existing hash set value to merge with")
+                panic(insert_err)
             }
             out := OrderedHashSetSlotRef{u32(len(ordered_hash_set.values))}
             append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})

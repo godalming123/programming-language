@@ -74,7 +74,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
-        emit_js_value(s, v)
+        emit_js_value(s, v^)
         strings.write_byte(&s.b, ')')
     case StringsAreEqual:
         strings.write_byte(&s.b, '(')
@@ -132,7 +132,6 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     case ArrayType(Type):
     case FuncType(Type):
     case GenericTypeValue:
-        emit_type(&s.b, name, t.initialised_type)
     case SumType(Type):
         for variant, i in t.variants {
             payload := get_type(s.types, variant.payload).(Struct(Type, Type))
@@ -171,8 +170,8 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
             } else {
                 strings.write_byte(&s.b, ',')
             }
-            field_name := fmt.aprintf("field%d", i)
-            defer delete(field_name)
+            strings.write_string(&s.b, "field")
+            strings.write_int(&s.b, i)
         }
         strings.write_string(&s.b, ") {return {")
         first_field = true

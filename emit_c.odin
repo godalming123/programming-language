@@ -200,7 +200,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
-        emit_c_value(s, value)
+        emit_c_value(s, value^)
         strings.write_byte(&s.b, ')')
     case StringsAreEqual:
         strings.write_string(&s.b, "(strcmp(")
