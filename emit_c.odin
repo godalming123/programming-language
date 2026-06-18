@@ -314,31 +314,6 @@ emit_c_block_body :: proc(
             strings.write_string(&s.b, "} else {")
             emit_c_block(s, nesting_level + 1, stmt.else_block.variables, stmt.else_block.body)
             strings.write_byte(&s.b, '}')
-        /*
-        case CheckedSumTypeInitialisation:
-            emit_variable(&s.b, stmt.destination)
-            strings.write_string(&s.b, ".variant=")
-            strings.write_uint(&s.b, stmt.variant_index)
-            strings.write_byte(&s.b, ';')
-
-            emit_variable(&s.b, stmt.destination)
-            strings.write_string(&s.b, ".payload.variant")
-            strings.write_uint(&s.b, stmt.variant_index)
-            strings.write_string(&s.b, "=malloc(sizeof(")
-            emit_sum_variant(s, stmt.sum_type, stmt.variant_index)
-            strings.write_string(&s.b, "));")
-
-            for field, i in stmt.args {
-                emit_variable(&s.b, stmt.destination)
-                strings.write_string(&s.b, ".payload.variant")
-                strings.write_uint(&s.b, stmt.variant_index)
-                strings.write_string(&s.b, "->field")
-                strings.write_int(&s.b, i)
-                strings.write_byte(&s.b, '=')
-                emit_c_value(s, field)
-                strings.write_byte(&s.b, ';')
-            }
-            */
         case CheckedMatch:
             strings.write_string(&s.b, "switch (")
             emit_variable(&s.b, stmt.value)
@@ -568,8 +543,8 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             strings.write_int(&s.sum_type_initialisation_funcs, i)
             strings.write_string(&s.sum_type_initialisation_funcs, "; out.payload.variant")
             strings.write_int(&s.sum_type_initialisation_funcs, i)
-            strings.write_string(&s.sum_type_initialisation_funcs, " = malloc(sizeof(")
-            strings.write_string(&s.sum_type_initialisation_funcs, name)
+            strings.write_string(&s.sum_type_initialisation_funcs, " = malloc(sizeof(Type")
+            strings.write_uint(&s.sum_type_initialisation_funcs, uint(variant.payload.index))
             strings.write_string(&s.sum_type_initialisation_funcs, "));")
             strings.write_string(&s.sum_type_initialisation_funcs, "*out.payload.variant")
             strings.write_int(&s.sum_type_initialisation_funcs, i)

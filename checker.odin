@@ -2690,12 +2690,13 @@ get_global_function :: proc(
     extra_text: string,
 ) -> (
     FuncDefinitionRef,
+    uint,
     bool,
 ) {
     global_props, exists := s.files[s.file.index].globals[name]
     if !exists {
         err(s, pos, "The global `%s` is not defined%s", name, extra_text)
-        return FuncDefinitionRef{}, false
+        return FuncDefinitionRef{}, max(uint), false
     }
     value_ref, is_value := global_props.value.(GlobalValueRef)
     if !is_value {
@@ -2706,7 +2707,7 @@ get_global_function :: proc(
             name,
             extra_text,
         )
-        return FuncDefinitionRef{}, false
+        return FuncDefinitionRef{}, max(uint), false
     }
     func_ref, is_func := s.global_values[value_ref.index].ast_node.unit.value.(FuncDefinitionRef)
     if !is_func {
@@ -2717,9 +2718,9 @@ get_global_function :: proc(
             name,
             extra_text,
         )
-        return FuncDefinitionRef{}, false
+        return FuncDefinitionRef{}, max(uint), false
     }
-    return func_ref, true
+    return func_ref, global_props.pos, true
 }
 
 EntryFuncType :: enum {
@@ -2964,19 +2965,6 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         debug_nesting -= 1
     }
 
-    when debug_checker {
-        debug("Printing type equivalancy array elements")
-        debug_nesting += 1
-        for value, index in state.type_equivalancy_array {
-            debug("Type equivalancy array element")
-            debug_nesting += 1
-            debug("Index is %d", index)
-            debug("Value is %#v", value)
-            debug_nesting -= 1
-        }
-        debug_nesting -= 1
-    }
-
     // TODO: Check the arguments and return types of the `build` or `main` functions
     hint ::
         "\n\nHint: If you define a `build` function, the compiler will run that " +
@@ -3030,7 +3018,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
         entry_func_ref = build_ref
         entry_func_type = .BuildFunc
     } else {
-        main_ref, main_ok := get_global_function(&state, max(uint), "main", hint)
+        main_ref, main_pos, main_ok := get_global_function(&state, max(uint), "main", hint)
         if !main_ok {
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
@@ -3038,11 +3026,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
             Type,
         ))
         if main_info.type != .Normal {
-            err(
-                &state,
-                build_props.pos,
-                "`main` has a marker\nExpected `main` to not have a marker",
-            )
+            err(&state, main_pos, "`main` has a marker\nExpected `main` to not have a marker")
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
         entry_func_ref = main_ref
