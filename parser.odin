@@ -58,23 +58,23 @@ ParserState :: struct {
 }
 
 // Does not include the `{`
-parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
+parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
     fields_map := make(map[string]uint)
     fields := make(#soa[dynamic]StructField(Unit))
     for {
         field: IdentAndPos = ---
         get_next_token(s, true)
-        wrong_token :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
+        wrong_token :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             wrong_token_err(
                 s,
                 []string{"an identifier with one segment", "`}`"},
                 "While parsing struct type",
             )
-            return Struct(Unit){}, false
+            return Struct(Unit, struct {}){}, false
         }
         #partial switch token in s.last_token {
         case CloseBraceToken:
-            return Struct(Unit){fields_map, fields[:]}, true
+            return Struct(Unit, struct {}){struct{}{}, fields_map, fields[:]}, true
         case IdentToken:
             if len(token) != 1 {
                 return wrong_token(s)
@@ -90,7 +90,7 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
                 "There is already a field called `%s` in this struct",
                 field.ident,
             )
-            return Struct(Unit){}, false
+            return Struct(Unit, struct {}){}, false
         }
 
         get_next_token(s, false)
@@ -106,7 +106,7 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
         get_next_token(s, true)
         parsed := parse_unit(s)
         if !parsed.ok {
-            return Struct(Unit){}, false
+            return Struct(Unit, struct {}){}, false
         }
 
         fields_map[field.ident] = len(fields)
@@ -120,10 +120,10 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
                 "`}`",
             )
             wrong_token_err(s, parsed.descriptions_of_other_possible_tokens[:])
-            return Struct(Unit){}, false
+            return Struct(Unit, struct {}){}, false
         case CommaToken:
         case CloseBraceToken:
-            return Struct(Unit){fields_map, fields[:]}, true
+            return Struct(Unit, struct {}){struct{}{}, fields_map, fields[:]}, true
         }
     }
 }
@@ -235,7 +235,7 @@ parse_initial_unit :: proc(
 
     case OpenAngleBracketToken:
         variants_map := make(map[string]uint)
-        variants := make(#soa[dynamic]SumTypeVariant(Unit, struct {}))
+        variants := make(#soa[dynamic]SumTypeVariant(Struct(Unit, struct {})))
         loop: for {
             get_next_token(s, true)
             expected :: []string{"an identifier with one segment", "`>`"}
@@ -260,7 +260,7 @@ parse_initial_unit :: proc(
                     )
                     return Unit{}, nil, false
                 }
-                variant_payload := Struct(Unit){}
+                variant_payload := Struct(Unit, struct {}){}
                 get_next_token(s, true)
                 _, has_payload := s.last_token.(OpenBraceToken)
                 if has_payload {
@@ -273,7 +273,7 @@ parse_initial_unit :: proc(
                 variants_map[variant_name.ident] = len(&variants)
                 append(
                     &variants,
-                    SumTypeVariant(Unit, struct {}){variant_name, variant_payload, struct{}{}},
+                    SumTypeVariant(Struct(Unit, struct {})){variant_name, variant_payload},
                 )
                 #partial switch _ in s.last_token {
                 case:
@@ -295,7 +295,7 @@ parse_initial_unit :: proc(
                 }
             }
         }
-        out.value = SumType(Unit, struct {}){variants_map, variants[:]}
+        out.value = SumType(Struct(Unit, struct {})){variants_map, variants[:]}
 
     case OpenSquareBracketToken:
         args, ok := parse_units_until(s, is_close_square_bracket, "`]`")

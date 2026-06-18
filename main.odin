@@ -13,6 +13,7 @@ debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
 debug_equivalency_arrays :: false
+debug_ordered_hash_sets :: false
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
@@ -214,10 +215,11 @@ run_metaprogram :: proc(
             fmt.printfln("Compiler received compiler.emit_js_code(%d) from metaprogram", arg)
 
             builder := emit_javascript(checked)
+            defer strings.builder_destroy(&builder)
+
             strings.write_byte(&builder, EOT)
-            str := strings.to_string(builder)
-            defer delete(str)
-            os.write_string(stdin_writer, str)
+            os.write_string(stdin_writer, strings.to_string(builder))
+
             fmt.printfln("Compiler responded to compiler.emit_js_code")
         case:
             fmt.eprintfln("Received unrecognized command %q from metaprogram", command)

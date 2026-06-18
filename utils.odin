@@ -226,7 +226,12 @@ warn :: proc(
 
 debug_nesting := 0
 
-debug :: proc(format: string, args: ..any) {
+// Print flushing is necesarry even when we know that a flushing print call is
+// going to happen because flush does not work properly
+// See https://github.com/odin-lang/Odin/issues/6656
+flush_needed :: true
+
+debug :: proc(format: string, args: ..any, loc := #caller_location) {
     max_line_length :: 100
     line_padding := (4 * debug_nesting) + 4
 
@@ -235,9 +240,9 @@ debug :: proc(format: string, args: ..any) {
     assert(formatted != "")
 
     for _ in 0 ..< debug_nesting {
-        fmt.print("│   ", flush = false)
+        fmt.print("│   ", flush = flush_needed)
     }
-    fmt.print("├── ", flush = false)
+    fmt.print("├── ", flush = flush_needed)
 
     if line_padding >= max_line_length {
         fmt.println(formatted)
@@ -245,20 +250,20 @@ debug :: proc(format: string, args: ..any) {
         col := line_padding
         if len(formatted) > 1 {
             for char in formatted[0:len(formatted) - 1] {
-                fmt.print(char, flush = false)
+                fmt.print(char, flush = flush_needed)
                 if char == '\n' {
                     col = 0
                 } else {
                     col += 1
                     if col >= max_line_length {
-                        fmt.print("\n...", flush = false)
+                        fmt.print("\n...", flush = flush_needed)
                         col = 3
                     } else {
                         continue
                     }
                 }
                 for _ in col ..< line_padding {
-                    fmt.print(' ', flush = false)
+                    fmt.print(' ', flush = flush_needed)
                 }
                 col = line_padding
             }
@@ -275,7 +280,7 @@ debug :: proc(format: string, args: ..any) {
     }
 }
 
-debug_exact_checked_type :: proc(s: ^CheckerState, type: ExactCheckedType) {
+debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     debug("type is %#v", type)
     /*
     debug_nesting += 1

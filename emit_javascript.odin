@@ -3,7 +3,7 @@ package main
 import "core:fmt"
 import "core:strings"
 
-emit_js_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
+emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
     emit_js_value(s, c.function^)
     strings.write_byte(&s.b, '(')
     for arg, i in c.args {
@@ -15,7 +15,7 @@ emit_js_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
+emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
     case CompileTimeValue:
         switch comptime in v {
@@ -63,23 +63,18 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ']')
     case CheckedFunctionCall:
         emit_js_func_call(s, v)
-    case TypeInitFunc:
-        strings.write_string(&s.b, "init_")
-        #partial switch type in v.type {
-        case nil:
-            panic("unreachable")
-        case SumVariant(^ExactCheckedType):
-            emit_sum_variant(s, type.sum_type^, type.variant_index, false)
-        case GlobalTypeWithoutGenericRef:
-            strings.write_string(&s.b, "Global")
-            strings.write_uint(&s.b, type.index)
-        case:
-            panic(fmt.aprintf("TODO: %#v", v.type))
-        }
+    case StructTypeInitFunc:
+        strings.write_string(&s.b, "init_Type")
+        strings.write_uint(&s.b, uint(v.type.index))
+    case SumTypeInitFunc:
+        strings.write_string(&s.b, "init_Type")
+        strings.write_uint(&s.b, uint(v.sum_type.index))
+        strings.write_string(&s.b, "Variant")
+        strings.write_uint(&s.b, uint(v.variant_index))
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
-        emit_js_value(s, v)
+        emit_js_value(s, v^)
         strings.write_byte(&s.b, ')')
     case StringsAreEqual:
         strings.write_byte(&s.b, '(')
@@ -130,17 +125,23 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
     }
 }
 
-emit_js_global_type :: proc(s: ^EmitterState, name: string, type: ExactCheckedType) {
-    #partial switch t in type {
-    case SumType(ExactCheckedType, FuncTypeRef):
+emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
+    name := fmt.aprintf("Type%d", index)
+    defer delete(name)
+    switch t in s.types.values[index].value.value {
+    case ArrayType(Type):
+    case FuncType(Type):
+    case GenericTypeValue:
+    case SumType(Type):
         for variant, i in t.variants {
+            payload := get_type(s.types, variant.payload).(Struct(Type, Type))
             strings.write_string(&s.b, "function init_")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")
             strings.write_int(&s.b, i)
             strings.write_byte(&s.b, '(')
             first_arg := true
-            for _, j in variant.payload.fields {
+            for _, j in payload.fields {
                 if first_arg {
                     first_arg = false
                 } else {
@@ -151,14 +152,14 @@ emit_js_global_type :: proc(s: ^EmitterState, name: string, type: ExactCheckedTy
             }
             strings.write_string(&s.b, ") {return {variant:")
             strings.write_int(&s.b, i)
-            for _, j in variant.payload.fields {
+            for _, j in payload.fields {
                 strings.write_byte(&s.b, ',')
                 strings.write_string(&s.b, "field")
                 strings.write_int(&s.b, j)
             }
             strings.write_string(&s.b, "}}")
         }
-    case Struct(ExactCheckedType):
+    case Struct(Type, Type):
         strings.write_string(&s.b, "function init_")
         strings.write_string(&s.b, name)
         strings.write_byte(&s.b, '(')
@@ -169,8 +170,8 @@ emit_js_global_type :: proc(s: ^EmitterState, name: string, type: ExactCheckedTy
             } else {
                 strings.write_byte(&s.b, ',')
             }
-            field_name := fmt.aprintf("field%d", i)
-            defer delete(field_name)
+            strings.write_string(&s.b, "field")
+            strings.write_int(&s.b, i)
         }
         strings.write_string(&s.b, ") {return {")
         first_field = true
@@ -188,7 +189,7 @@ emit_js_global_type :: proc(s: ^EmitterState, name: string, type: ExactCheckedTy
 }
 
 emit_js_block_body :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
     body: []CheckedStatement,
     loc := #caller_location,
@@ -293,9 +294,9 @@ emit_js_block_body :: proc(
 }
 
 emit_js_block_head :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     loc := #caller_location,
 ) {
     for _, index in variables {
@@ -306,9 +307,9 @@ emit_js_block_head :: proc(
 }
 
 emit_js_block :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     body: []CheckedStatement,
     loc := #caller_location,
 ) {
@@ -320,37 +321,28 @@ emit_js_block :: proc(
 }
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
-    s := EmitterState{strings.builder_make(), c.func_types, c.type_equivalancy_array}
+    s := GeneralEmitterState{strings.builder_make(), c.types, c}
 
-    for global, index in c.checked_global_types_without_generic {
-        name := fmt.aprintf("Global%d", index)
-        defer delete_string(name)
-        emit_js_global_type(&s, name, global)
+    for _, index in c.types.values {
+        emit_js_global_type(&s, index)
     }
 
-    emitted_generic_type_defs := map[u64]struct{}{}
-    for key, value in c.generic_type_initialisations {
-        global_type_index, generic_arg_ref := seperate_u64(key)
-        _, simplified_generic_arg_ref := get_info(c.type_equivalancy_array, uint(generic_arg_ref))
-        new_key := combine_u32(global_type_index, u32(simplified_generic_arg_ref))
-        _, emitted := emitted_generic_type_defs[new_key]
-        if emitted {
+    /*
+    for _, i in c.types.values {
+        tv := c.types.values[i].value
+        gen_value, ok := tv.(GenericTypeValue)
+        if !ok || !gen_value.is_initialised {
             continue
         }
-        new_value: ExactCheckedType = ---
-        if value == nil {
-            new_value = c.generic_type_initialisations[new_key]
-            if new_value == nil {
-                continue
-            }
-        } else {
-            new_value = value
-        }
-        emitted_generic_type_defs[new_key] = struct{}{}
-        name := fmt.aprintf(generic_name_format, global_type_index, simplified_generic_arg_ref)
+        name := fmt.aprintf(
+            generic_name_format,
+            gen_value.generic_type_index,
+            gen_value.generic_arg.index,
+        )
         defer delete(name)
-        emit_js_global_type(&s, name, new_value)
+        emit_js_global_type(&s, name, gen_value.initialised_type)
     }
+    */
 
     for func, index in c.checked_funcs {
         when debug_emitter {
@@ -359,7 +351,7 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info, _ := get_info(c.func_types, func.type.index)
+        info := get_type(c.types, Type(func.type)).(FuncType(Type))
         first_arg := true
         for _, i in info.args {
             if first_arg {

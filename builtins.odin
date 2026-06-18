@@ -31,30 +31,30 @@ builtin_exit :: 9
 builtin_get_os_args :: 10 // TODO
 builtin_emit_js_code :: 11
 
-get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, ExactCheckedType) {
+get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, Type) {
     switch name {
     case "print":
-        return builtin_print, string_to_nil_type
+        return builtin_print, s.string_to_nil_type
     case "println":
-        return builtin_println, string_to_nil_type
+        return builtin_println, s.string_to_nil_type
     case "eprint":
-        return builtin_eprint, string_to_nil_type
+        return builtin_eprint, s.string_to_nil_type
     case "eprintln":
-        return builtin_eprintln, string_to_nil_type
+        return builtin_eprintln, s.string_to_nil_type
     case "readline":
-        return builtin_readline, string_to_string_type
+        return builtin_readline, s.string_to_string_type
     case "read_file":
-        return builtin_read_file, string_to_string_type
+        return builtin_read_file, s.string_to_string_type
     case "write_file":
-        return builtin_write_file, string_string_to_nil_type
+        return builtin_write_file, s.string_string_to_nil_type
     case "clear":
-        return builtin_clear, no_args_to_nil_type
+        return builtin_clear, s.no_args_to_nil_type
     case "run_executable":
-        return builtin_run_executable, array_of_strings_to_nil_type
+        return builtin_run_executable, s.array_of_strings_to_nil_type
     case "exit":
-        return builtin_exit, i64_to_nil_type
+        return builtin_exit, s.i64_to_nil_type
     case:
-        return max(u32), nil
+        return max(u32), invalid_type
     }
 }
 
@@ -123,7 +123,7 @@ handle_named_user_defined_type :: proc(
             }
             return nil
         }
-        return GlobalTypeWithoutGenericRef{ref.index}
+        return ref
     } else if len(generic_args) != 1 {
         err(s, pos, "TODO: Support types with more than 1 generic argument")
         return nil
@@ -228,54 +228,31 @@ handle_named_type :: proc(
     return builtin_type
 }
 
-to_str :: proc(
-    s: ^CheckerState,
-    pos: uint,
-    val: CheckedValue,
-    type: ExactCheckedType,
-) -> CheckedValue {
+to_str :: proc(s: ^CheckerState, pos: uint, val: CheckedValue, type: Type) -> CheckedValue {
     from_type: ToStringFromType = ---
-    switch _ in type {
-    case BoolType:
+    switch type {
+    case bool_type:
         from_type = .BoolType
-    case StringType:
+    case string_type:
         return val
-    case I64Type:
+    case i64_type:
         from_type = .I64Type
-    case I32Type:
+    case i32_type:
         from_type = .I32Type
-    case I16Type:
+    case i16_type:
         from_type = .I16Type
-    case I8Type:
+    case i8_type:
         from_type = .I8Type
-    case U64Type:
+    case u64_type:
         from_type = .U64Type
-    case U32Type:
+    case u32_type:
         from_type = .U32Type
-    case U16Type:
+    case u16_type:
         from_type = .U16Type
-    case U8Type:
+    case u8_type:
         from_type = .U8Type
-    case ArrayType(u32):
-        err(s, pos, "Cannot convert array to string")
-        return nil
-    case FuncTypeRef:
-        err(s, pos, "Cannot convert function to string")
-        return nil
-    case GenericType(u32):
-        err(s, pos, "Cannot convert generic type to string")
-        return nil
-    case GlobalTypeWithoutGenericRef:
-        err(s, pos, "Cannot convert global type to string")
-        return nil
-    case Struct(ExactCheckedType):
-        err(s, pos, "Cannot convert struct type to string")
-        return nil
-    case SumType(ExactCheckedType, FuncTypeRef):
-        err(s, pos, "Cannot convert sum type to string")
-        return nil
-    case SumVariant(^ExactCheckedType):
-        err(s, pos, "Cannot convert sum type variant to string")
+    case:
+        err(s, pos, "Cannot convert %s to String", type_to_string(s, type))
         return nil
     }
     return ToString{from_type, new_clone(val)}
@@ -313,7 +290,7 @@ is_builtin :: proc(name: string) -> bool {
 
 add_unnamed_variable :: proc(
     s: ^CheckerState,
-    variable_type: ExactCheckedType,
+    variable_type: Type,
     variable_is_mut: bool,
     loc := #caller_location,
 ) -> VariableRef {
@@ -324,7 +301,6 @@ add_unnamed_variable :: proc(
         len(s.scopes[len(s.scopes) - 1].variable_is_muts) ==
         len(s.scopes[len(s.scopes) - 1].variable_types),
     )
-    assert(variable_type != nil)
     var_ref := VariableRef{len(s.scopes) - 1, len(s.scopes[len(s.scopes) - 1].variable_is_muts)}
     append_elem(&s.scopes[len(s.scopes) - 1].variable_types, variable_type)
     append_elem(&s.scopes[len(s.scopes) - 1].variable_is_muts, variable_is_mut)
@@ -334,7 +310,7 @@ add_unnamed_variable :: proc(
 // The boolean returned is whether there are errors
 add_variable :: proc(
     s: ^CheckerState,
-    variable_type: ExactCheckedType,
+    variable_type: Type,
     variable_is_mut: bool,
     variable: IdentAndPos,
     loc := #caller_location,
