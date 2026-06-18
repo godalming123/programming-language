@@ -280,7 +280,7 @@ debug :: proc(format: string, args: ..any, loc := #caller_location) {
     }
 }
 
-debug_exact_checked_type :: proc(s: ^CheckerState, type: ExactCheckedType) {
+debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     debug("type is %#v", type)
     /*
     debug_nesting += 1

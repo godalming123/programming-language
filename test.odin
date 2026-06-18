@@ -340,14 +340,14 @@ basic_fuzz_test :: proc(t: ^testing.T) {
 @(test)
 basic_type_system_test :: proc(t: ^testing.T) {
     types: Types
-    type0 := create_type(&types, TypeEquivilancyArrayRef{0})
-    type1 := create_type(&types, TypeEquivilancyArrayRef{1})
-    generic0 := create_type(&types, GenericTypeValue{7, type0, false, nil})
-    generic1 := create_type(&types, GenericTypeValue{7, type0, true, i64_type})
-    generic2 := create_type(&types, GenericTypeValue{7, type1, false, nil})
+    type0 := string_type
+    type1 := bool_type
+    generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type})
+    generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type})
+    generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type})
     assert(generic0 == generic1)
     generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
-    assert(generic0_initialised.(Type) == i64_type)
+    assert(generic0_initialised == i64_type)
     assert(generic0 != generic2)
 }
 

@@ -3,7 +3,7 @@ package main
 import "core:fmt"
 import "core:strings"
 
-emit_js_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
+emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
     emit_js_value(s, c.function^)
     strings.write_byte(&s.b, '(')
     for arg, i in c.args {
@@ -15,7 +15,7 @@ emit_js_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
+emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
     case CompileTimeValue:
         switch comptime in v {
@@ -66,7 +66,7 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
     case StructTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(v.type.index))
-    case SumTypeVariantInitFunc:
+    case SumTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(v.sum_type.index))
         strings.write_string(&s.b, "Variant")
@@ -125,19 +125,14 @@ emit_js_value :: proc(s: ^EmitterState, value: CheckedValue) {
     }
 }
 
-emit_js_global_type :: proc(s: ^EmitterState, index: int) {
+emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
     switch t in s.types.values[index].value.value {
     case ArrayType(Type):
     case FuncType(Type):
     case GenericTypeValue:
-        if !t.is_initialised {
-            return
-        }
-        emit_type(s, name, t.initialised_type)
-    case TypeEquivilancyArrayRef:
-        emit_type(s, name, s.type_equivalancy_array[t.index])
+        emit_type(&s.b, name, t.initialised_type)
     case SumType(Type):
         for variant, i in t.variants {
             payload := get_type(s.types, variant.payload).(Struct(Type, Type))
@@ -195,7 +190,7 @@ emit_js_global_type :: proc(s: ^EmitterState, index: int) {
 }
 
 emit_js_block_body :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
     body: []CheckedStatement,
     loc := #caller_location,
@@ -300,9 +295,9 @@ emit_js_block_body :: proc(
 }
 
 emit_js_block_head :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     loc := #caller_location,
 ) {
     for _, index in variables {
@@ -313,9 +308,9 @@ emit_js_block_head :: proc(
 }
 
 emit_js_block :: proc(
-    s: ^EmitterState,
+    s: ^GeneralEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     body: []CheckedStatement,
     loc := #caller_location,
 ) {
@@ -326,14 +321,8 @@ emit_js_block :: proc(
     emit_js_block_body(s, nesting_level, body)
 }
 
-emit_javascript :: proc(c: Checked) -> (strings.Builder, strings.Builder) {
-    s := EmitterState {
-        strings.builder_make(),
-        strings.builder_make(),
-        c.types,
-        c.type_equivalancy_array,
-        c,
-    }
+emit_javascript :: proc(c: Checked) -> strings.Builder {
+    s := GeneralEmitterState{strings.builder_make(), c.types, c}
 
     for _, index in c.types.values {
         emit_js_global_type(&s, index)
@@ -378,6 +367,6 @@ emit_javascript :: proc(c: Checked) -> (strings.Builder, strings.Builder) {
         strings.write_byte(&s.b, '}')
     }
 
-    return s.head_b, s.b
+    return s.b
 }
 

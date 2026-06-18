@@ -3,12 +3,17 @@ package main
 import "core:fmt"
 import "core:strings"
 
-EmitterState :: struct {
-    b:                      strings.Builder,
-    head_b:                 strings.Builder,
-    types:                  Types,
-    type_equivalancy_array: []ExactCheckedType,
-    c:                      Checked,
+GeneralEmitterState :: struct {
+    b:     strings.Builder,
+    types: Types,
+    c:     Checked,
+}
+
+CEmitterState :: struct {
+    using s:                       GeneralEmitterState,
+    forward_struct_definitions:    strings.Builder, // Several `typedef struct TypeStruct Type;`
+    global_type_definitions:       strings.Builder,
+    sum_type_initialisation_funcs: strings.Builder,
 }
 
 variable_format :: "nesting_level%dindex%d"
@@ -43,124 +48,51 @@ emit_array_type :: proc(b: ^strings.Builder, length: u32, item_type: Type) {
 */
 
 // Does not include the `struct`
-emit_struct_type :: proc(s: ^EmitterState, type: Struct(Type, Type), loc := #caller_location) {
+emit_struct_type :: proc(b: ^strings.Builder, type: Struct(Type, Type), loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_struct_type")
     }
-    strings.write_byte(&s.b, '{')
+    strings.write_byte(b, '{')
     for field, index in type.fields {
         name := fmt.aprintf("field%d", index)
-        emit_type(s, name, field.type)
+        emit_type(b, name, field.type)
         delete_string(name)
-        strings.write_byte(&s.b, ';')
+        strings.write_byte(b, ';')
     }
-    strings.write_byte(&s.b, '}')
+    strings.write_byte(b, '}')
 }
 
-emit_sum_variant :: proc(
-    s: ^EmitterState,
-    sum_type: Type,
-    variant_index: uint,
-    emit_struct_keyword: bool,
-) {
-    strings.write_string(&s.b, "Type")
-    strings.write_uint(&s.b, uint(sum_type.index))
-    strings.write_string(&s.b, "Variant")
-    strings.write_uint(&s.b, uint(variant_index))
-    /*
-    #partial switch type in sum_type {
-    case Type:
-        tv := get_value(s.c.types, type).value.(GenericTypeValue)
-        emit_generic_name(
-            &s.b,
-            tv.generic_type_index,
-            u32(tv.generic_arg.index),
-            emit_struct_keyword,
-        )
-        strings.write_string(&s.b, "Variant")
-        strings.write_uint(&s.b, variant_index)
-    //case GlobalTypeWithoutGenericRef:
-    //    strings.write_string(&s.b, "Global")
-    //    strings.write_uint(&s.b, type.index)
-    //    strings.write_string(&s.b, "Variant")
-    //    strings.write_uint(&s.b, variant_index)
-    case nil:
-        panic("Unreahcable")
-    case:
-        panic("Unreahcable")
-    }
-    */
-}
-
-emit_type2 :: proc(s: ^EmitterState, name: string, type: Type) {
+emit_type :: proc(b: ^strings.Builder, name: string, type: Type) {
     switch type {
     case bool_type:
-        strings.write_string(&s.b, "bool")
+        strings.write_string(b, "bool")
     case string_type:
-        strings.write_string(&s.b, "char*")
+        strings.write_string(b, "char*")
     case i64_type:
-        strings.write_string(&s.b, "int64_t")
+        strings.write_string(b, "int64_t")
     case i32_type:
-        strings.write_string(&s.b, "int32_t")
+        strings.write_string(b, "int32_t")
     case i16_type:
-        strings.write_string(&s.b, "int16_t")
+        strings.write_string(b, "int16_t")
     case i8_type:
-        strings.write_string(&s.b, "int8_t")
+        strings.write_string(b, "int8_t")
     case u64_type:
-        strings.write_string(&s.b, "uint64_t")
+        strings.write_string(b, "uint64_t")
     case u32_type:
-        strings.write_string(&s.b, "uint32_t")
+        strings.write_string(b, "uint32_t")
     case u16_type:
-        strings.write_string(&s.b, "uint16_t")
+        strings.write_string(b, "uint16_t")
     case u8_type:
-        strings.write_string(&s.b, "uint8_t")
+        strings.write_string(b, "uint8_t")
     case:
-        strings.write_string(&s.b, "Type")
-        strings.write_uint(&s.b, uint(type.index))
+        strings.write_string(b, "Type")
+        strings.write_uint(b, uint(type.index))
     }
-    strings.write_byte(&s.b, ' ')
-    strings.write_string(&s.b, name)
+    strings.write_byte(b, ' ')
+    strings.write_string(b, name)
 }
 
-emit_type :: proc(
-    s: ^EmitterState,
-    name: string,
-    type: ExactCheckedType,
-    loc := #caller_location,
-) {
-    when debug_emitter {
-        print_call(loc, "emit_type")
-        print_arg("name", name)
-        print_arg("type", type)
-    }
-    switch t in type {
-    case:
-        panic(fmt.aprintf("Unreachable (type was %v)", type))
-    case Type:
-        emit_type2(s, name, t)
-        return
-    case TypeEquivilancyArrayRef:
-        when debug_emitter {
-            debug("Type equivalancy array index: %d", t.index)
-        }
-        emit_type(s, name, s.type_equivalancy_array[t.index])
-        return
-    //case GlobalTypeWithoutGenericRef:
-    //    strings.write_string(&s.b, "struct Global")
-    //    strings.write_uint(&s.b, t.index)
-    case SumVariant(Type):
-        emit_sum_variant(s, t.sum_type, t.variant_index, true)
-    // case Struct(ExactCheckedType):
-    //     strings.write_string(&s.b, "struct ")
-    //     emit_struct_type(s, t)
-    // case ArrayType(u32):
-    // emit_array_type(&s.b, t.length, u32(t.item_type))
-    }
-    strings.write_byte(&s.b, ' ')
-    strings.write_string(&s.b, name)
-}
-
-emit_c_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
+emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
     emit_c_value(s, c.function^)
     strings.write_byte(&s.b, '(')
     for arg, i in c.args {
@@ -172,7 +104,7 @@ emit_c_func_call :: proc(s: ^EmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
+emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     switch value in v {
     case CompileTimeValue:
         switch comptime in value {
@@ -260,24 +192,11 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
     case StructTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(value.type.index))
-    case SumTypeVariantInitFunc:
+    case SumTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(value.sum_type.index))
         strings.write_string(&s.b, "Variant")
         strings.write_uint(&s.b, uint(value.variant_index))
-    /*
-        #partial switch type in value.type {
-        case nil:
-            panic("unreachable")
-        case SumVariant(^ExactCheckedType):
-            emit_sum_variant(s, type.sum_type^, type.variant_index, false)
-        case GlobalTypeWithoutGenericRef:
-            strings.write_string(&s.b, "Global")
-            strings.write_uint(&s.b, type.index)
-        case:
-            panic(fmt.aprintf("TODO: %#v", value.type))
-        }
-        */
     case BooleanNotValue:
         strings.write_byte(&s.b, '(')
         strings.write_byte(&s.b, '!')
@@ -349,9 +268,9 @@ emit_c_value :: proc(s: ^EmitterState, v: CheckedValue) {
 }
 
 emit_c_block_head :: proc(
-    s: ^EmitterState,
+    s: ^CEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     loc := #caller_location,
 ) {
     when debug_emitter {
@@ -359,14 +278,14 @@ emit_c_block_head :: proc(
     }
     for type, index in variables {
         name := fmt.aprintf(variable_format, nesting_level, index)
-        emit_type(s, name, type)
+        emit_type(&s.b, name, type)
         delete_string(name)
         strings.write_byte(&s.b, ';')
     }
 }
 
 emit_c_block_body :: proc(
-    s: ^EmitterState,
+    s: ^CEmitterState,
     nesting_level: uint,
     body: []CheckedStatement,
     loc := #caller_location,
@@ -486,7 +405,7 @@ emit_c_block_body :: proc(
                 strings.write_string(&s.b, ".elems = malloc(")
                 emit_variable(&s.b, stmt.variable)
                 strings.write_string(&s.b, ".length * sizeof(")
-                emit_type(s, "", stmt.variable_type.item_type)
+                emit_type(&s.b, "", stmt.variable_type.item_type)
                 strings.write_string(&s.b, "));")
             }
             strings.write_string(&s.b, "{uint64_t index = 0;")
@@ -535,9 +454,9 @@ emit_c_block_body :: proc(
 }
 
 emit_c_block :: proc(
-    s: ^EmitterState,
+    s: ^CEmitterState,
     nesting_level: uint,
-    variables: []ExactCheckedType,
+    variables: []Type,
     body: []CheckedStatement,
     loc := #caller_location,
 ) {
@@ -548,7 +467,7 @@ emit_c_block :: proc(
     emit_c_block_body(s, nesting_level, body)
 }
 
-emit_c_global_type :: proc(s: ^EmitterState, index: int, loc := #caller_location) {
+emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_c_global_type")
     }
@@ -556,185 +475,162 @@ emit_c_global_type :: proc(s: ^EmitterState, index: int, loc := #caller_location
     defer delete(name)
     switch type in s.types.values[index].value.value {
     case ArrayType(Type):
-        strings.write_string(&s.b, "struct ")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, "Struct")
+        strings.write_string(&s.global_type_definitions, "struct ")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, "Struct")
         if type.length != 0 {
-            strings.write_byte(&s.b, '{')
-            emit_type(s, "", type.item_type)
-            strings.write_string(&s.b, " elems[")
-            strings.write_uint(&s.b, uint(type.length))
-            strings.write_string(&s.b, "];};")
+            strings.write_byte(&s.global_type_definitions, '{')
+            emit_type(&s.global_type_definitions, "", type.item_type)
+            strings.write_string(&s.global_type_definitions, " elems[")
+            strings.write_uint(&s.global_type_definitions, uint(type.length))
+            strings.write_string(&s.global_type_definitions, "];};")
         } else {
-            strings.write_string(&s.b, "{uint64_t length;")
-            emit_type(s, "", type.item_type)
-            strings.write_string(&s.b, "* elems;};")
+            strings.write_string(&s.global_type_definitions, "{uint64_t length;")
+            emit_type(&s.global_type_definitions, "", type.item_type)
+            strings.write_string(&s.global_type_definitions, "* elems;};")
         }
-        strings.write_string(&s.head_b, "typedef struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_string(&s.head_b, "Struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_byte(&s.head_b, ';')
+        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_string(&s.forward_struct_definitions, "Struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_byte(&s.forward_struct_definitions, ';')
     case FuncType(Type):
-        strings.write_string(&s.b, "typedef ")
+        strings.write_string(&s.global_type_definitions, "typedef ")
         switch len(type.return_types) {
         case 0:
-            strings.write_string(&s.b, "void")
+            strings.write_string(&s.global_type_definitions, "void")
         case 1:
-            emit_type(s, "", type.return_types[0])
+            emit_type(&s.global_type_definitions, "", type.return_types[0])
         case:
             panic("TODO")
         }
-        strings.write_string(&s.b, " (*")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, ")(")
+        strings.write_string(&s.global_type_definitions, " (*")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, ")(")
         is_first_arg := true
         for arg, i in type.args {
             if !is_first_arg {
-                strings.write_byte(&s.b, ',')
+                strings.write_byte(&s.global_type_definitions, ',')
             }
             name := fmt.aprintf("arg%d", i)
             defer delete(name)
-            emit_type(s, name, arg)
+            emit_type(&s.global_type_definitions, name, arg)
             is_first_arg = false
         }
-        strings.write_string(&s.b, ");")
+        strings.write_string(&s.global_type_definitions, ");")
     case GenericTypeValue:
-        assert(type.is_initialised)
-        strings.write_string(&s.b, "typedef ")
-        emit_type(s, name, type.initialised_type)
-        strings.write_byte(&s.b, ';')
-    case TypeEquivilancyArrayRef:
-        emit_type(s, name, s.type_equivalancy_array[type.index])
-        strings.write_byte(&s.b, ';')
+        strings.write_string(&s.global_type_definitions, "typedef ")
+        emit_type(&s.global_type_definitions, name, type.initialised_type)
+        strings.write_byte(&s.global_type_definitions, ';')
     case SumType(Type):
         // Main struct type
-        strings.write_string(&s.b, "struct ")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, "Struct{uint64_t variant; union {")
-        for _, i in type.variants {
-            strings.write_string(&s.b, "struct ")
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, "Variant")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, "Struct* variant")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, "; ")
+        strings.write_string(&s.global_type_definitions, "struct ")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, "Struct{uint64_t variant; union {")
+        for variant, i in type.variants {
+            strings.write_string(&s.global_type_definitions, "Type")
+            strings.write_uint(&s.global_type_definitions, uint(variant.payload.index))
+            strings.write_string(&s.global_type_definitions, "* variant")
+            strings.write_int(&s.global_type_definitions, i)
+            strings.write_byte(&s.global_type_definitions, ';')
         }
-        strings.write_string(&s.b, "} payload;};")
+        strings.write_string(&s.global_type_definitions, "} payload;};")
 
         // Type def
-        strings.write_string(&s.head_b, "typedef struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_string(&s.head_b, "Struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_byte(&s.head_b, ';')
+        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_string(&s.forward_struct_definitions, "Struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_byte(&s.forward_struct_definitions, ';')
 
-        // Variant types
+        // Variant funcs
         for variant, i in type.variants {
             payload := get_type(s.types, variant.payload).(Struct(Type, Type))
-
-            // Struct def
-            strings.write_string(&s.b, "struct ")
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, "Variant")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, "Struct")
-            emit_struct_type(s, payload)
-            strings.write_byte(&s.b, ';')
-
-            // Type def
-            strings.write_string(&s.head_b, "typedef struct ")
-            strings.write_string(&s.head_b, name)
-            strings.write_string(&s.head_b, "Variant")
-            strings.write_int(&s.head_b, i)
-            strings.write_string(&s.head_b, "Struct ")
-            strings.write_string(&s.head_b, name)
-            strings.write_string(&s.head_b, "Variant")
-            strings.write_int(&s.head_b, i)
-            strings.write_byte(&s.head_b, ';')
-
-            // Initialisation func def
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, " init_")
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, "Variant")
-            strings.write_int(&s.b, i)
-            strings.write_byte(&s.b, '(')
+            strings.write_string(&s.sum_type_initialisation_funcs, name)
+            strings.write_string(&s.sum_type_initialisation_funcs, " init_")
+            strings.write_string(&s.sum_type_initialisation_funcs, name)
+            strings.write_string(&s.sum_type_initialisation_funcs, "Variant")
+            strings.write_int(&s.sum_type_initialisation_funcs, i)
+            strings.write_byte(&s.sum_type_initialisation_funcs, '(')
             first_arg := true
             for field, j in payload.fields {
                 if !first_arg {
-                    strings.write_byte(&s.b, ',')
+                    strings.write_byte(&s.sum_type_initialisation_funcs, ',')
                 }
                 first_arg = false
                 field_name := fmt.aprintf("field%d", j)
                 defer delete_string(field_name)
-                emit_type(s, field_name, field.type)
+                emit_type(&s.sum_type_initialisation_funcs, field_name, field.type)
             }
-            strings.write_string(&s.b, ") {")
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, " out;out.variant = ")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, "; out.payload.variant")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, " = malloc(sizeof(")
-            strings.write_string(&s.b, name)
-            strings.write_string(&s.b, "));")
+            strings.write_string(&s.sum_type_initialisation_funcs, ") {")
+            strings.write_string(&s.sum_type_initialisation_funcs, name)
+            strings.write_string(&s.sum_type_initialisation_funcs, " out;out.variant = ")
+            strings.write_int(&s.sum_type_initialisation_funcs, i)
+            strings.write_string(&s.sum_type_initialisation_funcs, "; out.payload.variant")
+            strings.write_int(&s.sum_type_initialisation_funcs, i)
+            strings.write_string(&s.sum_type_initialisation_funcs, " = malloc(sizeof(")
+            strings.write_string(&s.sum_type_initialisation_funcs, name)
+            strings.write_string(&s.sum_type_initialisation_funcs, "));")
+            strings.write_string(&s.sum_type_initialisation_funcs, "*out.payload.variant")
+            strings.write_int(&s.sum_type_initialisation_funcs, i)
+            strings.write_string(&s.sum_type_initialisation_funcs, " = init_Type")
+            strings.write_uint(&s.sum_type_initialisation_funcs, uint(variant.payload.index))
+            strings.write_string(&s.sum_type_initialisation_funcs, "(")
+            first_arg = true
             for _, j in payload.fields {
-                strings.write_string(&s.b, "out.payload.variant")
-                strings.write_int(&s.b, i)
-                strings.write_string(&s.b, "->field")
-                strings.write_int(&s.b, j)
-                strings.write_string(&s.b, " = field")
-                strings.write_int(&s.b, j)
-                strings.write_byte(&s.b, ';')
+                if !first_arg {
+                    strings.write_byte(&s.sum_type_initialisation_funcs, ',')
+                }
+                first_arg = false
+                strings.write_string(&s.sum_type_initialisation_funcs, "field")
+                strings.write_int(&s.sum_type_initialisation_funcs, j)
             }
-            strings.write_string(&s.b, "return out;}")
+            strings.write_string(&s.sum_type_initialisation_funcs, ");return out;}")
         }
     case Struct(Type, Type):
         // Type def
-        strings.write_string(&s.head_b, "typedef struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_string(&s.head_b, "Struct ")
-        strings.write_string(&s.head_b, name)
-        strings.write_byte(&s.head_b, ';')
+        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_string(&s.forward_struct_definitions, "Struct ")
+        strings.write_string(&s.forward_struct_definitions, name)
+        strings.write_byte(&s.forward_struct_definitions, ';')
 
         // Struct def
-        strings.write_string(&s.b, "struct ")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, "Struct")
-        emit_struct_type(s, type)
-        strings.write_byte(&s.b, ';')
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, " init_")
-        strings.write_string(&s.b, name)
-        strings.write_byte(&s.b, '(')
+        strings.write_string(&s.global_type_definitions, "struct ")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, "Struct")
+        emit_struct_type(&s.global_type_definitions, type)
+        strings.write_byte(&s.global_type_definitions, ';')
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, " init_")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_byte(&s.global_type_definitions, '(')
         first_field := true
         for field, i in type.fields {
             if first_field == false {
-                strings.write_byte(&s.b, ',')
+                strings.write_byte(&s.global_type_definitions, ',')
             } else {
                 first_field = false
             }
             field_name := fmt.aprintf("field%d", i)
             defer delete(field_name)
-            emit_type(s, field_name, field.type)
+            emit_type(&s.global_type_definitions, field_name, field.type)
         }
-        strings.write_string(&s.b, ") {")
-        strings.write_string(&s.b, name)
-        strings.write_string(&s.b, " out;")
+        strings.write_string(&s.global_type_definitions, ") {")
+        strings.write_string(&s.global_type_definitions, name)
+        strings.write_string(&s.global_type_definitions, " out;")
         for _, i in type.fields {
-            strings.write_string(&s.b, "out.field")
-            strings.write_int(&s.b, i)
-            strings.write_string(&s.b, "=field")
-            strings.write_int(&s.b, i)
-            strings.write_byte(&s.b, ';')
+            strings.write_string(&s.global_type_definitions, "out.field")
+            strings.write_int(&s.global_type_definitions, i)
+            strings.write_string(&s.global_type_definitions, "=field")
+            strings.write_int(&s.global_type_definitions, i)
+            strings.write_byte(&s.global_type_definitions, ';')
         }
-        strings.write_string(&s.b, "return out;}")
+        strings.write_string(&s.global_type_definitions, "return out;}")
     }
 }
 
-emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef) {
+emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: FuncTypeRef) {
     when debug_emitter {
         debug("emitting function index %d", func_index)
     }
@@ -743,7 +639,7 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
     case 0:
         strings.write_string(&s.b, "void")
     case 1:
-        emit_type(s, "", info.return_types[0])
+        emit_type(&s.b, "", info.return_types[0])
     case:
         panic("Unreachable")
     }
@@ -756,7 +652,7 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
             strings.write_byte(&s.b, ',')
         }
         name := fmt.aprintf(variable_format, 0, i)
-        emit_type(s, name, arg)
+        emit_type(&s.b, name, arg)
         delete_string(name)
         first_arg = false
     }
@@ -764,14 +660,12 @@ emit_function_head :: proc(s: ^EmitterState, func_index: int, type: FuncTypeRef)
 }
 
 emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
-    s := EmitterState {
+    s := CEmitterState {
+        GeneralEmitterState{strings.builder_make(), c.types, c},
         strings.builder_make(),
         strings.builder_make(),
-        c.types,
-        c.type_equivalancy_array,
-        c,
+        strings.builder_make(),
     }
-    strings.write_bytes(&s.head_b, #load("glue.c"))
 
     for _, i in c.types.values {
         emit_c_global_type(&s, i)
@@ -795,7 +689,18 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
     strings.write_string(&s.b, main_extra_code)
     strings.write_string(&s.b, "return ret;}")
 
-    strings.write_string(&s.head_b, strings.to_string(s.b))
-    return transmute([]byte)strings.to_string(s.head_b)
+    out := strings.builder_make()
+    strings.write_bytes(&out, #load("glue.c"))
+    strings.write_string(&out, strings.to_string(s.forward_struct_definitions))
+    strings.write_string(&out, strings.to_string(s.global_type_definitions))
+    strings.write_string(&out, strings.to_string(s.sum_type_initialisation_funcs))
+    strings.write_string(&out, strings.to_string(s.b))
+
+    strings.builder_destroy(&s.forward_struct_definitions)
+    strings.builder_destroy(&s.global_type_definitions)
+    strings.builder_destroy(&s.sum_type_initialisation_funcs)
+    strings.builder_destroy(&s.b)
+
+    return transmute([]byte)strings.to_string(out)
 }
 

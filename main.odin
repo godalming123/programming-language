@@ -214,17 +214,12 @@ run_metaprogram :: proc(
             assert(ok)
             fmt.printfln("Compiler received compiler.emit_js_code(%d) from metaprogram", arg)
 
-            head_builder, builder := emit_javascript(checked)
+            builder := emit_javascript(checked)
+            defer strings.builder_destroy(&builder)
+
             strings.write_byte(&builder, EOT)
+            os.write_string(stdin_writer, strings.to_string(builder))
 
-            head_str := strings.to_string(head_builder)
-            defer delete(head_str)
-
-            str := strings.to_string(builder)
-            defer delete(str)
-
-            os.write_string(stdin_writer, head_str)
-            os.write_string(stdin_writer, str)
             fmt.printfln("Compiler responded to compiler.emit_js_code")
         case:
             fmt.eprintfln("Received unrecognized command %q from metaprogram", command)

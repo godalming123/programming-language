@@ -21,15 +21,13 @@ max_index :: max(u32) - 12
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
     generic_arg:        Type,
-    is_initialised:     bool,
-    initialised_type:   ExactCheckedType,
+    initialised_type:   Type, // Set to `unknown_type` when not initialised yet
 }
 
 TypeValue :: union {
     ArrayType(Type),
     FuncType(Type),
     GenericTypeValue,
-    TypeEquivilancyArrayRef, // TODO: Remove this
     SumType(Type), // The type is always a struct
 
     // The extra data is the initialisation function
@@ -92,8 +90,6 @@ create_type :: proc(
 
 hash_type_value :: proc(value: TypeValue) -> u32 {
     switch v in value {
-    case TypeEquivilancyArrayRef:
-        return v.index
     case ArrayType(Type):
         return v.length ~ v.item_type.index
     case SumType(Type):
@@ -166,12 +162,6 @@ merge_type_value :: proc(
     TypeValue,
 ) {
     #partial switch va in a {
-    case TypeEquivilancyArrayRef:
-        vb, ok := b.(TypeEquivilancyArrayRef)
-        if !ok {
-            return false, nil
-        }
-        return va == vb, a
     case ArrayType(Type):
         vb, ok := b.(ArrayType(Type))
         if !ok {
@@ -202,8 +192,8 @@ merge_type_value :: proc(
             return false, nil
         }
         if va.generic_type_index == vb.generic_type_index && va.generic_arg == vb.generic_arg {
-            if va.is_initialised {
-                assert(!vb.is_initialised)
+            if va.initialised_type != unknown_type {
+                assert(vb.initialised_type == unknown_type)
                 return true, va
             }
             return true, vb
