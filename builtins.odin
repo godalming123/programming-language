@@ -90,15 +90,14 @@ handle_named_user_defined_type :: proc(
     namespace: FileRef,
     name: string,
     generic_args: []Unit,
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
 ) -> Type {
-    if name == generic_arg_name {
+    if name == generic_arg.name {
         if len(generic_args) != 0 {
             err(s, pos, "TODO: Support generic args that are generic")
             return invalid_type
         }
-        return generic_arg_type
+        return generic_arg.type
     }
 
     global, exists := s.files[namespace.index].globals[name]
@@ -134,7 +133,7 @@ handle_named_user_defined_type :: proc(
             err(s, pos, "The global `%s` is not a type with a generic arg", name)
             return invalid_type
         }
-        checked_generic_arg := check_type(s, generic_args[0], generic_arg_name, generic_arg_type)
+        checked_generic_arg := check_type(s, generic_args[0], generic_arg)
         if checked_generic_arg == invalid_type {
             return invalid_type
         }
@@ -148,8 +147,7 @@ handle_named_type :: proc(
     pos: uint,
     type_segments: Ident,
     generic_args: []Unit,
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
 ) -> Type {
     if len(type_segments) == 2 {
         namespace := type_segments[0].ident
@@ -177,8 +175,7 @@ handle_named_type :: proc(
             import_value.file,
             type_segments[1].ident,
             generic_args,
-            generic_arg_name,
-            generic_arg_type,
+            generic_arg,
         )
     } else if len(type_segments) != 1 {
         err(s, pos, "TODO: Support compiling type references with more than 1 `.` in them")
@@ -214,23 +211,15 @@ handle_named_type :: proc(
             return invalid_type
         }
 
-        if name == generic_arg_name {
+        if name == generic_arg.name {
             if len(generic_args) != 0 {
                 err(s, pos, "TODO: Support generic args that are generic")
                 return invalid_type
             }
-            return generic_arg_type
+            return generic_arg.type
         }
 
-        return handle_named_user_defined_type(
-            s,
-            pos,
-            s.file,
-            name,
-            generic_args,
-            generic_arg_name,
-            generic_arg_type,
-        )
+        return handle_named_user_defined_type(s, pos, s.file, name, generic_args, generic_arg)
     }
     if len(generic_args) != 0 {
         err(s, pos, "The builtin type `%s` cannot have a generic argument", name)

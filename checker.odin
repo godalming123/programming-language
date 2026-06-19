@@ -272,17 +272,23 @@ expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
     return
 }
 
+GenericArg :: struct {
+    name: string,
+    type: Type,
+}
+
+no_generic_arg :: GenericArg{"", invalid_type}
+
 check_struct_type :: proc(
     s: ^CheckerState,
     type: Struct(Unit, struct {}),
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
 ) -> Type {
     field_types := make([]Type, len(type.fields))
     ok := true
     for field, i in type.fields {
         expect_snake_case(s, "the name of a struct field", field.name)
-        field_types[i] = check_type(s, field.type, generic_arg_name, generic_arg_type)
+        field_types[i] = check_type(s, field.type, generic_arg)
         if field_types[i] == invalid_type {
             ok = false
         }
@@ -317,14 +323,13 @@ check_function_type :: proc(
     inputs: []Unit,
     output: Unit, // if the function has no output, then `output` is `Unit{}`
     type: FunctionType,
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
 ) -> Type {
     ok := true
 
     args := make([]Type, len(inputs))
     for input, i in inputs {
-        args[i] = check_type(s, input, generic_arg_name, generic_arg_type)
+        args[i] = check_type(s, input, generic_arg)
         if args[i] == invalid_type {
             ok = false
         }
@@ -341,7 +346,7 @@ check_function_type :: proc(
     }
     return_types := make([]Type, len(outputs))
     for output, i in outputs {
-        return_types[i] = check_type(s, output, generic_arg_name, generic_arg_type)
+        return_types[i] = check_type(s, output, generic_arg)
         if return_types[i] == invalid_type {
             ok = false
         }
@@ -359,8 +364,7 @@ check_array_type :: proc(
     s: ^CheckerState,
     pos: uint,
     type: CallWithFrontedSquareBrackets,
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
 ) -> (
     ArrayType,
     bool,
@@ -391,7 +395,7 @@ check_array_type :: proc(
         err(s, pos, "Expected either 0 or 1 unit inside `[]`, got %d units", len(type.args))
         return ArrayType{}, false
     }
-    item_type := check_type(s, type.unit_being_called^, generic_arg_name, generic_arg_type)
+    item_type := check_type(s, type.unit_being_called^, generic_arg)
     if item_type == invalid_type {
         return ArrayType{}, false
     }
@@ -402,8 +406,7 @@ check_array_type :: proc(
 check_type :: proc(
     s: ^CheckerState,
     type: Unit,
-    generic_arg_name: string,
-    generic_arg_type: Type,
+    generic_arg: GenericArg,
     loc := #caller_location,
 ) -> Type {
     err_context :: "While checking type: "
@@ -440,7 +443,7 @@ check_type :: proc(
         err(s, type.pos, err_context + "Cannot use a marker as a type")
         return invalid_type
     case Struct(Unit, struct {}):
-        return check_struct_type(s, t, generic_arg_name, generic_arg_type)
+        return check_struct_type(s, t, generic_arg)
     case SumType(Struct(Unit, struct {})):
         variants: #soa[]SumTypeVariant(Type) = soa_zip(
             t.variants.name[:len(t.variants)],
@@ -449,12 +452,7 @@ check_type :: proc(
         ok := true
         for variant, i in t.variants {
             expect_camel_case(s, "the name of a sum type variant", variant.name)
-            variants[i].payload = check_struct_type(
-                s,
-                variant.payload,
-                generic_arg_name,
-                generic_arg_type,
-            )
+            variants[i].payload = check_struct_type(s, variant.payload, generic_arg)
             if variants[i].payload == invalid_type {
                 ok = false
             }
@@ -464,14 +462,7 @@ check_type :: proc(
         }
         return create_type(&s.types, SumType(Type){t.variants_map, variants}).type
     case Tuple:
-        return check_function_type(
-            s,
-            t.elements,
-            Unit{},
-            .Normal,
-            generic_arg_name,
-            generic_arg_type,
-        )
+        return check_function_type(s, t.elements, Unit{}, .Normal, generic_arg)
     case JoinedUnits:
         if t.join_method != .Arrow {
             err(s, type.pos, "While checking type: Joined units must be joined with `->`")
@@ -486,16 +477,9 @@ check_type :: proc(
             )
             return invalid_type
         }
-        return check_function_type(
-            s,
-            tuple.elements,
-            t.unit1^,
-            .Normal,
-            generic_arg_name,
-            generic_arg_type,
-        )
+        return check_function_type(s, tuple.elements, t.unit1^, .Normal, generic_arg)
     case Ident:
-        return handle_named_type(s, type.pos, t, nil, generic_arg_name, generic_arg_type)
+        return handle_named_type(s, type.pos, t, nil, generic_arg)
     case CallWithSquareBrackets:
         ident, is_ident := t.unit_being_called.value.(Ident)
         if !is_ident {
@@ -507,9 +491,9 @@ check_type :: proc(
             )
             return invalid_type
         }
-        return handle_named_type(s, type.pos, ident, t.args, generic_arg_name, generic_arg_type)
+        return handle_named_type(s, type.pos, ident, t.args, generic_arg)
     case CallWithFrontedSquareBrackets:
-        array, ok := check_array_type(s, type.pos, t, generic_arg_name, generic_arg_type)
+        array, ok := check_array_type(s, type.pos, t, generic_arg)
         if !ok {
             return invalid_type
         }
@@ -685,7 +669,11 @@ create_generic_type :: proc(
     defer s.file = old_file
     s.file = generic.file
 
-    initialised_type := check_type(s, generic.value, generic.generic.ident, generic_arg)
+    initialised_type := check_type(
+        s,
+        generic.value,
+        GenericArg{generic.generic.ident, generic_arg},
+    )
     created2 := create_type(
         &s.types,
         GenericTypeValue{generic_type_index, generic_arg, initialised_type},
@@ -702,7 +690,7 @@ initialise_global_type_without_generic :: proc(s: ^CheckerState, i: uint) -> Typ
     }
     old_file := s.file
     s.file = type.ast_node.file
-    checked_type := check_type(s, type.ast_node.value, "", invalid_type)
+    checked_type := check_type(s, type.ast_node.value, no_generic_arg)
     s.global_types_without_generics[i].exact_type = checked_type
     s.file = old_file
     return checked_type
@@ -1875,7 +1863,7 @@ check_array_initialisation :: proc(
     when debug_checker {
         print_call(loc, "check_array_initialisation")
     }
-    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, "", invalid_type)
+    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, no_generic_arg)
     if !ok {
         return nil
     }
@@ -2580,8 +2568,7 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
                 func.inputs.value_type[:len(func.inputs)],
                 func.output^,
                 func_type,
-                "",
-                invalid_type,
+                no_generic_arg,
             )
             if checked_func_type == invalid_type {
                 continue
