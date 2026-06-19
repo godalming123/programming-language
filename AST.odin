@@ -95,22 +95,40 @@ InitialUnit :: union {
 }
 */
 
-UnitWithoutPos :: union {
+Marker :: struct {
+    text: string,
+}
+
+SimpleUnitWithoutPos :: union {
     Struct(Unit, struct {}),
     SumType(Struct(Unit, struct {})),
     Tuple,
+    SquareBrackets,
     FuncDefinitionRef,
-    CallWithBrackets,
-    CallWithSquareBrackets,
-    CallWithFrontedSquareBrackets,
-    JoinedUnits,
     Ident,
+    DotIdent,
     Number,
     String,
     Char,
     Bool,
-    MarkedUnit,
+    Marker,
     Import,
+}
+
+SimpleUnit :: struct {
+    pos:   uint,
+    value: SimpleUnitWithoutPos,
+}
+
+// Order of operations is always left to right
+SimpleUnits :: struct {
+    first: SimpleUnitWithoutPos,
+    rest:  []SimpleUnit,
+}
+
+UnitWithoutPos :: union {
+    SimpleUnits,
+    JoinedUnits,
 }
 
 Unit :: struct {
@@ -225,14 +243,14 @@ VariableManagement :: struct {
     mutation_type: MutationType,
 }
 
-Call :: struct {
-    unit_being_called: ^Unit,
-    args:              []Unit, // TODO: Add named arguments
-}
+// Call :: struct {
+// unit_being_called: ^Unit,
+// args:              []Unit, // TODO: Add named arguments
+// }
 
-CallWithBrackets :: distinct Call // A(B, C, D)
-CallWithSquareBrackets :: distinct Call // A[B, C, D]
-CallWithFrontedSquareBrackets :: distinct Call // [B, C, D]A
+// CallWithBrackets :: distinct Call // A(B, C, D)
+// CallWithSquareBrackets :: distinct Call // A[B, C, D]
+// CallWithFrontedSquareBrackets :: distinct Call // [B, C, D]A
 
 Iterator :: union {
     Unit,
@@ -406,7 +424,6 @@ print_output_list :: proc(s: ^TreePrinterState, label: string, list: []FunctionO
         print_type(s, output.value_type)
     }
 }
-*/
 
 debug_call :: proc(funcs: []FunctionDefinition, c: Call) {
     debug_nesting += 1
@@ -589,6 +606,6 @@ print_ast :: proc(
         }
     }
 }
-
+*/
 */
 

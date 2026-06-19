@@ -120,11 +120,11 @@ parse_initial_unit :: proc(
     s: ^ParserState,
     descriptions_of_other_possible_tokens: []string,
 ) -> (
-    Unit,
+    SimpleUnit,
     [dynamic]string,
     bool,
 ) {
-    out := Unit {
+    out := SimpleUnit {
         pos = Pos{s.last_token_pos, s.file_ref},
     }
     e :: proc(
@@ -436,11 +436,7 @@ ParsedUnit :: struct {
     descriptions_of_other_possible_tokens: [dynamic]string,
 }
 
-create_joined_unit :: proc(
-    join_method: UnitJoinMethod,
-    unit0: Unit,
-    unit1: ^Unit,
-) -> UnitWithoutPos {
+create_joined_unit :: proc(join_method: UnitJoinMethod, unit0: Unit, unit1: ^Unit) -> JoinedUnits {
     joined_values, is_joined_values := unit1.value.(JoinedUnits)
     if is_joined_values && get_prioraty(joined_values.join_method) <= get_prioraty(join_method) {
         val0 := create_joined_unit(join_method, unit0, joined_values.unit0)
@@ -462,9 +458,11 @@ parse_unit :: proc(
     if !ok {
         return ParsedUnit{ok = false}
     }
+    additional_elements := make([dynamic]UnitElement)
 
     // Parse possible calls
     loop: for {
+        pos := s.last_token_pos
         #partial switch token in s.last_token {
         case:
             append_elems(
@@ -479,7 +477,7 @@ parse_unit :: proc(
             if !args_ok {
                 return ParsedUnit{ok = false}
             }
-            val = Unit{value_pos, CallWithBrackets{new_clone(val), args}}
+            append_elem(&additional_elements, UnitElement{pos, Tuple{args}})
             clear(&other_possible_tokens)
             get_next_token(s, true)
         case OpenSquareBracketToken:
@@ -487,7 +485,7 @@ parse_unit :: proc(
             if !args_ok {
                 return ParsedUnit{ok = false}
             }
-            val = Unit{value_pos, CallWithSquareBrackets{new_clone(val), args}}
+            append_elem(&additional_elements, UnitElement{pos, SquareBrackets{args}})
             clear(&other_possible_tokens)
             get_next_token(s, true)
         }
@@ -501,7 +499,11 @@ parse_unit :: proc(
     value_type: UnitJoinMethod
     #partial switch token in s.last_token {
     case:
-        return ParsedUnit{true, val, other_possible_tokens}
+        return ParsedUnit {
+            true,
+            Unit{UnitElement{value_pos, val}, additional_elements[:]},
+            other_possible_tokens,
+        }
     case InToken:
         value_type = .In
     case AndToken:
@@ -525,7 +527,11 @@ parse_unit :: proc(
     case SymbolsToken:
         switch token {
         case:
-            return ParsedUnit{true, val, other_possible_tokens}
+            return ParsedUnit {
+                true,
+                Unit{UnitElement{value_pos, val}, additional_elements[:]},
+                other_possible_tokens,
+            }
         case "==":
             value_type = .IsEqual
         case "!=":

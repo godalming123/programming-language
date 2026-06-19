@@ -31,7 +31,7 @@ ArrowToken :: struct {} // ->
 AssignToken :: struct {} // =
 SymbolsToken :: distinct string
 DigitsToken :: distinct string
-IdentToken :: #soa[]IdentAndIndex // A list of the segments in the identifier, where each segment is separated by `.`
+IdentToken :: distinct string // A list of the segments in the identifier, where each segment is separated by `.`
 MarkerToken :: distinct string
 TrueToken :: struct {} // true
 FalseToken :: struct {} // false
