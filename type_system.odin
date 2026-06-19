@@ -18,6 +18,15 @@ invalid_type :: Type{max(u32) - 10}
 unknown_type :: Type{max(u32) - 11}
 max_index :: max(u32) - 12
 
+dynamic_array_of_strings :: Type{0} // []String
+string_to_nil_type :: Type{1} // (String)
+string_string_to_nil_type :: Type{2} // (String, String)
+string_to_string_type :: Type{3} // (String) -> String
+comptime_u64_to_string_type :: Type{4} // #comptime ((U64) -> String)
+no_args_to_nil_type :: Type{5} // ()
+array_of_strings_to_nil_type :: Type{6} // ([]String)
+i64_to_nil_type :: Type{7} // (I64)
+
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
     generic_arg:        Type,
@@ -25,8 +34,8 @@ GenericTypeValue :: struct {
 }
 
 TypeValue :: union {
-    ArrayType(Type),
-    FuncType(Type),
+    ArrayType,
+    FuncType,
     GenericTypeValue,
     SumType(Type), // The type is always a struct
 
@@ -49,33 +58,10 @@ get_type :: proc(types: Types, t: Type) -> TypeValue {
     return slot.value
 }
 
-create_type_and_get_value :: proc(
-    types: ^Types,
-    value: TypeValue,
-    aliases: [dynamic]string = nil,
-    can_insert: bool = true,
-    loc := #caller_location,
-) -> (
-    Type,
-    TypeValue,
-) {
-    when debug_checker {
-        print_call(loc, "create_type")
-        debug("value: %v", value)
-    }
-    out, type_value := insert(
-        types,
-        hash_type_value(value),
-        TypeSlot{new_clone(aliases), value},
-        merge_type_slot,
-        can_insert,
-        loc,
-    )
-    when debug_checker {
-        debug("out: %v", out)
-        debug("type_value: %v", type_value)
-    }
-    return out, type_value.value
+CreatedType :: struct {
+    type:       Type,
+    type_value: TypeValue,
+    result:     Result,
 }
 
 create_type :: proc(
@@ -83,20 +69,34 @@ create_type :: proc(
     value: TypeValue,
     aliases: [dynamic]string = nil,
     loc := #caller_location,
-) -> Type {
-    out, _ := create_type_and_get_value(types, value, aliases, true, loc)
+) -> CreatedType {
+    when debug_checker {
+        print_call(loc, "create_type")
+        debug("value: %v", value)
+    }
+    type, type_value, result := insert(
+        types,
+        hash_type_value(value),
+        TypeSlot{new_clone(aliases), value},
+        merge_type_slot,
+        loc,
+    )
+    out := CreatedType{type, type_value.value, result}
+    when debug_checker {
+        debug("out: %v", out)
+    }
     return out
 }
 
 hash_type_value :: proc(value: TypeValue) -> u32 {
     switch v in value {
-    case ArrayType(Type):
+    case ArrayType:
         return v.length ~ v.item_type.index
     case SumType(Type):
         return hash_sum_type(v)
     case Struct(Type, Type):
         return hash_struct_type(v)
-    case FuncType(Type):
+    case FuncType:
         return hash_func_type(v)
     case GenericTypeValue:
         return v.generic_type_index ~ v.generic_arg.index
@@ -126,7 +126,7 @@ hash_sum_type :: proc(value: SumType(Type)) -> u32 {
     return result
 }
 
-hash_func_type :: proc(value: FuncType(Type)) -> u32 {
+hash_func_type :: proc(value: FuncType) -> u32 {
     result: u32
     for arg in value.args {
         result ~= arg.index
@@ -162,8 +162,8 @@ merge_type_value :: proc(
     TypeValue,
 ) {
     #partial switch va in a {
-    case ArrayType(Type):
-        vb, ok := b.(ArrayType(Type))
+    case ArrayType:
+        vb, ok := b.(ArrayType)
         if !ok {
             return false, nil
         }
@@ -180,8 +180,8 @@ merge_type_value :: proc(
             return false, nil
         }
         return merge_struct_types(va, vb, loc)
-    case FuncType(Type):
-        vb, ok := b.(FuncType(Type))
+    case FuncType:
+        vb, ok := b.(FuncType)
         if !ok {
             return false, nil
         }
@@ -255,7 +255,7 @@ merge_sum_types :: proc(
     return true, a
 }
 
-func_types_are_equal :: proc(a: FuncType(Type), b: FuncType(Type)) -> bool {
+func_types_are_equal :: proc(a: FuncType, b: FuncType) -> bool {
     if len(a.args) != len(b.args) {
         return false
     }

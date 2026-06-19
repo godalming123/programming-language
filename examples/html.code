@@ -10,7 +10,7 @@
 
 Elem[State] : <
     Button {children: []Elem[State], onclick: (State) -> State},
-    Div {syle: String, children: []Elem[State]},
+    Div {style: String, children: []Elem[State]},
     Text {text: String},
 >
 

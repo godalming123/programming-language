@@ -268,7 +268,7 @@ example_05_ui :: proc(t: ^testing.T) {
     text_expecter := TestingTextExpecter{0, ran.stdout, t}
     expect_ui_render(&text_expecter, "Initial text", 1)
     expect_ui_render(&text_expecter, "Initial text", 2) // After next
-    expect_ui_render(&text_expecter, "Text 2", 2) // Affter click
+    expect_ui_render(&text_expecter, "Text 2", 2) // After click
     expect_ui_render(&text_expecter, "Text 2", 1) // After prev
     expect_ui_render(&text_expecter, "Text 2", 1) // After prev
     expect_ui_render(&text_expecter, "Text 1", 1) // After click
@@ -342,9 +342,9 @@ basic_type_system_test :: proc(t: ^testing.T) {
     types: Types
     type0 := string_type
     type1 := bool_type
-    generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type})
-    generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type})
-    generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type})
+    generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type}).type
+    generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type}).type
+    generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type}).type
     testing.expect(t, generic0 == generic1)
     generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
     testing.expect(t, generic0_initialised == i64_type)
