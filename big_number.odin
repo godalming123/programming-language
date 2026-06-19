@@ -1,6 +1,6 @@
 package main
 
-// Custom arbitary size number implementation
+// Custom arbitrary size number implementation
 // TODO:
 // - Implement exact fractions
 // - Implement division

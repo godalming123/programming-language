@@ -87,7 +87,10 @@ resize :: proc(
     }
 }
 
-insert_err :: "Could not find already existing hash set value to merge with"
+Result :: enum {
+    Inserted,
+    Merged,
+}
 
 insert :: proc(
     ordered_hash_set: ^OrderedHashSet($Value),
@@ -97,11 +100,11 @@ insert :: proc(
     // The `bool` returned is whether the values can be merged
     // The `Value` returned is the merged value
     equal_merge_func: proc(_: Value, _: Value, loc: runtime.Source_Code_Location) -> (bool, Value),
-    can_insert: bool = true,
     loc := #caller_location,
 ) -> (
     OrderedHashSetSlotRef,
     Value,
+    Result,
 ) {
     when debug_ordered_hash_sets {
         print_call(loc, "insert")
@@ -109,12 +112,9 @@ insert :: proc(
         debug("value: %v", value)
     }
     if len(ordered_hash_set.values) == 0 {
-        if !can_insert {
-            panic(insert_err)
-        }
         append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
         resize(ordered_hash_set, ordered_hash_set_size_with_one_elem)
-        return OrderedHashSetSlotRef{0}, value
+        return OrderedHashSetSlotRef{0}, value, .Inserted
     }
 
     i := get_index(len(ordered_hash_set.slots), int(hash))
@@ -122,9 +122,6 @@ insert :: proc(
         if ordered_hash_set.slots[i].index == max(u32) {
             when debug_ordered_hash_sets {
                 debug("found empty slot at index %d", i)
-            }
-            if !can_insert {
-                panic(insert_err)
             }
             out := OrderedHashSetSlotRef{u32(len(ordered_hash_set.values))}
             append_elem(&ordered_hash_set.values, OrderedHashSetValue(Value){hash, value})
@@ -140,7 +137,7 @@ insert :: proc(
             } else {
                 ordered_hash_set.slots[i] = out
             }
-            return out, value
+            return out, value, .Inserted
         }
         slot_value := ordered_hash_set.slots[i]
         is_equal, merged := equal_merge_func(
@@ -157,7 +154,7 @@ insert :: proc(
         }
         if is_equal {
             ordered_hash_set.values[slot_value.index].value = merged
-            return slot_value, merged
+            return slot_value, merged, .Merged
         }
         i = (i + 1) % len(ordered_hash_set.slots)
     }

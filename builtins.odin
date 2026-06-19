@@ -31,28 +31,28 @@ builtin_exit :: 9
 builtin_get_os_args :: 10 // TODO
 builtin_emit_js_code :: 11
 
-get_builtin_func_from_name :: proc(s: ^CheckerState, name: string) -> (u32, Type) {
+get_builtin_func_from_name :: proc(name: string) -> (u32, Type) {
     switch name {
     case "print":
-        return builtin_print, s.string_to_nil_type
+        return builtin_print, string_to_nil_type
     case "println":
-        return builtin_println, s.string_to_nil_type
+        return builtin_println, string_to_nil_type
     case "eprint":
-        return builtin_eprint, s.string_to_nil_type
+        return builtin_eprint, string_to_nil_type
     case "eprintln":
-        return builtin_eprintln, s.string_to_nil_type
+        return builtin_eprintln, string_to_nil_type
     case "readline":
-        return builtin_readline, s.string_to_string_type
+        return builtin_readline, string_to_string_type
     case "read_file":
-        return builtin_read_file, s.string_to_string_type
+        return builtin_read_file, string_to_string_type
     case "write_file":
-        return builtin_write_file, s.string_string_to_nil_type
+        return builtin_write_file, string_string_to_nil_type
     case "clear":
-        return builtin_clear, s.no_args_to_nil_type
+        return builtin_clear, no_args_to_nil_type
     case "run_executable":
-        return builtin_run_executable, s.array_of_strings_to_nil_type
+        return builtin_run_executable, array_of_strings_to_nil_type
     case "exit":
-        return builtin_exit, s.i64_to_nil_type
+        return builtin_exit, i64_to_nil_type
     case:
         return max(u32), invalid_type
     }
@@ -91,19 +91,20 @@ handle_named_user_defined_type :: proc(
     name: string,
     generic_args: []Unit,
     generic_arg_name: string,
-) -> GenericCheckedType {
+    generic_arg_type: Type,
+) -> Type {
     if name == generic_arg_name {
         if len(generic_args) != 0 {
             err(s, pos, "TODO: Support generic args that are generic")
-            return nil
+            return invalid_type
         }
-        return TypeOfGenericArg{}
+        return generic_arg_type
     }
 
     global, exists := s.files[namespace.index].globals[name]
     if !exists {
         err(s, pos, "There is no global called `%s`", name)
-        return nil
+        return invalid_type
     }
 
     if len(generic_args) == 0 {
@@ -114,30 +115,30 @@ handle_named_user_defined_type :: proc(
                 err(
                     s,
                     pos,
-                    "The global type `%s` requieres a generic argument to be specified, for example `%s[String]`",
+                    "The global type `%s` requires a generic argument to be specified, for example `%s[String]`",
                     name,
                     name,
                 )
             } else {
                 err(s, pos, "The global `%s` is not a type without a generic arg", name)
             }
-            return nil
+            return invalid_type
         }
-        return ref
+        return initialise_global_type_without_generic(s, ref.index)
     } else if len(generic_args) != 1 {
         err(s, pos, "TODO: Support types with more than 1 generic argument")
-        return nil
+        return invalid_type
     } else {
         ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
         if !is_type_with_generic {
             err(s, pos, "The global `%s` is not a type with a generic arg", name)
-            return nil
+            return invalid_type
         }
-        checked_generic_arg := check_type(s, generic_args[0], generic_arg_name)
-        if checked_generic_arg == nil {
-            return nil
+        checked_generic_arg := check_type(s, generic_args[0], generic_arg_name, generic_arg_type)
+        if checked_generic_arg == invalid_type {
+            return invalid_type
         }
-        return GenericType(^GenericCheckedType){ref.index, new_clone(checked_generic_arg)}
+        return create_generic_type(s, ref.index, checked_generic_arg)
     }
 }
 
@@ -148,25 +149,26 @@ handle_named_type :: proc(
     type_segments: Ident,
     generic_args: []Unit,
     generic_arg_name: string,
-) -> GenericCheckedType {
+    generic_arg_type: Type,
+) -> Type {
     if len(type_segments) == 2 {
         namespace := type_segments[0].ident
         global, exists := s.files[s.file.index].globals[namespace]
         if !exists {
             err(s, pos, "There is no global called `%s`", namespace)
-            return nil
+            return invalid_type
         }
 
         value_ref, is_value := global.value.(GlobalValueRef)
         if !is_value {
             err(s, pos, "The global `%s` is not a value", namespace)
-            return nil
+            return invalid_type
         }
 
         import_value, is_import := s.global_values[value_ref.index].value.(Import)
         if !is_import {
             err(s, pos, "The global `%s` is not an import", namespace)
-            return nil
+            return invalid_type
         }
 
         return handle_named_user_defined_type(
@@ -176,54 +178,63 @@ handle_named_type :: proc(
             type_segments[1].ident,
             generic_args,
             generic_arg_name,
+            generic_arg_type,
         )
     } else if len(type_segments) != 1 {
         err(s, pos, "TODO: Support compiling type references with more than 1 `.` in them")
-        return nil
+        return invalid_type
     }
 
     name := type_segments[0].ident
-    builtin_type: GenericCheckedType = ---
+    builtin_type: Type = ---
     switch name {
     case "I64":
-        builtin_type = I64Type{}
+        builtin_type = i64_type
     case "I32":
-        builtin_type = I32Type{}
+        builtin_type = i32_type
     case "I16":
-        builtin_type = I16Type{}
+        builtin_type = i16_type
     case "I8":
-        builtin_type = I8Type{}
+        builtin_type = i8_type
     case "U64":
-        builtin_type = U64Type{}
+        builtin_type = u64_type
     case "U32":
-        builtin_type = U32Type{}
+        builtin_type = u32_type
     case "U16":
-        builtin_type = U16Type{}
+        builtin_type = u16_type
     case "U8":
-        builtin_type = U8Type{}
+        builtin_type = u8_type
     case "Bool":
-        builtin_type = BoolType{}
+        builtin_type = bool_type
     case "String":
-        builtin_type = StringType{}
+        builtin_type = string_type
     case:
         if is_builtin(name) {
             err(s, pos, "`%s` is a builtin, but it is not a type", name)
-            return nil
+            return invalid_type
         }
 
         if name == generic_arg_name {
             if len(generic_args) != 0 {
                 err(s, pos, "TODO: Support generic args that are generic")
-                return nil
+                return invalid_type
             }
-            return TypeOfGenericArg{}
+            return generic_arg_type
         }
 
-        return handle_named_user_defined_type(s, pos, s.file, name, generic_args, generic_arg_name)
+        return handle_named_user_defined_type(
+            s,
+            pos,
+            s.file,
+            name,
+            generic_args,
+            generic_arg_name,
+            generic_arg_type,
+        )
     }
     if len(generic_args) != 0 {
         err(s, pos, "The builtin type `%s` cannot have a generic argument", name)
-        return nil
+        return invalid_type
     }
     return builtin_type
 }

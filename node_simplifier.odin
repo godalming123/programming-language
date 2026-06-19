@@ -6,7 +6,7 @@ import "core:fmt"
 // See https://github.com/seaofnodes/simple
 
 // TODO: Improve simplifications, for example:
-// (Constat + Runtime) -> (Runtime + Constant)
+// (Constant + Runtime) -> (Runtime + Constant)
 // (Runtime + Constant) + Constant -> Runtime + (Constant + Constant)
 
 create_not :: proc(value: CheckedValue) -> CheckedValue {

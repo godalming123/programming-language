@@ -10,10 +10,11 @@ GeneralEmitterState :: struct {
 }
 
 CEmitterState :: struct {
-    using s:                       GeneralEmitterState,
     forward_struct_definitions:    strings.Builder, // Several `typedef struct TypeStruct Type;`
-    global_type_definitions:       strings.Builder,
+    sum_type_definitions:          strings.Builder,
+    other_type_definitions:        strings.Builder,
     sum_type_initialisation_funcs: strings.Builder,
+    using s:                       GeneralEmitterState,
 }
 
 variable_format :: "nesting_level%dindex%d"
@@ -23,29 +24,6 @@ emit_variable :: proc(b: ^strings.Builder, variable: VariableRef) {
     strings.write_string(b, var)
     delete_string(var)
 }
-
-/*
-emit_generic_name :: proc(
-    b: ^strings.Builder,
-    generic_type_index: u32,
-    generic_arg: u32,
-    emit_struct_keyword: bool,
-) {
-    if emit_struct_keyword {
-        strings.write_string(b, "struct ")
-    }
-    name := fmt.aprintf(generic_name_format, generic_type_index, generic_arg)
-    strings.write_string(b, name)
-    delete_string(name)
-}
-
-emit_array_type :: proc(b: ^strings.Builder, length: u32, item_type: Type) {
-    strings.write_string(b, "struct ArrayWhereLengthIs")
-    strings.write_uint(b, uint(length))
-    strings.write_string(b, "AndUniqueTypeIndexIs")
-    strings.write_uint(b, uint(item_type.index))
-}
-*/
 
 // Does not include the `struct`
 emit_struct_type :: proc(b: ^strings.Builder, type: Struct(Type, Type), loc := #caller_location) {
@@ -449,67 +427,67 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
     switch type in s.types.values[index].value.value {
-    case ArrayType(Type):
-        strings.write_string(&s.global_type_definitions, "struct ")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, "Struct")
+    case ArrayType:
+        strings.write_string(&s.other_type_definitions, "struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(&s.other_type_definitions, "Struct")
         if type.length != 0 {
-            strings.write_byte(&s.global_type_definitions, '{')
-            emit_type(&s.global_type_definitions, "", type.item_type)
-            strings.write_string(&s.global_type_definitions, " elems[")
-            strings.write_uint(&s.global_type_definitions, uint(type.length))
-            strings.write_string(&s.global_type_definitions, "];};")
+            strings.write_byte(&s.other_type_definitions, '{')
+            emit_type(&s.other_type_definitions, "", type.item_type)
+            strings.write_string(&s.other_type_definitions, " elems[")
+            strings.write_uint(&s.other_type_definitions, uint(type.length))
+            strings.write_string(&s.other_type_definitions, "];};")
         } else {
-            strings.write_string(&s.global_type_definitions, "{uint64_t length;")
-            emit_type(&s.global_type_definitions, "", type.item_type)
-            strings.write_string(&s.global_type_definitions, "* elems;};")
+            strings.write_string(&s.other_type_definitions, "{uint64_t length;")
+            emit_type(&s.other_type_definitions, "", type.item_type)
+            strings.write_string(&s.other_type_definitions, "* elems;};")
         }
         strings.write_string(&s.forward_struct_definitions, "typedef struct ")
         strings.write_string(&s.forward_struct_definitions, name)
         strings.write_string(&s.forward_struct_definitions, "Struct ")
         strings.write_string(&s.forward_struct_definitions, name)
         strings.write_byte(&s.forward_struct_definitions, ';')
-    case FuncType(Type):
-        strings.write_string(&s.global_type_definitions, "typedef ")
+    case FuncType:
+        strings.write_string(&s.other_type_definitions, "typedef ")
         switch len(type.return_types) {
         case 0:
-            strings.write_string(&s.global_type_definitions, "void")
+            strings.write_string(&s.other_type_definitions, "void")
         case 1:
-            emit_type(&s.global_type_definitions, "", type.return_types[0])
+            emit_type(&s.other_type_definitions, "", type.return_types[0])
         case:
             panic("TODO")
         }
-        strings.write_string(&s.global_type_definitions, " (*")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, ")(")
+        strings.write_string(&s.other_type_definitions, " (*")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(&s.other_type_definitions, ")(")
         is_first_arg := true
         for arg, i in type.args {
             if !is_first_arg {
-                strings.write_byte(&s.global_type_definitions, ',')
+                strings.write_byte(&s.other_type_definitions, ',')
             }
             name := fmt.aprintf("arg%d", i)
             defer delete(name)
-            emit_type(&s.global_type_definitions, name, arg)
+            emit_type(&s.other_type_definitions, name, arg)
             is_first_arg = false
         }
-        strings.write_string(&s.global_type_definitions, ");")
+        strings.write_string(&s.other_type_definitions, ");")
     case GenericTypeValue:
-        strings.write_string(&s.global_type_definitions, "typedef ")
-        emit_type(&s.global_type_definitions, name, type.initialised_type)
-        strings.write_byte(&s.global_type_definitions, ';')
+        strings.write_string(&s.other_type_definitions, "typedef ")
+        emit_type(&s.other_type_definitions, name, type.initialised_type)
+        strings.write_byte(&s.other_type_definitions, ';')
     case SumType(Type):
         // Main struct type
-        strings.write_string(&s.global_type_definitions, "struct ")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, "Struct{uint64_t variant; union {")
+        strings.write_string(&s.sum_type_definitions, "struct ")
+        strings.write_string(&s.sum_type_definitions, name)
+        strings.write_string(&s.sum_type_definitions, "Struct{uint64_t variant; union {")
         for variant, i in type.variants {
-            strings.write_string(&s.global_type_definitions, "Type")
-            strings.write_uint(&s.global_type_definitions, uint(variant.payload.index))
-            strings.write_string(&s.global_type_definitions, "* variant")
-            strings.write_int(&s.global_type_definitions, i)
-            strings.write_byte(&s.global_type_definitions, ';')
+            strings.write_string(&s.sum_type_definitions, "Type")
+            strings.write_uint(&s.sum_type_definitions, uint(variant.payload.index))
+            strings.write_string(&s.sum_type_definitions, "* variant")
+            strings.write_int(&s.sum_type_definitions, i)
+            strings.write_byte(&s.sum_type_definitions, ';')
         }
-        strings.write_string(&s.global_type_definitions, "} payload;};")
+        strings.write_string(&s.sum_type_definitions, "} payload;};")
 
         // Type def
         strings.write_string(&s.forward_struct_definitions, "typedef struct ")
@@ -571,45 +549,45 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_byte(&s.forward_struct_definitions, ';')
 
         // Struct def
-        strings.write_string(&s.global_type_definitions, "struct ")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, "Struct")
-        emit_struct_type(&s.global_type_definitions, type)
-        strings.write_byte(&s.global_type_definitions, ';')
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, " init_")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_byte(&s.global_type_definitions, '(')
+        strings.write_string(&s.other_type_definitions, "struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(&s.other_type_definitions, "Struct")
+        emit_struct_type(&s.other_type_definitions, type)
+        strings.write_byte(&s.other_type_definitions, ';')
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(&s.other_type_definitions, " init_")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_byte(&s.other_type_definitions, '(')
         first_field := true
         for field, i in type.fields {
             if first_field == false {
-                strings.write_byte(&s.global_type_definitions, ',')
+                strings.write_byte(&s.other_type_definitions, ',')
             } else {
                 first_field = false
             }
             field_name := fmt.aprintf("field%d", i)
             defer delete(field_name)
-            emit_type(&s.global_type_definitions, field_name, field.type)
+            emit_type(&s.other_type_definitions, field_name, field.type)
         }
-        strings.write_string(&s.global_type_definitions, ") {")
-        strings.write_string(&s.global_type_definitions, name)
-        strings.write_string(&s.global_type_definitions, " out;")
+        strings.write_string(&s.other_type_definitions, ") {")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(&s.other_type_definitions, " out;")
         for _, i in type.fields {
-            strings.write_string(&s.global_type_definitions, "out.field")
-            strings.write_int(&s.global_type_definitions, i)
-            strings.write_string(&s.global_type_definitions, "=field")
-            strings.write_int(&s.global_type_definitions, i)
-            strings.write_byte(&s.global_type_definitions, ';')
+            strings.write_string(&s.other_type_definitions, "out.field")
+            strings.write_int(&s.other_type_definitions, i)
+            strings.write_string(&s.other_type_definitions, "=field")
+            strings.write_int(&s.other_type_definitions, i)
+            strings.write_byte(&s.other_type_definitions, ';')
         }
-        strings.write_string(&s.global_type_definitions, "return out;}")
+        strings.write_string(&s.other_type_definitions, "return out;}")
     }
 }
 
-emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: FuncTypeRef) {
+emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     when debug_emitter {
         debug("emitting function index %d", func_index)
     }
-    info := get_type(s.types, Type(type)).(FuncType(Type))
+    info := get_type(s.types, type).(FuncType)
     switch len(info.return_types) {
     case 0:
         strings.write_string(&s.b, "void")
@@ -636,10 +614,11 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: FuncTypeRef
 
 emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
     s := CEmitterState {
+        strings.builder_make(),
+        strings.builder_make(),
+        strings.builder_make(),
+        strings.builder_make(),
         GeneralEmitterState{strings.builder_make(), c.types, c},
-        strings.builder_make(),
-        strings.builder_make(),
-        strings.builder_make(),
     }
 
     for _, i in c.types.values {
@@ -667,12 +646,14 @@ emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: st
     out := strings.builder_make()
     strings.write_bytes(&out, #load("glue.c"))
     strings.write_string(&out, strings.to_string(s.forward_struct_definitions))
-    strings.write_string(&out, strings.to_string(s.global_type_definitions))
+    strings.write_string(&out, strings.to_string(s.sum_type_definitions))
+    strings.write_string(&out, strings.to_string(s.other_type_definitions))
     strings.write_string(&out, strings.to_string(s.sum_type_initialisation_funcs))
     strings.write_string(&out, strings.to_string(s.b))
 
     strings.builder_destroy(&s.forward_struct_definitions)
-    strings.builder_destroy(&s.global_type_definitions)
+    strings.builder_destroy(&s.sum_type_definitions)
+    strings.builder_destroy(&s.other_type_definitions)
     strings.builder_destroy(&s.sum_type_initialisation_funcs)
     strings.builder_destroy(&s.b)
 

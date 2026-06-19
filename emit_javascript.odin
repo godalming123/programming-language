@@ -129,8 +129,8 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
     switch t in s.types.values[index].value.value {
-    case ArrayType(Type):
-    case FuncType(Type):
+    case ArrayType:
+    case FuncType:
     case GenericTypeValue:
     case SumType(Type):
         for variant, i in t.variants {
@@ -351,7 +351,7 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info := get_type(c.types, Type(func.type)).(FuncType(Type))
+        info := get_type(c.types, func.type).(FuncType)
         first_arg := true
         for _, i in info.args {
             if first_arg {

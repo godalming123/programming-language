@@ -106,7 +106,7 @@ A new language for the web, because it's time to stop working around javascript.
 
 # Stuff that may be added
 
-- Be able to use NPM packges easily
+- Be able to use NPM packages easily
   - Dependency resolution
 - A compiler function to minify JS
   - Simplifies build process as you can create minified JS code without needing a separate JS minifier, and the JS minifier would probably need a JS package manager
@@ -182,7 +182,7 @@ A new language for the web, because it's time to stop working around javascript.
       - JS code that could run on the edge
   - Metaprogramming:
     - Decide which metaprogramming capabilities should be ran by the compiler interpreting them and which should be ran by the compiler compiling them into an executable and running the executable
-      - An advantage of the interpreter-based approach is that you can garuntee that the metaprogram does the same thing regardless of:
+      - An advantage of the interpreter-based approach is that you can guarantee that the metaprogram does the same thing regardless of:
         - Which OS it runs on
         - Which architecture it runs on
         - Whether the C emitter or the JS emitter was used (because no emitter would be used)
@@ -236,7 +236,7 @@ A new language for the web, because it's time to stop working around javascript.
       - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
   - Type inference?
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value
-      - However this approach has disadvanteges:
+      - However this approach has disadvantages:
         - You would have to specify what the generic arg is when calling a generic function
 - v0.3.0: Investigate [constraints](#what-i-mean-by-constraints)
 - v0.4.0: Mostly stabilize a lower level memory model (see [here](#programming-language-memory-model))

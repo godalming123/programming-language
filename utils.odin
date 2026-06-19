@@ -127,7 +127,7 @@ combine_u32 :: proc(a: u32, b: u32) -> (out: u64) {
     return
 }
 
-seperate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
+separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
     a = u32(combined >> 32)
     b = u32(combined)
     return
@@ -226,7 +226,7 @@ warn :: proc(
 
 debug_nesting := 0
 
-// Print flushing is necesarry even when we know that a flushing print call is
+// Print flushing is necessary even when we know that a flushing print call is
 // going to happen because flush does not work properly
 // See https://github.com/odin-lang/Odin/issues/6656
 flush_needed :: true
