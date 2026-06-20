@@ -19,6 +19,10 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
     case CompileTimeValue:
         switch comptime in v {
+        case Type:
+            panic("Unreachable")
+        case GlobalTypeWithGenericRef:
+            panic("Unreachable")
         case StringLiteralValue:
             strings.write_byte(&s.b, '"')
             for char in comptime {

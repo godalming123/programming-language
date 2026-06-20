@@ -58,6 +58,35 @@ get_builtin_func_from_name :: proc(name: string) -> (u32, Type) {
     }
 }
 
+get_builtin_type_from_name :: proc(name: string) -> Type {
+    switch name {
+    case "I64":
+        return i64_type
+    case "I32":
+        return i32_type
+    case "I16":
+        return i16_type
+    case "I8":
+        return i8_type
+    case "U64":
+        return u64_type
+    case "U32":
+        return u32_type
+    case "U16":
+        return u16_type
+    case "U8":
+        return u8_type
+    case "Bool":
+        return bool_type
+    case "String":
+        return string_type
+    case "Type":
+        return type_type
+    case:
+        return unknown_type
+    }
+}
+
 argument_count_mismatch :: proc(
     s: ^CheckerState,
     pos: uint,
@@ -82,150 +111,6 @@ argument_count_mismatch :: proc(
         name,
         expected,
     )
-}
-
-handle_named_user_defined_type :: proc(
-    s: ^CheckerState,
-    pos: uint,
-    namespace: FileRef,
-    name: string,
-    generic_args: []Unit,
-    generic_arg: GenericArg,
-) -> Type {
-    if name == generic_arg.name {
-        if len(generic_args) != 0 {
-            err(s, pos, "TODO: Support generic args that are generic")
-            return invalid_type
-        }
-        return generic_arg.type
-    }
-
-    global, exists := s.files[namespace.index].globals[name]
-    if !exists {
-        err(s, pos, "There is no global called `%s`", name)
-        return invalid_type
-    }
-
-    if len(generic_args) == 0 {
-        ref, is_type_without_generic := global.value.(GlobalTypeWithoutGenericRef)
-        if !is_type_without_generic {
-            _, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
-            if is_type_with_generic {
-                err(
-                    s,
-                    pos,
-                    "The global type `%s` requires a generic argument to be specified, for example `%s[String]`",
-                    name,
-                    name,
-                )
-            } else {
-                err(s, pos, "The global `%s` is not a type without a generic arg", name)
-            }
-            return invalid_type
-        }
-        return initialise_global_type_without_generic(s, ref.index)
-    } else if len(generic_args) != 1 {
-        err(s, pos, "TODO: Support types with more than 1 generic argument")
-        return invalid_type
-    } else {
-        ref, is_type_with_generic := global.value.(GlobalTypeWithGenericRef)
-        if !is_type_with_generic {
-            err(s, pos, "The global `%s` is not a type with a generic arg", name)
-            return invalid_type
-        }
-        checked_generic_arg := check_type(s, generic_args[0], generic_arg)
-        if checked_generic_arg == invalid_type {
-            return invalid_type
-        }
-        return create_generic_type(s, ref.index, checked_generic_arg)
-    }
-}
-
-// Returns nil if there are errors in the named type
-handle_named_type :: proc(
-    s: ^CheckerState,
-    pos: uint,
-    type_segments: Ident,
-    generic_args: []Unit,
-    generic_arg: GenericArg,
-) -> Type {
-    if len(type_segments) == 2 {
-        namespace := type_segments[0].ident
-        global, exists := s.files[s.file.index].globals[namespace]
-        if !exists {
-            err(s, pos, "There is no global called `%s`", namespace)
-            return invalid_type
-        }
-
-        value_ref, is_value := global.value.(GlobalValueRef)
-        if !is_value {
-            err(s, pos, "The global `%s` is not a value", namespace)
-            return invalid_type
-        }
-
-        import_value, is_import := s.global_values[value_ref.index].value.(Import)
-        if !is_import {
-            err(s, pos, "The global `%s` is not an import", namespace)
-            return invalid_type
-        }
-
-        return handle_named_user_defined_type(
-            s,
-            type_segments[1].pos,
-            import_value.file,
-            type_segments[1].ident,
-            generic_args,
-            generic_arg,
-        )
-    } else if len(type_segments) != 1 {
-        err(s, pos, "TODO: Support compiling type references with more than 1 `.` in them")
-        return invalid_type
-    }
-
-    name := type_segments[0].ident
-    builtin_type: Type = ---
-    switch name {
-    case "I64":
-        builtin_type = i64_type
-    case "I32":
-        builtin_type = i32_type
-    case "I16":
-        builtin_type = i16_type
-    case "I8":
-        builtin_type = i8_type
-    case "U64":
-        builtin_type = u64_type
-    case "U32":
-        builtin_type = u32_type
-    case "U16":
-        builtin_type = u16_type
-    case "U8":
-        builtin_type = u8_type
-    case "Bool":
-        builtin_type = bool_type
-    case "String":
-        builtin_type = string_type
-    case:
-        if is_builtin(name) {
-            err(s, pos, "`%s` is a builtin, but it is not a type", name)
-            return invalid_type
-        }
-
-        if name == generic_arg.name {
-            if len(generic_args) != 0 {
-                err(s, pos, "TODO: Support generic args that are generic")
-                return invalid_type
-            }
-            return generic_arg.type
-        }
-
-        return handle_named_user_defined_type(s, pos, s.file, name, generic_args, generic_arg)
-    }
-    if len(generic_args) != 0 {
-        err(s, pos, "The builtin type `%s` cannot have a generic argument", name)
-        return invalid_type
-    }
-    return builtin_type
 }
 
 to_str :: proc(s: ^CheckerState, pos: uint, val: CheckedValue, type: Type) -> CheckedValue {
@@ -280,6 +165,7 @@ is_builtin :: proc(name: string) -> bool {
          "U8",
          "Bool",
          "String",
+         "Type",
          "to_str",
          "function_id":
         return true

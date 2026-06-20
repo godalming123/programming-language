@@ -108,6 +108,10 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
             strings.write_byte(&s.b, '"')
         case BoolValue:
             strings.write_string(&s.b, comptime ? "true" : "false")
+        case Type:
+            panic("Unreachable")
+        case GlobalTypeWithGenericRef:
+            panic("Unreachable")
         }
     case ToString:
         strings.write_string(&s.b, "asprintf_value(")

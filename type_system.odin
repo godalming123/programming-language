@@ -16,7 +16,8 @@ u8_type :: Type{max(u32) - 8}
 bool_type :: Type{max(u32) - 9}
 invalid_type :: Type{max(u32) - 10}
 unknown_type :: Type{max(u32) - 11}
-max_index :: max(u32) - 12
+type_type :: Type{max(u32) - 12}
+max_index :: max(u32) - 13
 
 dynamic_array_of_strings :: Type{0} // []String
 string_to_nil_type :: Type{1} // (String)
