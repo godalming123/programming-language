@@ -3,6 +3,7 @@ html = import "html.code"
 game_width = 15
 game_height = 15
 game_size = game_height * game_width
+main_title = "Conway's game of life"
 
 count_pixel_life = |s: [game_size]Bool, x: I64, y: I64| -> I64 {
 	if x < 0 or x >= game_width or y < 0 or y >= game_height {
@@ -41,7 +42,7 @@ run_tick = |s: [game_size]Bool| -> [game_size]Bool {
     return new_state
 }
 
-game_of_life = |s: [game_size]Bool| -> []html.Elem[[game_size]Bool] {
+game_of_life = |s: [game_size]Bool| -> html.UI[[game_size]Bool] {
     mut grid_pixels = []html.Elem[[game_size]Bool]()
     for pixel in s {
         if pixel {
@@ -55,10 +56,11 @@ game_of_life = |s: [game_size]Bool| -> []html.Elem[[game_size]Bool] {
         "grid-template-columns: repeat(" & game_width.to_str & ", 1fr);"
         "grid-template-columns: repeat(" & game_height.to_str & ", 1fr);"
         "aspect-ratio: 1 / 1;"
-	return []html.Elem[[game_size]Bool](
+	ui_contents = []html.Elem[[game_size]Bool](
         .Button([]html.Elem[[game_size]Bool](.Text("Run tick")), run_tick),
         .Div(grid_style, grid_pixels),
     )
+	return html.UI[[game_size]Bool](main_title, ui_contents)
 }
 
 build = #comptime || -> I64 {

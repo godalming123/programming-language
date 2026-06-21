@@ -14,8 +14,13 @@ Elem[State] : <
     Text {text: String},
 >
 
+UI[State] : {
+    page_title: String,
+    ui_contents: []Elem[State],
+}
+
 reactive_page = #comptime |
-	reactivity_function_id: U64, // TODO: Check that the type is `(T) -> []Elem[T]`
+	reactivity_function_id: U64, // TODO: Check that the type is `(T) -> UI[T]`
 	initial_state_js: String, // TODO: Check that the type is `T`
 | -> String {
     glue = #load "./html.js"

@@ -181,11 +181,22 @@ A new language for the web, because it's time to stop working around javascript.
       - An executable for a server to handle requests
       - JS code that could run on the edge
   - Metaprogramming:
-    - Decide which metaprogramming capabilities should be ran by the compiler interpreting them and which should be ran by the compiler compiling them into an executable and running the executable
-      - An advantage of the interpreter-based approach is that you can guarantee that the metaprogram does the same thing regardless of:
-        - Which OS it runs on
-        - Which architecture it runs on
-        - Whether the C emitter or the JS emitter was used (because no emitter would be used)
+    - [x] Decide which metaprogramming capabilities should be ran by the compiler interpreting bytecode and which should be ran by the compiler compiling them into an executable and running the executable
+      - Advantages of the interpreter-based approach
+        - You can guarantee that the metaprogram does the same thing regardless of:
+          - Which OS it runs on
+          - Which architecture it runs on
+          - Whether the C emitter or the JS emitter was used (because no emitter would be used)
+        - The metaprogram and the compiler can send any data structure to one another very easily
+        - Certain information is lost when emitting code
+          - For example, if you transpile the following to C, it becomes non-trivial for the compiler to emit the javascript because all the metaprogram has is a function pointer:
+            ```
+            compiler.emit_js_code(|a: I64| {return a + 1})
+            ```
+      - Advantages of the emission and compilation based approach
+        - The metaprogram would be able to use capabilities from C or JS
+        - The metaprogram may run faster
+      - Current decision: Use an interpreter for all the metaprogramming except maybe if I think that there is an important use case where interpreting is too slow and/or it would be useful to use capabilities from C or JS in the metaprogram
     - It could be nice to be able to define a couple different `build` functions in the standard library for different types of website, and have that be sufficient for building 99%+ of websites
     - There could be a different `build` function for:
       - Static site generation

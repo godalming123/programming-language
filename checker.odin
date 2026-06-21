@@ -701,7 +701,7 @@ get_struct_type :: proc(s: ^CheckerState, pos: uint, type: Type) -> (Struct(Type
 get_func_type :: proc(s: ^CheckerState, pos: uint, value: ^CheckedValue, type: Type) -> Type {
     simplified := simplify_type(s, type)
     if simplified == type_type && value != nil {
-        value_type := value.(CompileTimeValue).(Type)
+        value_type := simplify_type(s, value.(CompileTimeValue).(Type))
         struct_type, is_struct := get_type(s.types, value_type).(Struct(Type, Type))
         if is_struct {
             value^ = StructTypeInitFunc{value_type}

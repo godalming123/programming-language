@@ -28,7 +28,8 @@ function create_elem(elem) {
 function render_ui() {
   ui = state_to_ui(state)
   document.body.innerHTML = ""
-  for (const elem of ui) {
+  document.title = ui.field0
+  for (const elem of ui.field1) {
     document.body.appendChild(create_elem(elem))
   }
 }
