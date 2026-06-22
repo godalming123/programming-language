@@ -7,11 +7,11 @@ build = #comptime || -> I64 {
     }
 
     // TODO: Be able to use interpolated strings to write to the file
-    // compiler.write_file("fibonacci.txt", "The first fibonacci number that is >= ${threshold} is ${fibonacci_numbers[len(fibonacci_numbers)-1]}\n")
+    // write_file("fibonacci.txt", "The first fibonacci number that is >= ${threshold} is ${fibonacci_numbers[len(fibonacci_numbers)-1]}\n")
 
     // TODO: Be able to write all of the fibonacci numbers to the file something like this
     // for num, index in fibonacci_numbers {
-    //     compiler.append_file("fibonacci.txt", "the fibonacci number at index ${index} is ${num}")
+    //     append_file("fibonacci.txt", "the fibonacci number at index ${index} is ${num}")
     // }
 
     last_fibonacci_number = fibonacci_numbers[fibonacci_numbers.len-1]

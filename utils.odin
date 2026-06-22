@@ -1,9 +1,7 @@
 package main
 
 import "base:runtime"
-import "core:bufio"
 import "core:fmt"
-import "core:io"
 import "core:math/rand"
 import "core:os"
 import "core:slice"
@@ -23,6 +21,8 @@ random_string :: proc(max_length: int, gen := context.random_generator) -> strin
     return string(out)
 }
 
+/*
+// OLD(METAPROGRAM_IN_C)
 EOT :: '\x04'
 
 BufferedPipe :: struct {
@@ -58,6 +58,7 @@ close_buffered_pipe :: proc(pipe: BufferedPipe) {
 //         return "", false
 //     }
 // }
+*/
 
 TestingTextExpecter :: struct {
     index:    uint,

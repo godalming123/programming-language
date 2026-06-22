@@ -1,6 +1,5 @@
 package main
 
-import "core:bufio"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -278,6 +277,8 @@ example_05_ui :: proc(t: ^testing.T) {
     expect_ui_render(&text_expecter, "Text 3", 3) // After click
 }
 
+/*
+// OLD(METAPROGRAM_IN_C)
 @(test)
 buffered_pipe_test :: proc(t: ^testing.T) {
     str :: "Hello world\n"
@@ -291,6 +292,7 @@ buffered_pipe_test :: proc(t: ^testing.T) {
         testing.fail_now(t, fmt.aprintf("Expected %q, got %q", str, read_str))
     }
 }
+*/
 
 // TODO: Mock a browser to test the counter and conways game of life
 

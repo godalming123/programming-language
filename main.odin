@@ -1,10 +1,7 @@
 package main
 
-import "core:bufio"
 import "core:fmt"
 import "core:os"
-import "core:path/filepath"
-import "core:strconv"
 import "core:strings"
 import "core:time"
 
@@ -95,14 +92,12 @@ build :: proc(file_name: string) -> (string, bool) {
         fmt.printfln("Successfully checked with %s and %s", errors, warnings)
     }
 
-    fmt.printfln("Emitting C code...")
-    c := emit_c(
-        checker_output.checked,
-        checker_output.entry_func_ref,
-        checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
-    )
-
     if checker_output.entry_func_type == .BuildFunc {
+        fmt.printfln("Interpreting metaprogram...")
+        result := interpret(checker_output.checked, checker_output.entry_func_ref)
+        return "", result.(i64) == 0 ? true : false
+        /*
+        // OLD(METAPROGRAM_IN_C)
         tmp, err := os.temp_directory(context.allocator)
         if err != nil {
             fmt.eprintfln("Failed to get temporary directory: %#v", file_name, err)
@@ -141,7 +136,15 @@ build :: proc(file_name: string) -> (string, bool) {
 
         run_metaprogram(absolute_file_dir, executable_path, checker_output.checked)
         return "", true
+        */
     } else {
+        fmt.printfln("Emitting C code...")
+        c := emit_c(
+            checker_output.checked,
+            checker_output.entry_func_ref,
+            checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
+        )
+
         executable_path, ok := write_and_compile_c(c, file_name)
         if !ok {
             return "", false
@@ -150,6 +153,8 @@ build :: proc(file_name: string) -> (string, bool) {
     }
 }
 
+/*
+// OLD(METAPROGRAM_IN_C)
 run_metaprogram :: proc(
     metaprogram_working_dir: string,
     metaprogram_path: string,
@@ -227,6 +232,7 @@ run_metaprogram :: proc(
         }
     }
 }
+*/
 
 print_help :: proc(exit_code: int) -> ! {
     fmt.println("- `build file_name` build a file")
