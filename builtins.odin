@@ -137,7 +137,7 @@ to_str :: proc(s: ^CheckerState, pos: uint, val: CheckedValue, type: Type) -> Ch
     case u8_type:
         from_type = .U8Type
     case:
-        err(s, pos, "Cannot convert %s to String", type_to_string(s, type))
+        err(s, pos, "Cannot convert the type `%s` to `String`", type_to_string(s, type))
         return nil
     }
     return ToString{from_type, new_clone(val)}

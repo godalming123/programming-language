@@ -342,11 +342,13 @@ basic_fuzz_test :: proc(t: ^testing.T) {
 @(test)
 basic_type_system_test :: proc(t: ^testing.T) {
     types: Types
-    type0 := string_type
-    type1 := bool_type
-    generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type}).type
-    generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type}).type
-    generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type}).type
+    generic_args0 := make([]Type, 1)
+    generic_args0[0] = string_type
+    generic_args1 := make([]Type, 1)
+    generic_args1[0] = bool_type
+    generic0 := create_type(&types, GenericTypeValue{7, generic_args0, unknown_type}).type
+    generic1 := create_type(&types, GenericTypeValue{7, generic_args0, i64_type}).type
+    generic2 := create_type(&types, GenericTypeValue{7, generic_args1, unknown_type}).type
     testing.expect(t, generic0 == generic1)
     generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
     testing.expect(t, generic0_initialised == i64_type)

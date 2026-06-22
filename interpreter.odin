@@ -234,6 +234,8 @@ interp_clone_value :: proc(val: RuntimeValue) -> RuntimeValue {
 
 interp_exec_statement :: proc(state: ^InterpState, nesting_level: uint, stmt: CheckedStatement) {
     switch s in stmt {
+    case UnreachableStatement:
+        panic("Reached unreachable code")
 
     case CheckedReturn:
         state.returning = true
@@ -461,29 +463,19 @@ interp_eval_value :: proc(
         switch value.join_method {
 
         case .Addition:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a + b
+            return lhs.(i64) + rhs.(i64)
 
         case .Subtraction:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a - b
+            return lhs.(i64) - rhs.(i64)
 
         case .Multiplication:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a * b
+            return lhs.(i64) * rhs.(i64)
 
         case .Division:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a / b
+            return lhs.(i64) / rhs.(i64)
 
         case .Modulo:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a % b
+            return lhs.(i64) % rhs.(i64)
 
         case .IsEqual:
             a_i64, a_is_i64 := lhs.(i64)
@@ -512,45 +504,28 @@ interp_eval_value :: proc(
             return true
 
         case .IsLessThan:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a < b
+            return lhs.(i64) < rhs.(i64)
 
         case .IsLessThanOrEqual:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a <= b
+            return lhs.(i64) <= rhs.(i64)
 
         case .IsGreaterThan:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a > b
+            return lhs.(i64) > rhs.(i64)
 
         case .IsGreaterThanOrEqual:
-            a, _ := lhs.(i64)
-            b, _ := rhs.(i64)
-            return a >= b
+            return lhs.(i64) >= rhs.(i64)
 
         case .BooleanAnd:
-            a, _ := lhs.(bool)
-            b, _ := rhs.(bool)
-            return a && b
+            return lhs.(bool) && rhs.(bool)
 
         case .BooleanOr:
-            a, _ := lhs.(bool)
-            b, _ := rhs.(bool)
-            return a || b
+            return lhs.(bool) || rhs.(bool)
 
         case .StringConcat:
-            a, a_ok := lhs.(string)
-            b, b_ok := rhs.(string)
-            if a_ok && b_ok {
-                return strings.concatenate([]string{a, b})
-            }
-            return ""
+            return strings.concatenate([]string{lhs.(string), rhs.(string)})
 
         case .Append, .Concat, .Colon, .Arrow:
-            panic("Unreachable in interpreter")
+            panic("Unreachable")
         }
 
     case CheckedFunctionCall:

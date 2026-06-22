@@ -245,6 +245,8 @@ MatchStatement :: struct {
 
 ReturnStatement :: distinct []Unit
 YieldStatement :: distinct []Unit
+ContinueStatement :: struct {}
+UnreachableStatement :: struct {}
 
 Statement :: struct {
     position: uint,
@@ -257,6 +259,8 @@ Statement :: struct {
         ReturnStatement,
         YieldStatement,
         MatchStatement,
+        ContinueStatement,
+        UnreachableStatement,
     },
 }
 

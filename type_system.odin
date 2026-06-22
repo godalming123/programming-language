@@ -30,7 +30,7 @@ i64_to_nil_type :: Type{7} // (I64)
 
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
-    generic_arg:        Type,
+    generic_args:       []Type,
     initialised_type:   Type, // Set to `unknown_type` when not initialised yet
 }
 
@@ -100,7 +100,11 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     case FuncType:
         return hash_func_type(v)
     case GenericTypeValue:
-        return v.generic_type_index ~ v.generic_arg.index
+        result := v.generic_type_index
+        for arg in v.generic_args {
+            result ~= arg.index
+        }
+        return result
     }
     panic("Unreachable")
 }
@@ -192,13 +196,22 @@ merge_type_value :: proc(
         if !ok {
             return false, nil
         }
-        if va.generic_type_index == vb.generic_type_index && va.generic_arg == vb.generic_arg {
-            if va.initialised_type != unknown_type {
-                assert(vb.initialised_type == unknown_type)
-                return true, va
-            }
-            return true, vb
+        if va.generic_type_index != vb.generic_type_index {
+            return false, nil
         }
+        if len(va.generic_args) != len(vb.generic_args) {
+            return false, nil
+        }
+        for arg, i in va.generic_args {
+            if arg.index != vb.generic_args[i].index {
+                return false, nil
+            }
+        }
+        if va.initialised_type != unknown_type {
+            assert(vb.initialised_type == unknown_type)
+            return true, va
+        }
+        return true, vb
     }
     return false, nil
 }

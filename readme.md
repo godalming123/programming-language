@@ -41,6 +41,7 @@ A new language for the web, because it's time to stop working around javascript.
 # Todo
 
 - Choose a name
+- Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
 - Emit better JS code:
@@ -57,13 +58,13 @@ A new language for the web, because it's time to stop working around javascript.
     - Currently `x.len` is used rather than `len(x)`
     - Currently `x.to_str` is used rather than `to_str(x)`
     - Currently `a :: b` is used rather than `append(a, b)`
-  - With the addition of subtypes/supertypes, `Any` and in the case of `append`, function generics, these functions could be represented like so:
+  - With the addition of subtypes/supertypes, `Any` and in the case of `append` and `delete`, function generics, these functions could be represented like so:
     - `len: ([]Any) -> I64`
     - `to_str: (Any) -> String`
     - `append[T]: ([]T, []T) -> []T`
+    - `delete[K, V]: (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
-- Add modules and namespaces
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
 - Do not leak memory in the compiler
 - Tell the c compiler the type of the number literals that are emitted
@@ -94,11 +95,11 @@ A new language for the web, because it's time to stop working around javascript.
   - Arena backed array with an embedded freelist
   - Tree
   - Hash based data structures:
-    - Hash map
-    - Hash set
-    - Ordered hash map
-    - Ordered hash set
-    - Should there be an efficient way to store a reference to a particulair item in one of these data structures?
+    - [ ] Hash map
+    - [ ] Hash set
+    - [ ] Ordered hash map
+    - [ ] Ordered hash set
+    - [ ] Should there be an efficient way to store a reference to a particulair item in one of these data structures?
   - Arena backed buffer with an embedded freelist?
   - Arena backed malloc/free/free_all implementation?
 - Support length based strings as well as null terminated strings
@@ -193,6 +194,7 @@ A new language for the web, because it's time to stop working around javascript.
             ```
             compiler.emit_js_code(|a: I64| {return a + 1})
             ```
+        - The interpreter can act as a sandbox, rather than giving full access to the host system
       - Advantages of the emission and compilation based approach
         - The metaprogram would be able to use capabilities from C or JS
         - The metaprogram may run faster

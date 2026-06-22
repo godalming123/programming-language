@@ -84,11 +84,15 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             return wrong_token(s)
         }
         if field.ident in fields_map {
+            file := s.files[s.file_ref.index]
+            line, col := get_location(file.file.code, fields_map[field.ident])
             diagnostic(
-                s.files[s.file_ref.index].file,
+                file.file,
                 field.pos,
-                "There is already a field called `%s` in this struct",
+                "There is already a field called `%s` defined in this struct on line %d column %d",
                 field.ident,
+                line,
+                col,
             )
             return Struct(Unit, struct {}){}, false
         }
@@ -818,6 +822,8 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 "`for`",
                 "`return`",
                 "`yield`",
+                "`continue`",
+                "`unreachable`",
                 "`}`",
             )
             ok: bool = ---
@@ -943,6 +949,14 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 return nil, false
             }
             append_elem(&out, Statement{pos, if_else^})
+        case ContinueToken:
+            get_next_token(s, true)
+            clear_dynamic_array(&other_possible_tokens)
+            append_elem(&out, Statement{pos, ContinueStatement{}})
+        case UnreachableToken:
+            get_next_token(s, true)
+            clear_dynamic_array(&other_possible_tokens)
+            append_elem(&out, Statement{pos, UnreachableStatement{}})
         case MatchToken:
             get_next_token(s, true)
             value := parse_unit(s)
@@ -991,6 +1005,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 return nil, false
             }
             append_elem(&out, Statement{pos, loop})
+            clear_dynamic_array(&other_possible_tokens)
             get_next_token(s, true)
         case ReturnToken:
             values, ok := parse_units_until(s, is_close_brace, "`}`")
@@ -998,6 +1013,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 return nil, false
             }
             append_elem(&out, Statement{pos, ReturnStatement(values)})
+            clear_dynamic_array(&other_possible_tokens)
             return out[:], true
         case YieldToken:
             values, ok := parse_units_until(s, is_close_brace, "`}`")
@@ -1005,6 +1021,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 return nil, false
             }
             append_elem(&out, Statement{pos, YieldStatement(values)})
+            clear_dynamic_array(&other_possible_tokens)
             return out[:], true
         case CloseBraceToken:
             return out[:], true
@@ -1222,10 +1239,10 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
 }
 
 GlobalTypeWithGeneric :: struct {
-    name:    string,
-    generic: IdentAndPos,
-    value:   Unit,
-    file:    FileRef,
+    name:     string,
+    generics: []IdentAndPos, // The parser should check that the name of each generic argument is unique
+    value:    Unit,
+    file:     FileRef,
 }
 
 GlobalTypeWithoutGeneric :: struct {
@@ -1295,21 +1312,48 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 return false
             }
             get_next_token(s, false)
-            generic := IdentAndPos{}
+            generic_map := make(map[string]uint) // The key is the position of the generic arg
+            generic := make([dynamic]IdentAndPos)
             _, is_open_square_bracket := s.last_token.(OpenSquareBracketToken)
             if is_open_square_bracket {
-                get_next_token(s, false)
-                segments, is_ident := s.last_token.(IdentToken)
-                if !is_ident || len(segments) != 1 {
-                    wrong_token_err(s, []string{"An identifier with one segment"})
-                    return false
-                }
-                generic = segments[0]
+                for {
+                    clear(&other_possible_tokens)
 
-                get_next_token(s, false)
+                    get_next_token(s, false)
+                    segments, is_ident := s.last_token.(IdentToken)
+                    if !is_ident || len(segments) != 1 {
+                        append_elem(&other_possible_tokens, "An identifier with one segment")
+                        break
+                    }
+
+                    if segments[0].ident in generic_map {
+                        file := s.files[s.file_ref.index].file
+                        line, col := get_location(file.code, generic_map[segments[0].ident])
+                        diagnostic(
+                            file,
+                            s.last_token_pos,
+                            "There is already a generic argument called `%s` defined on line %d column %d in this global type",
+                            segments[0].ident,
+                            line,
+                            col,
+                        )
+                        return false
+                    }
+                    append_elem(&generic, segments[0])
+                    generic_map[segments[0].ident] = segments[0].pos
+
+                    get_next_token(s, false)
+                    _, is_comma := s.last_token.(CommaToken)
+                    if !is_comma {
+                        append_elem(&other_possible_tokens, "A comma")
+                        break
+                    }
+                }
+
                 _, is_close_square_bracket := s.last_token.(CloseSquareBracketToken)
                 if !is_close_square_bracket {
-                    wrong_token_err(s, []string{"`]`"})
+                    append_elem(&other_possible_tokens, "`]`")
+                    wrong_token_err(s, other_possible_tokens[:])
                     return false
                 }
 
@@ -1317,7 +1361,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
             }
             #partial switch _ in s.last_token {
             case:
-                if generic.ident == "" {
+                if len(generic) == 0 {
                     expected :: []string {
                         "`=` to define a global value",
                         "`:` to define a global type",
@@ -1334,7 +1378,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 if !type.ok {
                     return false
                 }
-                if generic.ident == "" {
+                if len(generic) == 0 {
                     s.files[s.file_ref.index].globals[name] = ParsedGlobal {
                         position,
                         GlobalTypeWithoutGenericRef{len(s.global_types_without_generics)},
@@ -1350,12 +1394,12 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     }
                     append_elem(
                         &s.global_types_with_generics,
-                        GlobalTypeWithGeneric{name, generic, type.unit, s.file_ref},
+                        GlobalTypeWithGeneric{name, generic[:], type.unit, s.file_ref},
                     )
                 }
                 other_possible_tokens = type.descriptions_of_other_possible_tokens
             case AssignToken:
-                if generic.ident != "" {
+                if len(generic) != 0 {
                     diagnostic(
                         s.files[s.file_ref.index].file,
                         s.last_token_pos,

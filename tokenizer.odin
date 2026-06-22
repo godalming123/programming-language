@@ -44,6 +44,8 @@ ElseToken :: struct {} // else
 ImportToken :: struct {} // import
 ReturnToken :: struct {} // return
 YieldToken :: struct {} // yield
+ContinueToken :: struct {} // continue
+UnreachableToken :: struct {} // unreachable
 AndToken :: struct {} // and
 OrToken :: struct {} // or
 MatchToken :: struct {} // match
@@ -90,6 +92,8 @@ TokenContents :: union {
     ForToken,
     WhileToken,
     IfToken,
+    ContinueToken,
+    UnreachableToken,
     ElseToken,
     ImportToken,
     ReturnToken,
@@ -182,6 +186,10 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "the keyword `return`"
     case YieldToken:
         return "the keyword `yield`"
+    case ContinueToken:
+        return "the keyword `continue`"
+    case UnreachableToken:
+        return "the keyword `unreachable`"
     case AndToken:
         return "the keyword `and`"
     case OrToken:
@@ -524,6 +532,10 @@ tokenizer_get_next_token :: proc(
             state.last_token = ReturnToken{}
         case "yield":
             state.last_token = YieldToken{}
+        case "continue":
+            state.last_token = ContinueToken{}
+        case "unreachable":
+            state.last_token = UnreachableToken{}
         case "and":
             state.last_token = AndToken{}
         case "or":

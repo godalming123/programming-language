@@ -281,6 +281,8 @@ emit_c_block_body :: proc(
         switch stmt in statement {
         //case CheckedJsFunctionCall, CheckedJsAssignment:
         //    panic("Internal error: JS received by C emitter")
+        case UnreachableStatement:
+            strings.write_string(&s.b, "fprintf(stderr, \"Unreachable\");exit(1);")
         case CheckedFunctionCall:
             emit_c_func_call(s, stmt)
             strings.write_byte(&s.b, ';')

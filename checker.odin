@@ -67,6 +67,7 @@ CheckerState :: struct {
     // The following fields change while checking
     types:                         Types,
     loop_index:                    uint,
+    parent_loop_index:             uint, // Set to max(uint) when there is no parent loop
     diagnostics_info:              DiagnosticsInfo,
     // TODO: represent the order of the programmer controlled stack
 }
@@ -274,23 +275,18 @@ expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
     return
 }
 
-GenericArg :: struct {
-    name: string,
-    type: Type,
-}
-
-no_generic_arg :: GenericArg{"", invalid_type}
+no_generic_arg :: map[string]Type{}
 
 check_struct_type :: proc(
     s: ^CheckerState,
     type: Struct(Unit, struct {}),
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
 ) -> Type {
     field_types := make([]Type, len(type.fields))
     ok := true
     for field, i in type.fields {
         expect_snake_case(s, "the name of a struct field", field.name)
-        field_types[i] = check_type(s, field.type, generic_arg)
+        field_types[i] = check_type(s, field.type, generic_args)
         if field_types[i] == invalid_type {
             ok = false
         }
@@ -325,13 +321,13 @@ check_function_type :: proc(
     inputs: []Unit,
     output: Unit, // if the function has no output, then `output` is `Unit{}`
     type: FunctionType,
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
 ) -> Type {
     ok := true
 
     args := make([]Type, len(inputs))
     for input, i in inputs {
-        args[i] = check_type(s, input, generic_arg)
+        args[i] = check_type(s, input, generic_args)
         if args[i] == invalid_type {
             ok = false
         }
@@ -348,7 +344,7 @@ check_function_type :: proc(
     }
     return_types := make([]Type, len(outputs))
     for output, i in outputs {
-        return_types[i] = check_type(s, output, generic_arg)
+        return_types[i] = check_type(s, output, generic_args)
         if return_types[i] == invalid_type {
             ok = false
         }
@@ -366,7 +362,7 @@ check_array_type :: proc(
     s: ^CheckerState,
     pos: uint,
     type: CallWithFrontedSquareBrackets,
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
 ) -> (
     ArrayType,
     bool,
@@ -397,7 +393,7 @@ check_array_type :: proc(
         err(s, pos, "Expected either 0 or 1 unit inside `[]`, got %d units", len(type.args))
         return ArrayType{}, false
     }
-    item_type := check_type(s, type.unit_being_called^, generic_arg)
+    item_type := check_type(s, type.unit_being_called^, generic_args)
     if item_type == invalid_type {
         return ArrayType{}, false
     }
@@ -408,14 +404,14 @@ check_array_type :: proc(
 check_type :: proc(
     s: ^CheckerState,
     type: Unit,
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
     loc := #caller_location,
 ) -> Type {
     when debug_checker {
         print_call(loc, "check_type")
     }
     body := make([dynamic]CheckedStatement)
-    value := check_value(s, type, &body, type_type, generic_arg)
+    value := check_value(s, type, &body, type_type, generic_args)
     if value == nil {
         return invalid_type
     }
@@ -437,7 +433,7 @@ check_runtime_value :: proc(
     out := check_value(s, v, body, type, no_generic_arg)
     comptime_value, is_comptime_value := out.(CompileTimeValue)
     #partial switch _ in comptime_value {
-    case Type, GlobalTypeWithGenericRef:
+    case Type, GlobalTypeWithGenericRef, OrderedHashMapType:
         err(s, v.pos, "This value can only be used at compile time")
         return nil
     }
@@ -576,8 +572,9 @@ CheckedStatement :: union {
     CheckedArrayMutation, // like `CheckedMutation`, except the value is an array
     CheckedFunctionCall,
     CheckedMatch,
-    // CheckedJsFunctionCall,
-    // CheckedJsAssignment,
+
+    // TODO: Store where the statement is and tell the user where the statement is when it is reached
+    UnreachableStatement,
 }
 
 // TODO: Rework this with a general Number type
@@ -590,36 +587,47 @@ type_is_numeric :: proc(s: ^CheckerState, type: Type) -> bool {
     }
 }
 
-create_generic_type :: proc(
+check_generic_type :: proc(
     s: ^CheckerState,
+    pos: uint,
     generic_type_index: u32,
-    generic_arg: Type,
+    generic_args: []Type,
     loc := #caller_location,
 ) -> Type {
-    created := create_type(
-        &s.types,
-        GenericTypeValue{generic_type_index, generic_arg, unknown_type},
-    )
-    if created.result == .Merged {
-        return created.type
+    generic := s.global_types_with_generics[generic_type_index]
+    if len(generic_args) != len(generic.generics) {
+        argument_count_mismatch(s, pos, len(generic_args), len(generic.generics), generic.name)
+        return invalid_type
     }
 
-    generic := s.global_types_with_generics[generic_type_index]
+    created := create_type(
+        &s.types,
+        GenericTypeValue{generic_type_index, generic_args, unknown_type},
+    )
+    if created.result == .Merged {
+        if created.type_value.(GenericTypeValue).initialised_type == invalid_type {
+            return invalid_type
+        }
+        return created.type
+    }
 
     old_file := s.file
     defer s.file = old_file
     s.file = generic.file
-
-    initialised_type := check_type(
-        s,
-        generic.value,
-        GenericArg{generic.generic.ident, generic_arg},
-    )
+    generic_args_map := make(map[string]Type)
+    for arg, i in generic.generics {
+        assert(!(arg.ident in generic_args_map))
+        generic_args_map[arg.ident] = generic_args[i]
+    }
+    initialised_type := check_type(s, generic.value, generic_args_map)
     created2 := create_type(
         &s.types,
-        GenericTypeValue{generic_type_index, generic_arg, initialised_type},
+        GenericTypeValue{generic_type_index, generic_args, initialised_type},
     )
     assert(created.type == created2.type)
+    if initialised_type == invalid_type {
+        return invalid_type
+    }
     return created.type
 }
 
@@ -933,7 +941,14 @@ build_type_string :: proc(
         case GenericTypeValue:
             strings.write_string(b, s.global_types_with_generics[tv.generic_type_index].name)
             strings.write_byte(b, '[')
-            build_type_string(s, b, tv.generic_arg)
+            first_arg := true
+            for arg in tv.generic_args {
+                if !first_arg {
+                    strings.write_string(b, ", ")
+                }
+                build_type_string(s, b, arg)
+                first_arg = false
+            }
             strings.write_byte(b, ']')
         case FuncType:
             switch tv.type {
@@ -1189,7 +1204,10 @@ check_block :: proc(
         case ConditionControlledLoop:
             append_elem(&s.scopes, Scope{})
             defer pop_scope(s)
+            old_parent_loop_index := s.parent_loop_index
+            defer s.parent_loop_index = old_parent_loop_index
             loop_index := s.loop_index
+            s.parent_loop_index = loop_index
             s.loop_index += 1
             condition := check_runtime_value(s, value.condition, body, bool_type)
 
@@ -1215,7 +1233,10 @@ check_block :: proc(
         case ForInLoop:
             append_elem(&s.scopes, Scope{})
             defer pop_scope(s)
+            old_parent_loop_index := s.parent_loop_index
+            defer s.parent_loop_index = old_parent_loop_index
             loop_index := s.loop_index
+            s.parent_loop_index = loop_index
             s.loop_index += 1
             loop_body_array := make([dynamic]CheckedStatement)
             loop_enter: []CheckedStatement
@@ -1363,6 +1384,24 @@ check_block :: proc(
                 return nil, false
             }
             append_elem(body, CheckedIf{condition, if_block, else_block})
+
+        case ContinueStatement:
+            if stmt_index + 1 != len(block) {
+                err(s, stmt.position, "Continue statement must be last statement in block")
+                return nil, false
+            }
+            if s.parent_loop_index == max(uint) {
+                err(s, stmt.position, "Continue statement must go inside a loop")
+                return nil, false
+            }
+            append_elem(body, ContinueLoop{s.parent_loop_index})
+
+        case UnreachableStatement:
+            if stmt_index + 1 != len(block) {
+                err(s, stmt.position, "Unreachable statement must be last statement in block")
+                return nil, false
+            }
+            append_elem(body, UnreachableStatement{})
 
         case ReturnStatement:
             if stmt_index + 1 != len(block) {
@@ -1633,7 +1672,7 @@ check_var_ref :: proc(
     pos: uint,
     type: ExpectedType,
     body: ^[dynamic]CheckedStatement,
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
     loc := #caller_location,
 ) -> CheckedValue {
     when debug_checker {
@@ -1728,8 +1767,8 @@ check_var_ref :: proc(
     out_type: Type = ---
     start_i := 1
 
-    if ref[0].ident != "" && ref[0].ident == generic_arg.name {
-        out = CompileTimeValue(generic_arg.type)
+    if ref[0].ident != "" && ref[0].ident in generic_args {
+        out = CompileTimeValue(generic_args[ref[0].ident])
         out_type = type_type
     } else if builtin_func_index, builtin_func_type := get_builtin_func_from_name(ref[0].ident);
        builtin_func_index != max(u32) {
@@ -1936,14 +1975,14 @@ check_value_with_markers :: proc(
     markers: []IdentAndPos,
     body: ^[dynamic]CheckedStatement,
     type: ExpectedType,
-    generic_arg: GenericArg,
+    generic_args: map[string]Type,
 ) -> CheckedValue {
     if len(markers) == 0 {
-        return check_value(s, v, body, type, generic_arg)
+        return check_value(s, v, body, type, generic_args)
     }
     switch markers[0].ident {
     case "load":
-        value := check_value_with_markers(s, v, markers[1:], body, string_type, generic_arg)
+        value := check_value_with_markers(s, v, markers[1:], body, string_type, generic_args)
         if value == nil {
             return nil
         }
@@ -1973,7 +2012,7 @@ check_value_with_markers :: proc(
         warn(s, markers[0].pos, "TODO: Handle the `%s` marker", markers[0].ident)
     }
 
-    return check_value_with_markers(s, v, markers[1:], body, type, generic_arg)
+    return check_value_with_markers(s, v, markers[1:], body, type, generic_args)
 }
 
 // For `check_value` and `check_joined_unit_value`:
@@ -1987,7 +2026,7 @@ check_joined_unit_value :: proc(
     value: JoinedUnits,
     body: ^[dynamic]CheckedStatement,
     type: ExpectedType,
-    generic_arg: GenericArg, // Used if the value is a type
+    generic_args: map[string]Type, // Used if the value is a type
 ) -> CheckedValue {
     // TODO: In lots of this code, `check_runtime_value` is used when the
     // operations should be performable on values that can only be used at
@@ -2010,7 +2049,7 @@ check_joined_unit_value :: proc(
             return CompileTimeValue(invalid_type)
         }
         out: CheckedValue = CompileTimeValue(
-            check_function_type(s, tuple.elements, value.unit1^, .Normal, generic_arg),
+            check_function_type(s, tuple.elements, value.unit1^, .Normal, generic_args),
         )
         if expect_value_of_type(s, pos, type, &out, type_type, "") {
             return out
@@ -2160,7 +2199,7 @@ check_value :: proc(
     v: Unit,
     body: ^[dynamic]CheckedStatement, // Used if the value is a runtime value
     type: ExpectedType,
-    generic_arg: GenericArg, // Used if the value is a type
+    generic_args: map[string]Type, // Used if the value is a type
     loc := #caller_location,
 ) -> CheckedValue {
     when debug_checker {
@@ -2172,13 +2211,13 @@ check_value :: proc(
         return nil
 
     case Struct(Unit, struct {}):
-        out: CheckedValue = CompileTimeValue(check_struct_type(s, value, generic_arg))
+        out: CheckedValue = CompileTimeValue(check_struct_type(s, value, generic_args))
         if expect_value_of_type(s, v.pos, type, &out, type_type, "") {
             return out
         }
         return nil
     case CallWithFrontedSquareBrackets:
-        array, ok := check_array_type(s, v.pos, value, generic_arg)
+        array, ok := check_array_type(s, v.pos, value, generic_args)
         if !ok {
             return nil
         }
@@ -2194,7 +2233,7 @@ check_value :: proc(
         ok := true
         for variant, i in value.variants {
             expect_camel_case(s, "the name of a sum type variant", variant.name)
-            variants[i].payload = check_struct_type(s, variant.payload, generic_arg)
+            variants[i].payload = check_struct_type(s, variant.payload, generic_args)
             if variants[i].payload == invalid_type {
                 ok = false
             }
@@ -2215,7 +2254,7 @@ check_value :: proc(
         return nil
 
     case MarkedUnit:
-        return check_value_with_markers(s, value.value^, value.markers, body, type, generic_arg)
+        return check_value_with_markers(s, value.value^, value.markers, body, type, generic_args)
 
     case Tuple:
         if len(value.elements) != 1 {
@@ -2237,21 +2276,26 @@ check_value :: proc(
             value.unit_being_called^,
             body,
             AnyType{&being_called_type},
-            generic_arg,
+            generic_args,
         )
         if being_called_type == unknown_type {
             generic_type_ref := being_called_value.(CompileTimeValue).(GlobalTypeWithGenericRef)
-            if len(value.args) != 1 {
-                err(s, v.pos, "Expected 1 argument to generic, got %d", len(value.args))
+            checked_args := make([]Type, len(value.args))
+            ok := true
+            for arg, i in value.args {
+                checked_args[i] = check_type(s, arg, generic_args)
+                if checked_args[i] == invalid_type {
+                    ok = false
+                }
+            }
+            if !ok {
                 return nil
             }
-            generic_arg_type := check_type(s, value.args[0], generic_arg)
-            if generic_arg_type == invalid_type {
+            out_as_type := check_generic_type(s, v.pos, generic_type_ref.index, checked_args)
+            if out_as_type == invalid_type {
                 return nil
             }
-            out: CheckedValue = CompileTimeValue(
-                create_generic_type(s, generic_type_ref.index, generic_arg_type),
-            )
+            out: CheckedValue = CompileTimeValue(out_as_type)
             if expect_value_of_type(s, v.pos, type, &out, type_type, "") {
                 return out
             }
@@ -2342,10 +2386,10 @@ check_value :: proc(
         return call
 
     case JoinedUnits:
-        return check_joined_unit_value(s, v.pos, value, body, type, generic_arg)
+        return check_joined_unit_value(s, v.pos, value, body, type, generic_args)
 
     case Ident:
-        return check_var_ref(s, value, v.pos, type, body, generic_arg)
+        return check_var_ref(s, value, v.pos, type, body, generic_args)
 
     case Number:
         // TODO: Check that min(i64) <= number <= max(i64)
@@ -2394,6 +2438,7 @@ check_function :: proc(
         s.return_types[i] = return_type
     }
     s.loop_index = 0
+    s.parent_loop_index = max(uint)
     append_elem(&s.scopes, Scope{})
     defer {
         pop_scope(s)
@@ -2641,17 +2686,18 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
 
     for type, i in state.global_types_with_generics {
         state.file = type.file
-        if is_builtin(type.generic.ident) {
-            err(&state, type.generic.pos, builtins_err, type.generic.ident)
-        } else {
-            // TODO: Check that unused generics are valid
-            expect_camel_case(&state, "generic names", type.generic)
-            // state.global_types_with_generics[i].generic_type = check_type(
-            // &state,
-            // type.ast_node.value,
-            // type.ast_node.generic.ident,
-            // )
+        for arg in type.generics {
+            expect_camel_case(&state, "generic names", arg)
+            if is_builtin(arg.ident) {
+                err(&state, arg.pos, builtins_err, arg.ident)
+            }
         }
+        // TODO: Check that unused generics are valid
+        // state.global_types_with_generics[i].generic_type = check_type(
+        // &state,
+        // type.ast_node.value,
+        // type.ast_node.generic.ident,
+        // )
     }
 
     for _, i in state.global_types_without_generics {

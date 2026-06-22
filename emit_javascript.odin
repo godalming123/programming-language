@@ -200,6 +200,8 @@ emit_js_block_body :: proc(
 ) {
     for statement in body {
         switch stmt in statement {
+        case UnreachableStatement:
+            strings.write_string(&s.b, "throw new Error(\"Unreachable\")")
         case CheckedFunctionCall:
             emit_js_func_call(s, stmt)
             strings.write_byte(&s.b, ';')
