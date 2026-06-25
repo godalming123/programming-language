@@ -41,7 +41,8 @@ create_joined_values :: proc(
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual,
          .Modulo,
-         .StringConcat: // TODO
+         .StringConcat,
+         .In: // TODO
     case .Append, .Concat, .Colon, .Arrow:
         panic(fmt.aprintf("Unreachable (%v)", method))
     case .Multiplication, .Division, .Addition, .Subtraction:
@@ -68,5 +69,113 @@ create_joined_values :: proc(
         return CheckedJoinedValues{method, new_clone(val1), new_clone(val0)}
     }
     return CheckedJoinedValues{method, new_clone(val0), new_clone(val1)}
+}
+
+iterate_array :: proc(
+    loop_index: uint,
+    index_variable: VariableRef,
+    value_variable: VariableRef,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+    array_value: CheckedValue,
+    array_type: ArrayType,
+) -> CheckedLoop {
+    loop_enter := make([]CheckedStatement, 1)
+    loop_enter[0] = CheckedMutation{index_variable, CompileTimeValue(NumberValue{int_zero})}
+
+    if_block := make([]CheckedStatement, 1)
+    if_block[0] = BreakLoop{loop_index}
+    insert(
+        body,
+        CheckedIf {
+            create_joined_values(
+                .IsGreaterThanOrEqual,
+                index_variable,
+                length_of_array(array_type, array_value),
+            ),
+            CheckedBlock{nil, if_block},
+            CheckedBlock{},
+        },
+        CheckedMutation {
+            value_variable,
+            CheckedArrayAccess{new_clone(array_value), new_clone(CheckedValue(index_variable))},
+        },
+    )
+    dynamic_append_elem(
+        body,
+        CheckedMutation {
+            index_variable,
+            create_joined_values(
+                .Addition,
+                index_variable,
+                CompileTimeValue(NumberValue{big_int_from_i64(1)}),
+            ),
+        },
+    )
+    return CheckedLoop{loop_index, body_variables, dynamic_to_fixed(body^), loop_enter}
+}
+
+iterate_start_end_step :: proc(
+    loop_index: uint,
+    index_variable: VariableRef,
+    type: NumericIteratorType,
+    start: CheckedValue,
+    end: CheckedValue,
+    step: CheckedValue,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+) -> CheckedLoop {
+    loop_enter := make([]CheckedStatement, 1)
+    loop_enter[0] = CheckedMutation{index_variable, start}
+    if_block := make([]CheckedStatement, 1)
+    if_block[0] = BreakLoop{loop_index}
+    insert(
+        body,
+        CheckedIf {
+            create_joined_values(
+                type == .IncludeEndValue ? .IsGreaterThan : .IsGreaterThanOrEqual,
+                index_variable,
+                end,
+            ),
+            CheckedBlock{nil, if_block},
+            CheckedBlock{},
+        },
+    )
+    dynamic_append_elem(
+        body,
+        CheckedMutation{index_variable, create_joined_values(.Addition, index_variable, step)},
+    )
+    return CheckedLoop{loop_index, body_variables, dynamic_to_fixed(body^), loop_enter}
+}
+
+iterate_ordered_hash_map :: proc(
+    loop_index: uint,
+    hash_map: CheckedValue,
+    index_variable: VariableRef,
+    key_variable: VariableRef,
+    value_variable: VariableRef,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+) -> CheckedLoop {
+    keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)}
+    insert(
+        body,
+        CheckedMutation {
+            value_variable,
+            CheckedOrderedHashMapAccess {
+                new_clone(hash_map),
+                new_clone(CheckedValue(key_variable)),
+            },
+        },
+    )
+    return iterate_array(
+        loop_index,
+        index_variable,
+        key_variable,
+        body,
+        body_variables,
+        keys,
+        ArrayType{0, string_type},
+    )
 }
 

@@ -17,9 +17,15 @@ emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
 
 emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
+    case OrderedHashMapInitFunc:
+        panic("TODO")
+    case CheckedOrderedHashMapAccess,
+         KeysOfOrderedHashMapWithStringKey,
+         KeysOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CompileTimeValue:
         switch comptime in v {
-        case Type:
+        case Type, UninitialisedOrderedHashMapType:
             panic("Unreachable")
         case GlobalTypeWithGenericRef:
             panic("Unreachable")
@@ -60,6 +66,10 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case LengthOfArray:
         emit_js_value(s, v.array^)
         strings.write_string(&s.b, ".length")
+    case LengthOfOrderedHashMapWithStringKey:
+        panic("TODO")
+    case LengthOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CheckedArrayAccess:
         emit_js_value(s, v.array^)
         strings.write_byte(&s.b, '[')
@@ -87,10 +97,18 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         emit_js_value(s, v.str1^)
         strings.write_byte(&s.b, ')')
     case CheckedJoinedValues:
+        if v.join_method == .In {
+            strings.write_string(&s.b, "in_map(")
+            emit_js_value(s, v.val0^)
+            strings.write_string(&s.b, ", ")
+            emit_js_value(s, v.val1^)
+            strings.write_string(&s.b, ")")
+            return
+        }
         strings.write_byte(&s.b, '(')
         emit_js_value(s, v.val0^)
         switch v.join_method {
-        case .Append, .Concat, .Colon, .Arrow:
+        case .Append, .Concat, .Colon, .Arrow, .In:
             panic("Unreachable")
         case .BooleanAnd:
             strings.write_string(&s.b, "&&")
@@ -133,6 +151,8 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
     switch t in s.types.values[index].value.value {
+    case OrderedHashMapTypeWithStringKey:
+    case OrderedHashMapTypeWithI64Key:
     case ArrayType:
     case FuncType:
     case GenericTypeValue:
@@ -274,25 +294,8 @@ emit_js_block_body :: proc(
             }
             strings.write_string(&s.b, "];")
         case CheckedMutation:
-            emit_variable(&s.b, stmt.destination.variable)
-            if stmt.destination.index != nil {
-                strings.write_byte(&s.b, '[')
-                emit_js_value(s, stmt.destination.index)
-                strings.write_byte(&s.b, ']')
-
-            }
-            switch stmt.mutation_type {
-            case .SetTo:
-                strings.write_byte(&s.b, '=')
-            case .IncrementBy:
-                strings.write_string(&s.b, "+=")
-            case .DecrementBy:
-                strings.write_string(&s.b, "-=")
-            case .MultiplyBy:
-                strings.write_string(&s.b, "*=")
-            case .DivideBy:
-                strings.write_string(&s.b, "/=")
-            }
+            emit_js_value(s, stmt.destination)
+            strings.write_byte(&s.b, '=')
             emit_js_value(s, stmt.value)
             strings.write_byte(&s.b, ';')
         }
@@ -328,6 +331,7 @@ emit_js_block :: proc(
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
     s := GeneralEmitterState{strings.builder_make(), c.types, c}
+    strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has(b, a)}")
 
     for _, index in c.types.values {
         emit_js_global_type(&s, index)

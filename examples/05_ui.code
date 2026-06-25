@@ -18,18 +18,13 @@ text_picker = |s: String| -> []UI[String] {
     )
 }
 
-// TODO
-// Ideally, this would be able to be declared with a generic for the state, but
-// at time of writing, the compiler interprets something like
-// `UIRenderingState[String](index, onclick)` as accessing the index `String` in
-// the array `UIRenderingState` rather than a type initialisation
-UIRenderingState : {
+UIRenderingState[State] : {
     button_index: I64,
-    focussed_button_onclick: (String) -> String,
+    focussed_button_onclick: (State) -> State,
 }
 
 // TODO: Be able to implement `render_ui` with a generic State type rather than String
-render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: UIRenderingState| -> UIRenderingState {
+render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: UIRenderingState[String]| -> UIRenderingState[String] {
     mut s = state
     for elem in ui {
         for _ in 0..<nesting {
@@ -41,12 +36,12 @@ render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: 
                 if focussed_button_index == s.button_index {
                     println("Focused button")
                     // ~s.focussed_button_onclick = button.onclick
-                    ~s = UIRenderingState(s.button_index, button.onclick)
+                    ~s = UIRenderingState[String](s.button_index, button.onclick)
                 } else {
                     println("Button")
                 }
                 // ~s.button_index += 1
-                ~s = UIRenderingState(s.button_index + 1, s.focussed_button_onclick)
+                ~s = UIRenderingState[String](s.button_index + 1, s.focussed_button_onclick)
                 ~s = render_ui(button.children, focussed_button_index, nesting + 1, s)
             }
             list: .List {
@@ -67,7 +62,7 @@ main = || -> I64 {
     while true {
         ui = text_picker(state)
         clear()
-        rendering_state = render_ui(ui, focussed_button_index, 0, UIRenderingState(0, nothing))
+        rendering_state = render_ui(ui, focussed_button_index, 0, UIRenderingState[String](0, nothing))
         max_button_index = rendering_state.button_index - 1
 
         input = readline("Enter either `next`, `prev`, `click`, or `quit`: ")

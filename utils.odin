@@ -120,7 +120,6 @@ OrderedMap :: struct(Key: typeid, Value: typeid) {
     elements: []OrderedMapElement(Key, Value),
     map: map[Key]uint,
 }
-*/
 
 combine_u32 :: proc(a: u32, b: u32) -> (out: u64) {
     out = u64(a) << 32
@@ -132,6 +131,45 @@ separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
     a = u32(combined >> 32)
     b = u32(combined)
     return
+}
+*/
+
+// Like a dynamic array, except can also be inserted into in average O(1) time
+Dynamic :: struct(T: typeid) {
+    elems:       [dynamic]T,
+    start_index: int,
+}
+
+dynamic_grow_front :: proc(array: ^Dynamic($T), grow_by: int) {
+    old_start_index := array.start_index
+    array.start_index += grow_by
+
+    old_elems := array.elems
+    array.elems = make([dynamic]T, cap(array.elems) + grow_by)
+
+    copy_slice(array.elems[array.start_index:], old_elems[old_start_index:])
+    delete(old_elems)
+}
+
+dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
+    if array.start_index < len(elems) {
+        dynamic_grow_front(array, max(len(array.elems), len(elems)))
+    }
+    array.start_index -= len(elems)
+    copy(array.elems[array.start_index:], elems)
+}
+
+dynamic_append_elem :: proc(array: ^Dynamic($T), elem: T) {
+    append_elem(&array.elems, elem)
+}
+
+dynamic_to_fixed :: proc(array: Dynamic($T)) -> []T {
+    return array.elems[array.start_index:]
+}
+
+insert :: proc {
+    dynamic_insert,
+    ordered_hash_set_insert,
 }
 
 up_line :: "\033[A"

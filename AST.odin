@@ -105,17 +105,20 @@ UnitJoinMethod :: enum {
     IsLessThanOrEqual,
 
     // Prioraty 2
+    In,
+
+    // Prioraty 3
     Append, // ::
     Concat, // ++
     StringConcat, // &
     Colon, // Used for array indexing (for example `my_array[start_index:end_index]`)
     Arrow, // Used for function types (for example `(String) -> U64`)
 
-    // Prioraty 3
+    // Prioraty 4
     Multiplication,
     Division,
 
-    // Prioraty 4
+    // Prioraty 5
     Addition,
     Subtraction,
     Modulo,
@@ -134,12 +137,14 @@ get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual:
         return 1
-    case .Append, .Concat, .StringConcat, .Colon, .Arrow:
+    case .In:
         return 2
-    case .Division, .Multiplication:
+    case .Append, .Concat, .StringConcat, .Colon, .Arrow:
         return 3
-    case .Subtraction, .Addition, .Modulo:
+    case .Division, .Multiplication:
         return 4
+    case .Subtraction, .Addition, .Modulo:
+        return 5
     }
     panic("Unreachable")
 }
@@ -166,9 +171,20 @@ VariableDestType :: enum {
 }
 
 VariableDest :: struct {
-    name:        IdentAndPos,
-    type:        VariableDestType,
-    array_index: ^Unit, // nil if there isn't an array index
+    name: IdentAndPos,
+    type: VariableDestType,
+
+    // The unit in square brackets
+    // nil if there isn't a key
+    key:  ^Unit,
+}
+
+MutationType :: enum {
+    IncrementBy,
+    DecrementBy,
+    MultiplyBy,
+    DivideBy,
+    SetTo,
 }
 
 VariableManagement :: struct {

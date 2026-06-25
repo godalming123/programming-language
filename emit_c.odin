@@ -84,6 +84,12 @@ emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
 
 emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     switch value in v {
+    case OrderedHashMapInitFunc:
+        panic("TODO")
+    case CheckedOrderedHashMapAccess,
+         KeysOfOrderedHashMapWithStringKey,
+         KeysOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CompileTimeValue:
         switch comptime in value {
         case NumberValue:
@@ -110,7 +116,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
             strings.write_string(&s.b, comptime ? "true" : "false")
         case Type:
             panic("Unreachable")
-        case GlobalTypeWithGenericRef:
+        case GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
             panic("Unreachable")
         }
     case ToString:
@@ -152,6 +158,10 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     case LengthOfArray:
         emit_c_value(s, value.array^)
         strings.write_string(&s.b, ".length")
+    case LengthOfOrderedHashMapWithStringKey:
+        panic("TODO")
+    case LengthOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CheckedArrayAccess:
         emit_c_value(s, value.array^)
         strings.write_string(&s.b, ".elems[")
@@ -198,11 +208,18 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
             emit_c_value(s, value.val1^)
             strings.write_byte(&s.b, ')')
             return
+        } else if value.join_method == .In {
+            strings.write_string(&s.b, "in_map(")
+            emit_c_value(s, value.val0^)
+            strings.write_byte(&s.b, ',')
+            emit_c_value(s, value.val1^)
+            strings.write_string(&s.b, ")")
+            return
         }
         strings.write_byte(&s.b, '(')
         emit_c_value(s, value.val0^)
         switch value.join_method {
-        case .Append, .Concat, .StringConcat, .Colon, .Arrow:
+        case .Append, .Concat, .StringConcat, .Colon, .Arrow, .In:
             panic("Unreachable")
         case .BooleanAnd:
             strings.write_string(&s.b, "&&")
@@ -266,6 +283,8 @@ emit_c_block_head :: proc(
     }
 }
 
+unreachable_c_code :: "fprintf(stderr, \"Unreachable\");exit(1);"
+
 emit_c_block_body :: proc(
     s: ^CEmitterState,
     nesting_level: uint,
@@ -282,7 +301,7 @@ emit_c_block_body :: proc(
         //case CheckedJsFunctionCall, CheckedJsAssignment:
         //    panic("Internal error: JS received by C emitter")
         case UnreachableStatement:
-            strings.write_string(&s.b, "fprintf(stderr, \"Unreachable\");exit(1);")
+            strings.write_string(&s.b, unreachable_c_code)
         case CheckedFunctionCall:
             emit_c_func_call(s, stmt)
             strings.write_byte(&s.b, ';')
@@ -318,7 +337,7 @@ emit_c_block_body :: proc(
                 emit_c_block_body(s, nesting_level + 1, branch.block.body)
                 strings.write_string(&s.b, "break;}")
             }
-            strings.write_string(&s.b, "}")
+            strings.write_string(&s.b, "default:" + unreachable_c_code + "}")
         case CheckedLoop:
             strings.write_byte(&s.b, '{')
             emit_c_block(s, nesting_level + 1, stmt.variables, stmt.enter)
@@ -387,25 +406,8 @@ emit_c_block_body :: proc(
             }
             strings.write_byte(&s.b, '}')
         case CheckedMutation:
-            emit_variable(&s.b, stmt.destination.variable)
-            if stmt.destination.index != nil {
-                strings.write_string(&s.b, ".elems[")
-                emit_c_value(s, stmt.destination.index)
-                strings.write_byte(&s.b, ']')
-
-            }
-            switch stmt.mutation_type {
-            case .SetTo:
-                strings.write_byte(&s.b, '=')
-            case .IncrementBy:
-                strings.write_string(&s.b, "+=")
-            case .DecrementBy:
-                strings.write_string(&s.b, "-=")
-            case .MultiplyBy:
-                strings.write_string(&s.b, "*=")
-            case .DivideBy:
-                strings.write_string(&s.b, "/=")
-            }
+            emit_c_value(s, stmt.destination)
+            strings.write_byte(&s.b, '=')
             emit_c_value(s, stmt.value)
             strings.write_byte(&s.b, ';')
         }
@@ -453,6 +455,10 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.forward_struct_definitions, "Struct ")
         strings.write_string(&s.forward_struct_definitions, name)
         strings.write_byte(&s.forward_struct_definitions, ';')
+    case OrderedHashMapTypeWithStringKey:
+        panic("TODO")
+    case OrderedHashMapTypeWithI64Key:
+        panic("TODO")
     case FuncType:
         strings.write_string(&s.other_type_definitions, "typedef ")
         switch len(type.return_types) {

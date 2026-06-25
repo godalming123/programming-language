@@ -166,6 +166,7 @@ is_builtin :: proc(name: string) -> bool {
          "Bool",
          "String",
          "Type",
+         "OrderedHashMap",
          "to_str",
          "function_id":
         return true

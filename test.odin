@@ -1,5 +1,10 @@
 package main
 
+// TODO: Implement some stuff so that all examples work in the interpreter and
+//       the C emitter
+// TODO: Check that the interpreter, the JS emitter, and the C emitter all have
+//       the same behavior in all the tests
+
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -298,6 +303,9 @@ buffered_pipe_test :: proc(t: ^testing.T) {
 
 @(test)
 example_06_counter :: proc(t: ^testing.T) {
+    err := os.remove_all("examples/counter.html")
+    testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
+
     ok := run_comptime_example(t, "examples/06_counter.code")
     if !ok {return}
     testing.expect(t, os.exists("examples/counter.html"))
@@ -305,10 +313,12 @@ example_06_counter :: proc(t: ^testing.T) {
 
 @(test)
 example_07_conways_game_of_life :: proc(t: ^testing.T) {
+    err := os.remove_all("examples/conways_game_of_life.html")
+    testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
+
     ok := run_comptime_example(t, "examples/07_conways_game_of_life.code")
     if !ok {return}
     testing.expect(t, os.exists("examples/conways_game_of_life.html"))
-
 }
 
 @(test)
@@ -354,6 +364,34 @@ basic_type_system_test :: proc(t: ^testing.T) {
     testing.expect(t, generic0_initialised == i64_type)
     testing.expect(t, generic0 != generic2)
 }
+
+@(test)
+example_08_result :: proc(t: ^testing.T) {
+    // TODO: Test inputs other than `dog`
+    ran := run_normal_example(t, "examples/08_result.code", "dog\n")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    if ran.stdout != "Enter the name of an animal: You entered the animal dog\n" {
+        testing.fail_now(t, fmt.aprintf("Got the stdout `%s`", ran.stdout))
+    }
+}
+
+/*
+// TODO:
+// - Add support for hashmaps to the C backend so that 09_hashmap.code can be tested with the C backend
+// - Add support for testing with the interpreter so that 09_hashmap.code can be tested with the interpreter
+@(test)
+example_09_hashmap :: proc(t: ^testing.T) {
+    ran := run_normal_example(
+        t,
+        "examples/09_hashmap.code",
+        "add\nbanana\nadd\napple\nadd\nbanana\nremove\napple\nexit\n",
+    )
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    // TODO: Implement the test
+}
+*/
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
 

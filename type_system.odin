@@ -36,6 +36,8 @@ GenericTypeValue :: struct {
 
 TypeValue :: union {
     ArrayType,
+    OrderedHashMapTypeWithStringKey,
+    OrderedHashMapTypeWithI64Key,
     FuncType,
     GenericTypeValue,
     SumType(Type), // The type is always a struct
@@ -93,6 +95,10 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     switch v in value {
     case ArrayType:
         return v.length ~ v.item_type.index
+    case OrderedHashMapTypeWithStringKey:
+        return v.value_type.index + 1
+    case OrderedHashMapTypeWithI64Key:
+        return v.value_type.index + 2
     case SumType(Type):
         return hash_sum_type(v)
     case Struct(Type, Type):

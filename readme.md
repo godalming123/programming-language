@@ -247,6 +247,7 @@ A new language for the web, because it's time to stop working around javascript.
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
       - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
       - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
+  - Maybe add a REPL
   - Type inference?
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value
       - However this approach has disadvantages:

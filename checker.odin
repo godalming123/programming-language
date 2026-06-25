@@ -1,7 +1,6 @@
 package main
 
 import "base:runtime"
-import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -20,6 +19,14 @@ Scope :: struct {
 ArrayType :: struct {
     length:    u32, // 0 means dynamic length
     item_type: Type,
+}
+
+OrderedHashMapTypeWithStringKey :: struct {
+    value_type: Type,
+}
+
+OrderedHashMapTypeWithI64Key :: struct {
+    value_type: Type,
 }
 
 FunctionType :: enum {
@@ -94,12 +101,31 @@ CheckedFunctionCall :: struct {
 StructTypeInitFunc :: struct {
     type: Type,
 }
+OrderedHashMapInitFunc :: struct {
+    type: Type,
+}
 SumTypeInitFunc :: struct {
     sum_type:      Type,
     variant_index: uint,
 }
 LengthOfArray :: struct {
     array: ^CheckedValue,
+}
+LengthOfOrderedHashMapWithStringKey :: struct {
+    hash_map: ^CheckedValue,
+}
+LengthOfOrderedHashMapWithI64Key :: struct {
+    hash_map: ^CheckedValue,
+}
+KeysOfOrderedHashMapWithStringKey :: struct {
+    hash_map: ^CheckedValue,
+}
+KeysOfOrderedHashMapWithI64Key :: struct {
+    hash_map: ^CheckedValue,
+}
+CheckedOrderedHashMapAccess :: struct {
+    hash_map: ^CheckedValue,
+    key:      ^CheckedValue,
 }
 CheckedArrayAccess :: struct {
     // The code emitter might not emit code to sanity check the index
@@ -124,12 +150,14 @@ NumberValue :: struct {
 ImportedFile :: struct {
     file_index: uint,
 }
+UninitialisedOrderedHashMapType :: struct {}
 CompileTimeValue :: union {
     StringLiteralValue,
     NumberValue,
     BoolValue,
     Type,
     GlobalTypeWithGenericRef,
+    UninitialisedOrderedHashMapType,
 }
 CheckedValue :: union {
     CompileTimeValue,
@@ -142,9 +170,15 @@ CheckedValue :: union {
     SumTypeInitFunc,
     BuiltinFunction,
     CheckedArrayAccess,
+    CheckedOrderedHashMapAccess,
     CheckedFieldAccess,
     // CheckedJsFunctionCall,
     LengthOfArray,
+    OrderedHashMapInitFunc,
+    LengthOfOrderedHashMapWithStringKey,
+    LengthOfOrderedHashMapWithI64Key,
+    KeysOfOrderedHashMapWithStringKey,
+    KeysOfOrderedHashMapWithI64Key,
     StringsAreEqual,
     FuncDefinitionRef,
 }
@@ -433,7 +467,7 @@ check_runtime_value :: proc(
     out := check_value(s, v, body, type, no_generic_arg)
     comptime_value, is_comptime_value := out.(CompileTimeValue)
     #partial switch _ in comptime_value {
-    case Type, GlobalTypeWithGenericRef, OrderedHashMapType:
+    case Type, GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
         err(s, v.pos, "This value can only be used at compile time")
         return nil
     }
@@ -490,23 +524,9 @@ CheckedBlock :: struct {
     body:      []CheckedStatement,
 }
 
-MutationType :: enum {
-    IncrementBy,
-    DecrementBy,
-    MultiplyBy,
-    DivideBy,
-    SetTo,
-}
-
-CheckedMutationDestination :: struct {
-    variable: VariableRef, // the variable being mutated
-    index:    CheckedValue, // if this is not nil, then `variable` is an array, and this is the index in that array which is being mutated
-}
-
 CheckedMutation :: struct {
-    destination:   CheckedMutationDestination,
-    mutation_type: MutationType,
-    value:         CheckedValue, // The source
+    destination: CheckedValue,
+    value:       CheckedValue, // The source
 }
 
 InlineArraySegment :: struct {
@@ -709,17 +729,29 @@ get_struct_type :: proc(s: ^CheckerState, pos: uint, type: Type) -> (Struct(Type
 get_func_type :: proc(s: ^CheckerState, pos: uint, value: ^CheckedValue, type: Type) -> Type {
     simplified := simplify_type(s, type)
     if simplified == type_type && value != nil {
-        value_type := simplify_type(s, value.(CompileTimeValue).(Type))
-        struct_type, is_struct := get_type(s.types, value_type).(Struct(Type, Type))
-        if is_struct {
+        value_type_unsimplified := value.(CompileTimeValue).(Type)
+        value_type := simplify_type(s, value_type_unsimplified)
+        #partial switch type in get_type(s.types, value_type) {
+        case Struct(Type, Type):
             value^ = StructTypeInitFunc{value_type}
-            return struct_type.extra_data
+            return type.extra_data
+        // TODO: CLEANUP
+        case OrderedHashMapTypeWithI64Key:
+            value^ = OrderedHashMapInitFunc{value_type}
+            return_types := make([]Type, 1)
+            return_types[0] = value_type_unsimplified
+            return create_type(&s.types, FuncType{nil, return_types, .Normal}).type
+        case OrderedHashMapTypeWithStringKey:
+            value^ = OrderedHashMapInitFunc{value_type}
+            return_types := make([]Type, 1)
+            return_types[0] = value_type_unsimplified
+            return create_type(&s.types, FuncType{nil, return_types, .Normal}).type
         }
         err(
             s,
             pos,
             "The type `%s` cannot be converted to a function type",
-            type_to_string(s, value_type),
+            type_to_string(s, value_type_unsimplified),
         )
     } else if func_type, is_func := get_type(s.types, simplified).(FuncType); is_func {
         return simplified
@@ -765,7 +797,7 @@ type_is_subset :: proc(
     }
 }
 
-// For both `expect_type` and `expect_exact_type`
+// For both `expect_value_of_type` and `expect_exact_type`
 // - The boolean returned is whether the `got` type matches the `expected` type
 // - TODO: Specify `extra_text` in all cases
 
@@ -984,6 +1016,14 @@ build_type_string :: proc(
                 }
                 strings.write_byte(b, ')')
             }
+        case OrderedHashMapTypeWithI64Key:
+            strings.write_string(b, "OrderedHashMap[I64, ")
+            build_type_string(s, b, tv.value_type)
+            strings.write_string(b, "]")
+        case OrderedHashMapTypeWithStringKey:
+            strings.write_string(b, "OrderedHashMap[String, ")
+            build_type_string(s, b, tv.value_type)
+            strings.write_string(b, "]")
         case ArrayType:
             strings.write_byte(b, '[')
             if tv.length != 0 {
@@ -1034,47 +1074,61 @@ get_array_type :: proc(
     return ArrayType{}, false
 }
 
-// The `CheckedValue` returned is the value of the destination array index
-get_expected_value_type :: proc(
+// The `Type` returned is the expected type of the source value
+// The `CheckedValue` returned is the value of the destination
+check_mutation_destination :: proc(
     s: ^CheckerState,
     var_name: IdentAndPos,
-    var_type: Type,
-    array_index: ^Unit,
+    var_ref: VariableRef,
+    key: ^Unit,
     body: ^[dynamic]CheckedStatement,
 ) -> (
     Type,
     CheckedValue,
-    bool,
 ) {
-    if array_index == nil {
-        return var_type, nil, true
+    var_type := get_variable_type(s, var_ref)
+    if key == nil {
+        return var_type, var_ref
     }
-    warn(s, array_index.pos, "This array access is not bounds checked\nTODO: Bounds checks")
-    desc := fmt.aprintf("The variable `%s`", var_name)
-    defer delete(desc)
-    array, ok := get_array_type(s, var_name.pos, desc, var_type)
-    if !ok {
-        return unknown_type, nil, false
+    #partial switch var_type_value in get_type(s.types, var_type) {
+    case ArrayType:
+        warn(s, key.pos, "This array access is not bounds checked\nTODO: Bounds checks")
+        index_value := check_runtime_value(s, key^, body, i64_type)
+        if index_value == nil {
+            return var_type_value.item_type, nil
+        }
+        index_variable: CheckedValue = add_unnamed_variable(s, i64_type, false)
+        append_elem(body, CheckedMutation{index_variable, index_value})
+        return var_type_value.item_type, CheckedArrayAccess{new_clone(CheckedValue(var_ref)), new_clone(index_variable)}
+
+    case OrderedHashMapTypeWithI64Key:
+        panic("TODO")
+
+    case OrderedHashMapTypeWithStringKey:
+        key_value := check_runtime_value(s, key^, body, string_type)
+        if key_value == nil {
+            return var_type_value.value_type, nil
+        }
+        key_variable: CheckedValue = add_unnamed_variable(s, string_type, false)
+        append_elem(body, CheckedMutation{key_variable, key_value})
+        return var_type_value.value_type, CheckedOrderedHashMapAccess{new_clone(CheckedValue(var_ref)), new_clone(key_variable)}
+
     }
-    expected_type: Type = i64_type
-    index_value := check_runtime_value(s, array_index^, body, expected_type)
-    if index_value == nil {
-        return array.item_type, nil, false
-    }
-    return array.item_type, index_value, true
+    err(s, key.pos, "Cannot use a key with the type `%s`", type_to_string(s, var_type))
+    return invalid_type, nil
 }
 
 check_mutation :: proc(
     s: ^CheckerState,
     destination: VariableDest,
     mutation_type: MutationType,
+    value: CheckedValue,
     value_type: Type,
     value_pos: uint,
     body: ^[dynamic]CheckedStatement,
     loc := #caller_location,
 ) -> (
-    CheckedMutationDestination,
-    MutationType,
+    CheckedMutation,
     bool,
 ) {
     when debug_checker {
@@ -1090,7 +1144,7 @@ check_mutation :: proc(
                 "The variable `%s` is not defined",
                 destination.name.ident,
             )
-            return CheckedMutationDestination{}, .SetTo, false
+            return CheckedMutation{}, false
         }
         if s.scopes[var_ref.nesting_level].variable_is_muts[var_ref.index] == false {
             err(
@@ -1099,24 +1153,24 @@ check_mutation :: proc(
                 "The variable `%s` is not mutable",
                 destination.name.ident,
             )
-            return CheckedMutationDestination{}, .SetTo, false
+            return CheckedMutation{}, false
         }
-        var_type := get_variable_type(s, var_ref)
-        expected_value_type, index_value, dest_ok := get_expected_value_type(
+        expected_value_type, destination_value := check_mutation_destination(
             s,
             destination.name,
-            var_type,
-            destination.array_index,
+            var_ref,
+            destination.key,
             body,
         )
         if expected_value_type != unknown_type {
             if !expect_value_of_type(s, value_pos, expected_value_type, nil, value_type, "") {
-                return CheckedMutationDestination{}, .SetTo, false
+                return CheckedMutation{}, false
             }
         }
-        if !dest_ok {
-            return CheckedMutationDestination{}, .SetTo, false
+        if destination_value == nil {
+            return CheckedMutation{}, false
         }
+        val := value
         if mutation_type != .SetTo {
             if !type_is_numeric(s, value_type) {
                 err(
@@ -1125,24 +1179,38 @@ check_mutation :: proc(
                     "Cannot perform numeric mutation on non-numeric type `%s`",
                     type_to_string(s, value_type),
                 )
-                return CheckedMutationDestination{}, .SetTo, false
+                return CheckedMutation{}, false
             }
+            join_method: UnitJoinMethod = ---
+            switch mutation_type {
+            case .IncrementBy:
+                join_method = .Addition
+            case .DecrementBy:
+                join_method = .Subtraction
+            case .MultiplyBy:
+                join_method = .Multiplication
+            case .DivideBy:
+                join_method = .Division
+            case .SetTo:
+                panic("Unreachable")
+            }
+            val = CheckedJoinedValues{join_method, new_clone(destination_value), new_clone(value)}
         }
-        return CheckedMutationDestination{var_ref, index_value}, mutation_type, true
+        return CheckedMutation{destination_value, val}, true
     case .Constant, .Mutable:
         if mutation_type != .SetTo {
             err(s, destination.name.pos, "Expected variable assignment to be done with `=`")
-            return CheckedMutationDestination{}, .SetTo, false
+            return CheckedMutation{}, false
         }
         variable_is_mutable := destination.type == .Mutable
         variable, variable_ok := add_variable(s, value_type, variable_is_mutable, destination.name)
         if !variable_ok {
-            return CheckedMutationDestination{}, .SetTo, false
+            return CheckedMutation{}, false
         }
-        return CheckedMutationDestination{variable, nil}, .SetTo, true
+        return CheckedMutation{variable, value}, true
     case .ConstantAddedToPcs, .MutableAddedToPcs:
         err(s, destination.name.pos, "TODO: Figure out what to do with old code")
-        return CheckedMutationDestination{}, .SetTo, false
+        return CheckedMutation{}, false
     }
     panic("Unreachable")
 }
@@ -1158,7 +1226,7 @@ check_block :: proc(
     bool,
 ) {
     when debug_checker {
-        print_call(loc, "check block")
+        print_call(loc, "check_block")
     }
     assert(
         len(s.scopes[len(s.scopes) - 1].variable_types) ==
@@ -1181,10 +1249,11 @@ check_block :: proc(
             if checked_value == nil {
                 return nil, false
             }
-            mutation_dest, mutation_type, mutation_ok := check_mutation(
+            mutation, mutation_ok := check_mutation(
                 s,
                 value.destination[0],
                 value.mutation_type,
+                checked_value,
                 value_type,
                 value.value.pos,
                 body,
@@ -1192,7 +1261,7 @@ check_block :: proc(
             if !mutation_ok {
                 return nil, false
             }
-            append_elem(body, CheckedMutation{mutation_dest, mutation_type, checked_value})
+            append_elem(body, mutation)
 
         case CallWithBrackets:
             call, call_ok := check_function_call(s, stmt.position, value, body, nil)
@@ -1241,65 +1310,88 @@ check_block :: proc(
             loop_body_array := make([dynamic]CheckedStatement)
             loop_enter: []CheckedStatement
             loop_end: []CheckedStatement
-            switch iter in value.iterator {
+            outer: switch iter in value.iterator {
             case Unit:
                 type := unknown_type
                 v := check_runtime_value(s, iter, body, AnyType{&type})
                 if v == nil {
                     return nil, false
                 }
-                array, ok := get_array_type(s, iter.pos, "The value being iterated over", type)
-                if !ok {
-                    return nil, false
-                }
-                array_item_type: Type = array.item_type
-                if value.variables[2].ident != "" {
-                    err(
+                #partial switch t in get_type(s.types, simplify_type(s, type)) {
+                case ArrayType:
+                    array_item_type := t.item_type
+                    if value.variables[2].ident != "" {
+                        err(
+                            s,
+                            stmt.position,
+                            "You can only capture at most 2 variables from iterating over an array",
+                        )
+                        return nil, false
+                    }
+                    elem_ref, elem_ok := add_variable(
                         s,
-                        stmt.position,
-                        "You can only capture at most 2 variables from iterating over an array",
+                        array_item_type,
+                        false,
+                        value.variables[0],
                     )
-                    return nil, false
-                }
-                elem_ref, elem_ok := add_variable(s, array_item_type, false, value.variables[0])
-                index_ref, index_ok := add_variable(s, i64_type, false, value.variables[1])
-                if !elem_ok || !index_ok {
-                    return nil, false
-                }
-                loop_enter = make([]CheckedStatement, 1)
-                loop_enter[0] = CheckedMutation {
-                    CheckedMutationDestination{index_ref, nil},
-                    .SetTo,
-                    CompileTimeValue(NumberValue{int_zero}),
-                }
-                if_block := make([]CheckedStatement, 1)
-                if_block[0] = BreakLoop{loop_index}
-                append_elem(
-                    &loop_body_array,
-                    CheckedIf {
-                        create_joined_values(
-                            .IsGreaterThanOrEqual,
+                    index_ref, index_ok := add_variable(s, i64_type, false, value.variables[1])
+                    if !elem_ok || !index_ok {
+                        return nil, false
+                    }
+                    loop_variables, loop_body_ok := check_block(s, value.body, &loop_body_array)
+                    if !loop_body_ok {
+                        return nil, false
+                    }
+                    append_elem(
+                        body,
+                        iterate_array(
+                            loop_index,
                             index_ref,
-                            length_of_array(array, v),
+                            elem_ref,
+                            &Dynamic(CheckedStatement){loop_body_array, 0},
+                            loop_variables,
+                            v,
+                            t,
                         ),
-                        CheckedBlock{nil, if_block},
-                        CheckedBlock{},
-                    },
-                )
-                append_elem(
-                    &loop_body_array,
-                    CheckedMutation {
-                        CheckedMutationDestination{elem_ref, nil},
-                        .SetTo,
-                        CheckedArrayAccess{new_clone(v), new_clone(CheckedValue(index_ref))},
-                    },
-                )
-                loop_end = make([]CheckedStatement, 1)
-                loop_end[0] = CheckedMutation {
-                    CheckedMutationDestination{index_ref, nil},
-                    .IncrementBy,
-                    CompileTimeValue(NumberValue{big_int_from_i64(1)}),
+                    )
+                    break outer
+                case OrderedHashMapTypeWithStringKey:
+                    key, key_ok := add_variable(s, string_type, false, value.variables[0])
+                    value_var, value_var_ok := add_variable(
+                        s,
+                        t.value_type,
+                        false,
+                        value.variables[1],
+                    )
+                    index, index_ok := add_variable(s, i64_type, false, value.variables[2])
+                    if !key_ok || !value_var_ok || !index_ok {
+                        return nil, false
+                    }
+                    loop_variables, loop_body_ok := check_block(s, value.body, &loop_body_array)
+                    if !loop_body_ok {
+                        return nil, false
+                    }
+                    append_elem(
+                        body,
+                        iterate_ordered_hash_map(
+                            loop_index,
+                            v,
+                            index,
+                            key,
+                            value_var,
+                            &Dynamic(CheckedStatement){loop_body_array, 0},
+                            loop_variables,
+                        ),
+                    )
+                    break outer
                 }
+                err(
+                    s,
+                    iter.pos,
+                    "Expected an array or an `OrderedHashMap`, got the type `%s`",
+                    type_to_string(s, type),
+                )
+
             case NumericIterator:
                 if value.variables[1].ident != "" || value.variables[2].ident != "" {
                     err(
@@ -1327,42 +1419,24 @@ check_block :: proc(
                 if !var_ok || start == nil || end == nil || step == nil {
                     return nil, false
                 }
-                loop_enter = make([]CheckedStatement, 1)
-                loop_enter[0] = CheckedMutation {
-                    CheckedMutationDestination{index_variable, nil},
-                    .SetTo,
-                    start,
+                loop_variables, loop_body_ok := check_block(s, value.body, &loop_body_array)
+                if !loop_body_ok {
+                    return nil, false
                 }
-                if_block := make([]CheckedStatement, 1)
-                if_block[0] = BreakLoop{loop_index}
                 append_elem(
-                    &loop_body_array,
-                    CheckedIf {
-                        create_joined_values(
-                            iter.type == .IncludeEndValue ? .IsGreaterThan : .IsGreaterThanOrEqual,
-                            index_variable,
-                            end,
-                        ),
-                        CheckedBlock{nil, if_block},
-                        CheckedBlock{},
-                    },
+                    body,
+                    iterate_start_end_step(
+                        loop_index,
+                        index_variable,
+                        iter.type,
+                        start,
+                        end,
+                        step,
+                        &Dynamic(CheckedStatement){loop_body_array, 0},
+                        loop_variables,
+                    ),
                 )
-                loop_end = make([]CheckedStatement, 1)
-                loop_end[0] = CheckedMutation {
-                    CheckedMutationDestination{index_variable, nil},
-                    .IncrementBy,
-                    step,
-                }
             }
-            loop_variables, loop_body_ok := check_block(s, value.body, &loop_body_array)
-            if !loop_body_ok {
-                return nil, false
-            }
-            append_elems(&loop_body_array, ..loop_end)
-            append_elem(
-                body,
-                CheckedLoop{loop_index, loop_variables, loop_body_array[:], loop_enter},
-            )
 
         case IfElseStatement:
             expected_type: Type = bool_type
@@ -1456,10 +1530,7 @@ check_block :: proc(
             }
 
             variable_ref := add_unnamed_variable(s, val_type, false)
-            append_elem(
-                body,
-                CheckedMutation{CheckedMutationDestination{variable_ref, nil}, .SetTo, val},
-            )
+            append_elem(body, CheckedMutation{variable_ref, val})
 
             variant_has_branch := make([]bool, len(val_sum_type.variants))
             variant_branch_positions := make([]uint, len(val_sum_type.variants))
@@ -1582,28 +1653,6 @@ check_block :: proc(
         }
     }
     return s.scopes[len(s.scopes) - 1].variable_types[:], true
-}
-
-// Returns nil if there was an error
-check_array_index :: proc(
-    s: ^CheckerState,
-    pos: uint,
-    args: []Unit,
-    body: ^[dynamic]CheckedStatement,
-) -> CheckedValue {
-    warn(s, pos, "This array access is not bounds checked\nTODO: Bounds checks")
-    if len(args) != 1 {
-        err(
-            s,
-            pos,
-            "Indexed accesses into an array must pass one value into the square brackets\nGot %d values",
-            len(args),
-        )
-        return nil
-    }
-    // TODO: Support multi elem array access
-    expected_type: Type = i64_type // TODO: Do not assume number type
-    return check_runtime_value(s, args[0], body, expected_type)
 }
 
 value_err1 :: "Compiler cannot generate a `.` function without knowing the return type of the function"
@@ -1778,6 +1827,9 @@ check_var_ref :: proc(
        builtin_type != unknown_type {
         out = CompileTimeValue(builtin_type)
         out_type = type_type
+    } else if ref[0].ident == "OrderedHashMap" {
+        out = CompileTimeValue(UninitialisedOrderedHashMapType{})
+        out_type = unknown_type
     } else if var_ref, ok := s.variables_map[ref[0].ident]; ok {
         out_type = get_variable_type(s, var_ref)
         out = var_ref
@@ -1805,13 +1857,27 @@ check_var_ref :: proc(
     for i := start_i; i < len(ref); i += 1 {
         extra_segment := ref[i]
         if extra_segment.ident == "len" {
-            array, ok := get_array_type(s, extra_segment.pos, "The value before `.len`", out_type)
-            if !ok {
-                return nil
+            #partial switch type in get_type(s.types, simplify_type(s, out_type)) {
+            case ArrayType:
+                out_type = i64_type
+                out = length_of_array(type, out)
+                continue
+            case OrderedHashMapTypeWithI64Key:
+                out_type = i64_type
+                out = LengthOfOrderedHashMapWithI64Key{new_clone(out)}
+                continue
+            case OrderedHashMapTypeWithStringKey:
+                out_type = i64_type
+                out = LengthOfOrderedHashMapWithStringKey{new_clone(out)}
+                continue
             }
-            out_type = i64_type
-            out = length_of_array(array, out)
-            continue
+            err(
+                s,
+                extra_segment.pos,
+                "The value before `.len` is of type %s\nExpected an array type of an OrderedHashSet type",
+                type_to_string(s, out_type),
+            )
+            return nil
         } else if extra_segment.ident == "to_str" {
             converted := to_str(s, extra_segment.pos, out, out_type)
             if converted == nil {
@@ -2036,6 +2102,38 @@ check_joined_unit_value :: proc(
 
     case .Colon:
         err(s, pos, "Cannot use `:` to join values")
+        return nil
+
+    case .In:
+        val0_type := unknown_type
+        val0 := check_runtime_value(s, value.unit0^, body, AnyType{&val0_type})
+        val1_type := unknown_type
+        val1 := check_runtime_value(s, value.unit1^, body, AnyType{&val1_type})
+        if val0 == nil || val1 == nil {
+            return nil
+        }
+        val0_expected_type := invalid_type
+        #partial switch t in get_type(s.types, simplify_type(s, val1_type)) {
+        case OrderedHashMapTypeWithI64Key:
+            val0_expected_type = i64_type
+        case OrderedHashMapTypeWithStringKey:
+            val0_expected_type = string_type
+        }
+        if val0_expected_type == invalid_type {
+            err(
+                s,
+                value.unit1.pos,
+                "Expected an ordered hash map type\nGot the type %s",
+                type_to_string(s, val1_type),
+            )
+        }
+        if !expect_exact_type(s, value.unit0.pos, val0_expected_type, val0_type, "") {
+            return nil
+        }
+        out: CheckedValue = CheckedJoinedValues{.In, new_clone(val0), new_clone(val1)}
+        if expect_value_of_type(s, value.unit0.pos, type, &out, bool_type, "") {
+            return out
+        }
         return nil
 
     case .Arrow:
@@ -2269,7 +2367,6 @@ check_value :: proc(
         return check_runtime_value(s, value.elements[0], body, type)
 
     case CallWithSquareBrackets:
-        // TODO
         being_called_type := invalid_type
         being_called_value := check_value(
             s,
@@ -2278,8 +2375,11 @@ check_value :: proc(
             AnyType{&being_called_type},
             generic_args,
         )
+        if being_called_value == nil {
+            return nil
+        }
+        being_called_type = simplify_type(s, being_called_type)
         if being_called_type == unknown_type {
-            generic_type_ref := being_called_value.(CompileTimeValue).(GlobalTypeWithGenericRef)
             checked_args := make([]Type, len(value.args))
             ok := true
             for arg, i in value.args {
@@ -2291,45 +2391,94 @@ check_value :: proc(
             if !ok {
                 return nil
             }
-            out_as_type := check_generic_type(s, v.pos, generic_type_ref.index, checked_args)
-            if out_as_type == invalid_type {
+            #partial switch comptime_value in being_called_value.(CompileTimeValue) {
+            case GlobalTypeWithGenericRef:
+                out_as_type := check_generic_type(s, v.pos, comptime_value.index, checked_args)
+                if out_as_type == invalid_type {
+                    return nil
+                }
+                out: CheckedValue = CompileTimeValue(out_as_type)
+                if expect_value_of_type(s, v.pos, type, &out, type_type, "") {
+                    return out
+                }
+                return nil
+            case UninitialisedOrderedHashMapType:
+                if len(checked_args) != 2 {
+                    argument_count_mismatch(s, v.pos, len(checked_args), 2, "OrderedHashMap")
+                    return nil
+                }
+                key := simplify_type(s, checked_args[0])
+                type_value: TypeValue
+                if key == string_type {
+                    type_value = OrderedHashMapTypeWithStringKey{checked_args[1]}
+                } else if key == i64_type {
+                    type_value = OrderedHashMapTypeWithI64Key{checked_args[1]}
+                } else {
+                    err(
+                        s,
+                        v.pos,
+                        "The key of an `OrderedHashMap` must be a `String` or an `I64`\nGot the key `%s`\nTODO: Support `OrderedHashMap`s with keys other than `String`s and `I64`s",
+                        type_to_string(s, checked_args[0]),
+                    )
+                    return nil
+                }
+                out: CheckedValue = CompileTimeValue(create_type(&s.types, type_value).type)
+                if expect_value_of_type(s, v.pos, type, &out, type_type, "") {
+                    return out
+                }
                 return nil
             }
-            out: CheckedValue = CompileTimeValue(out_as_type)
-            if expect_value_of_type(s, v.pos, type, &out, type_type, "") {
-                return out
+            panic("Unreachable")
+        }
+        if len(value.args) != 1 {
+            err(
+                s,
+                v.pos,
+                "Indexed accesses into an array or ordered hash map must pass one value into the square brackets\nGot %d values",
+                len(value.args),
+            )
+            return nil
+        }
+        #partial switch t in get_type(s.types, being_called_type) {
+        case ArrayType:
+            warn(s, v.pos, "This array access is not bounds checked\nTODO: Bounds checks")
+            index_value := check_runtime_value(s, value.args[0], body, i64_type)
+            if index_value == nil {
+                return nil
+            }
+            //if t.length == 0 {
+            //    err(
+            //        s,
+            //        value.array.pos,
+            //        "TODO: Implement element access for dynamically sized arrays",
+            //    )
+            //    return nil, false
+            //}
+            if expect_value_of_type(s, v.pos, type, nil, t.item_type, "") {
+                return CheckedArrayAccess{new_clone(being_called_value), new_clone(index_value)}
+            }
+            return nil
+        case OrderedHashMapTypeWithI64Key:
+            panic("TODO")
+        case OrderedHashMapTypeWithStringKey:
+            key_value := check_runtime_value(s, value.args[0], body, string_type)
+            if key_value == nil {
+                return nil
+            }
+            if expect_value_of_type(s, v.pos, type, nil, t.value_type, "") {
+                return CheckedOrderedHashMapAccess {
+                    new_clone(being_called_value),
+                    new_clone(key_value),
+                }
             }
             return nil
         }
-        index_value := check_array_index(s, v.pos, value.args, body)
-        if being_called_value == nil {
-            return nil
-        }
-        array_type, ok := get_array_type(
+        err(
             s,
             value.unit_being_called.pos,
-            "The value",
-            being_called_type,
+            "The value is of type `%s`\nExpected an array type or an `OrderedHashMap` type",
+            type_to_string(s, being_called_type),
         )
-        if !ok {
-            return nil
-        }
-        //array := get_array_type(s.array_types[:], &array_ref)
-        //if array.length == 0 {
-        //    err(
-        //        s,
-        //        value.array.pos,
-        //        "TODO: Implement element access for dynamically sized arrays",
-        //        type_to_string(s, array_type),
-        //    )
-        //    return nil, false
-        //}
-        if index_value == nil {
-            return nil
-        }
-        if expect_value_of_type(s, v.pos, type, nil, array_type.item_type, "") {
-            return CheckedArrayAccess{new_clone(being_called_value), new_clone(index_value)}
-        }
         return nil
 
     case Bool:

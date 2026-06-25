@@ -1,10 +1,10 @@
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdarg.h>
 
 #define EOT 4
 #define EOT_STR "\004"
@@ -27,7 +27,7 @@ void *reallocate(void *buffer, size_t new_size) {
   return temp;
 }
 
-char* asprintf_value(const char* format, ...) {
+char *asprintf_value(const char *format, ...) {
   va_list ap;
 
   va_start(ap, format);
@@ -39,7 +39,7 @@ char* asprintf_value(const char* format, ...) {
   }
 
   len += 1; // Increment len for end `\0`
-  char* buf = allocate(len);
+  char *buf = allocate(len);
 
   va_start(ap, format);
   vsnprintf(buf, len, format, ap);
@@ -60,7 +60,8 @@ void builtin2(char *text) { fprintf(stderr, "%s", text); }
 // eprintln
 void builtin3(char *text) { fprintf(stderr, "%s\n", text); }
 
-// TODO: Expose this function to code written in this programming language as a builtin
+// TODO: Expose this function to code written in this programming language as a
+// builtin
 char *read_until(char end_char) {
   size_t cap = 64; /* initial buffer size */
   size_t len = 0;
@@ -130,9 +131,7 @@ void builtin8(struct {
 }
 
 // exit
-void builtin9(uint64_t code) {
-  exit(code);
-}
+void builtin9(uint64_t code) { exit(code); }
 
 /*
 // OLD(METAPROGRAM_IN_C)

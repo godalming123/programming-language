@@ -510,6 +510,8 @@ parse_unit :: proc(
     #partial switch token in s.last_token {
     case:
         return ParsedUnit{true, val, other_possible_tokens}
+    case InToken:
+        value_type = .In
     case AndToken:
         value_type = .BooleanAnd
     case ColonColonToken:

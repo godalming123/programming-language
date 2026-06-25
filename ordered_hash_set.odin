@@ -92,7 +92,7 @@ Result :: enum {
     Merged,
 }
 
-insert :: proc(
+ordered_hash_set_insert :: proc(
     ordered_hash_set: ^OrderedHashSet($Value),
     hash: u32,
     value: Value,
