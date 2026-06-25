@@ -606,20 +606,44 @@ parse_iterator :: proc(s: ^ParserState) -> (Iterator, [dynamic]string) {
         value2.descriptions_of_other_possible_tokens
 }
 
-// Does not include the `for`
-parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
-    variables: [3]IdentAndPos
-    variable_index := 0
-    variables_loop: for {
+at_description := "`@` to set the label of the loop"
+parse_possible_loop_label :: proc(s: ^ParserState) -> (IdentAndPos, bool) {
+    get_next_token(s, false)
+    if _, is_at_token := s.last_token.(AtToken); is_at_token {
         get_next_token(s, false)
         ident, is_ident := s.last_token.(IdentToken)
         if !is_ident || len(ident) != 1 {
             wrong_token_err(
                 s,
-                []string {
-                    "the name of the variable in a for loop (an identifier with one segment)",
-                },
+                []string{"An identifier with one segment for the label of the loop"},
             )
+            return IdentAndPos{}, false
+        }
+        get_next_token(s, false)
+        return ident[0], true
+    }
+    return IdentAndPos{}, true
+}
+
+// Does not include the `for`
+parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
+    label, ok := parse_possible_loop_label(s)
+    if !ok {
+        return ForInLoop{}, false
+    }
+    variables: [3]IdentAndPos
+    variable_index := 0
+    variables_loop: for {
+        ident, is_ident := s.last_token.(IdentToken)
+        if !is_ident || len(ident) != 1 {
+            can_be_at := label.ident == ""
+            possible := make([]string, can_be_at ? 2 : 1)
+            defer delete(possible)
+            possible[0] = "the name of the variable in a for loop (an identifier with one segment)"
+            if can_be_at {
+                possible[1] = at_description
+            }
+            wrong_token_err(s, possible)
             return ForInLoop{}, false
         }
         variables[variable_index] = ident[0]
@@ -641,6 +665,7 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
                 )
                 return ForInLoop{}, false
             }
+            get_next_token(s, false)
         }
     }
 
@@ -656,12 +681,12 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
         return ForInLoop{}, false
     }
 
-    block, ok := parse_block(s)
-    if !ok {
+    block, ok2 := parse_block(s)
+    if !ok2 {
         return ForInLoop{}, false
     }
 
-    return ForInLoop{variables, iter, block}, true
+    return ForInLoop{label, variables, iter, block}, true
 }
 
 // Does not include the `if`
@@ -827,6 +852,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 "`continue`",
                 "`unreachable`",
                 "`}`",
+                "`@` to create a label",
             )
             ok: bool = ---
             var: VariableDest = ---
@@ -845,6 +871,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             }
             append_elem(&out, Statement{pos, stmt})
         case DoToken:
+            // TODO: Support specifying label with @
             get_next_token(s, false)
             _, is_open_brace := s.last_token.(OpenBraceToken)
             if !is_open_brace {
@@ -872,6 +899,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 Statement{pos, ConditionControlledLoop{.DoWhileLoop, condition.unit, body}},
             )
         case WhileToken:
+            // TODO: Support specifying label with @
             get_next_token(s, false)
             condition := parse_unit(s)
             if !condition.ok {
@@ -953,8 +981,20 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             append_elem(&out, Statement{pos, if_else^})
         case ContinueToken:
             get_next_token(s, true)
+            label := IdentAndPos{}
+            _, is_at := s.last_token.(AtToken)
+            if is_at {
+                get_next_token(s, true)
+                ident, is_ident := s.last_token.(IdentToken)
+                if !is_ident || len(ident) != 1 {
+                    wrong_token_err(s, []string{"An identifier with one segment"})
+                    return nil, false
+                }
+                label = ident[0]
+                get_next_token(s, true)
+            }
             clear_dynamic_array(&other_possible_tokens)
-            append_elem(&out, Statement{pos, ContinueStatement{}})
+            append_elem(&out, Statement{pos, ContinueStatement{label}})
         case UnreachableToken:
             get_next_token(s, true)
             clear_dynamic_array(&other_possible_tokens)

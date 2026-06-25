@@ -78,17 +78,22 @@ BuiltinHandler :: struct {
     procedure: proc(state: ^InterpState, index: u32, args: []RuntimeValue) -> RuntimeValue,
 }
 
+ReturnFromFunction :: struct {
+    value: RuntimeValue,
+}
+
+ControlFlowOperation :: union {
+    ContinueLoop,
+    BreakLoop,
+    ReturnFromFunction,
+}
+
 InterpState :: struct {
     c:               Checked,
     builtin_handler: BuiltinHandler,
     frames:          [dynamic]Frame,
-    returning:       bool,
-    return_value:    RuntimeValue,
-    breaking:        bool,
-    break_loop:      uint,
-    continuing:      bool,
-    continue_loop:   uint,
     current_loop:    uint,
+    control_flow_op: ControlFlowOperation,
 }
 
 interpret :: proc(
@@ -114,6 +119,11 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
     for arg_val, i in c.args {
         args[i] = interp_clone_value(interp_eval_value(s, arg_val))
     }
+
+    if val, is_struct_init_func := fn_val.(RuntimeStructTypeInitFunc); is_struct_init_func {
+        return RuntimeStruct{true, args}
+    }
+
     defer {
         for &arg in args {
             interp_destroy_value(&arg)
@@ -133,8 +143,6 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
     case RuntimeStringOrderedHashMapInitFunc:
         assert(len(args) == 0)
         return RuntimeStringOrderedHashMap{}
-    case RuntimeStructTypeInitFunc:
-        return RuntimeStruct{false, args}
     case SumTypeInitFunc:
         panic("TODO")
     case:
@@ -162,7 +170,7 @@ interp_execute_function2 :: proc(
 
     append_elem(&state.frames, frame)
 
-    state.returning = false
+    assert(state.control_flow_op == nil)
     interp_exec_block(state, checked_func.body)
     f := pop(&state.frames)
     assert(len(f.scopes) == 2)
@@ -171,9 +179,14 @@ interp_execute_function2 :: proc(
     }
     delete(f.scopes[1])
     delete(f.scopes)
-    state.returning = false
 
-    return state.return_value
+    if return_data, returning := state.control_flow_op.(ReturnFromFunction); returning {
+        state.control_flow_op = nil
+        return return_data.value
+    } else {
+        assert(state.control_flow_op == nil)
+        return nil
+    }
 }
 
 /*
@@ -227,7 +240,7 @@ interp_default_value :: proc(state: ^InterpState, t: Type) -> RuntimeValue {
 
 interp_exec_block :: proc(state: ^InterpState, body: []CheckedStatement) {
     for stmt in body {
-        if state.returning || state.breaking || state.continuing {
+        if state.control_flow_op != nil {
             return
         }
         interp_exec_statement(state, stmt)
@@ -387,14 +400,15 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
         panic("Reached unreachable code")
 
     case CheckedReturn:
-        state.returning = true
         if s.value != nil {
-            state.return_value = interp_clone_value(interp_eval_value(state, s.value))
-            when debug_interpreter {
-                debug("state.return_value set to %v", state.return_value)
+            state.control_flow_op = ReturnFromFunction {
+                interp_clone_value(interp_eval_value(state, s.value)),
             }
         } else {
-            state.return_value = nil
+            state.control_flow_op = ReturnFromFunction{nil}
+        }
+        when debug_interpreter {
+            debug("state.control_flow_op set to %v", state.control_flow_op)
         }
 
     case CheckedIf:
@@ -417,37 +431,37 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
         loop_index := s.loop_index
         interp_push_scope(state, s.variables)
         interp_exec_block(state, s.enter)
-        for {
-            if state.returning do break
+        outer: for {
+            if state.control_flow_op != nil do break
 
             old_loop := state.current_loop
             state.current_loop = loop_index
             interp_exec_block(state, s.body)
             state.current_loop = old_loop
 
-            if state.returning do break
-            if state.breaking {
-                if state.break_loop == loop_index {
-                    state.breaking = false
-                    break
+            switch op in state.control_flow_op {
+            case ReturnFromFunction:
+                break outer
+            case BreakLoop:
+                if op.loop_index == loop_index {
+                    state.control_flow_op = nil
+                    break outer
                 }
-                return
-            }
-            if state.continuing {
-                if state.continue_loop == loop_index {
-                    state.continuing = false
+            case ContinueLoop:
+                if op.loop_index == loop_index {
+                    state.control_flow_op = nil
                 }
             }
         }
         interp_pop_scope(state)
 
     case ContinueLoop:
-        state.continuing = true
-        state.continue_loop = s.loop_index
+        assert(state.control_flow_op == nil)
+        state.control_flow_op = ContinueLoop{s.loop_index}
 
     case BreakLoop:
-        state.breaking = true
-        state.break_loop = s.loop_index
+        assert(state.control_flow_op == nil)
+        state.control_flow_op = BreakLoop{s.loop_index}
 
     case CheckedMutation:
         get_mutable_value :: proc(
@@ -484,7 +498,7 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
         }
         mutable_value := get_mutable_value(state, s.destination)
         interp_destroy_value(mutable_value)
-        mutable_value^ = interp_eval_value(state, s.value)
+        mutable_value^ = interp_clone_value(interp_eval_value(state, s.value))
 
     case CheckedArrayMutation:
         old_value :=
@@ -646,7 +660,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         switch value.join_method {
 
         case .In:
-            #partial switch b in rhs {
+            #partial switch b in interp_eval_value(s, value.val1^) {
             case RuntimeStringOrderedHashMap:
                 return lhs.(RuntimeString).value in b.hashmap
             case RuntimeI64OrderedHashMap:
@@ -655,61 +669,67 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
             panic("Unreachable")
 
         case .Addition:
-            return lhs.(i64) + rhs.(i64)
+            return lhs.(i64) + interp_eval_value(s, value.val1^).(i64)
 
         case .Subtraction:
-            return lhs.(i64) - rhs.(i64)
+            return lhs.(i64) - interp_eval_value(s, value.val1^).(i64)
 
         case .Multiplication:
-            return lhs.(i64) * rhs.(i64)
+            return lhs.(i64) * interp_eval_value(s, value.val1^).(i64)
 
         case .Division:
-            return lhs.(i64) / rhs.(i64)
+            return lhs.(i64) / interp_eval_value(s, value.val1^).(i64)
 
         case .Modulo:
-            return lhs.(i64) % rhs.(i64)
+            return lhs.(i64) % interp_eval_value(s, value.val1^).(i64)
 
         case .IsEqual:
             a_i64, a_is_i64 := lhs.(i64)
             if a_is_i64 {
-                return a_i64 == rhs.(i64)
+                return a_i64 == interp_eval_value(s, value.val1^).(i64)
             }
             a_bool, a_is_bool := lhs.(bool)
             if a_is_bool {
-                return a_bool == rhs.(bool)
+                return a_bool == interp_eval_value(s, value.val1^).(bool)
             }
             panic("Unreachable")
 
         case .IsNotEqual:
             a_i64, a_is_i64 := lhs.(i64)
-            b_i64, b_is_i64 := rhs.(i64)
+            b_i64, b_is_i64 := interp_eval_value(s, value.val1^).(i64)
             if a_is_i64 && b_is_i64 {
                 return a_i64 != b_i64
             }
             a_bool, a_is_bool := lhs.(bool)
-            b_bool, b_is_bool := rhs.(bool)
+            b_bool, b_is_bool := interp_eval_value(s, value.val1^).(bool)
             if a_is_bool && b_is_bool {
                 return a_bool != b_bool
             }
             return true
 
         case .IsLessThan:
-            return lhs.(i64) < rhs.(i64)
+            return lhs.(i64) < interp_eval_value(s, value.val1^).(i64)
 
         case .IsLessThanOrEqual:
-            return lhs.(i64) <= rhs.(i64)
+            return lhs.(i64) <= interp_eval_value(s, value.val1^).(i64)
 
         case .IsGreaterThan:
-            return lhs.(i64) > rhs.(i64)
+            return lhs.(i64) > interp_eval_value(s, value.val1^).(i64)
 
         case .IsGreaterThanOrEqual:
-            return lhs.(i64) >= rhs.(i64)
+            return lhs.(i64) >= interp_eval_value(s, value.val1^).(i64)
 
         case .BooleanAnd:
-            return lhs.(bool) && rhs.(bool)
+            if lhs.(bool) == false {
+                return false
+            }
+            return interp_eval_value(s, value.val1^).(bool)
 
         case .BooleanOr:
-            return lhs.(bool) || rhs.(bool)
+            if lhs.(bool) == true {
+                return true
+            }
+            return interp_eval_value(s, value.val1^).(bool)
 
         case .StringConcat:
             return RuntimeString {
@@ -856,6 +876,12 @@ default_builtin_handler_procedure :: proc(
         function_id := args[0].(i64)
         builder := emit_javascript(state.c)
         return RuntimeString{true, strings.to_string(builder)}
+    case builtin_string_repeat:
+        assert(len(args) == 2)
+        return RuntimeString {
+            true,
+            strings.repeat(args[0].(RuntimeString).value, int(args[1].(i64))),
+        }
     case:
         panic(fmt.aprintf("Unreachable (index is %d)", index))
     }

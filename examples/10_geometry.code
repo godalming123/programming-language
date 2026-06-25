@@ -1,0 +1,28 @@
+max_radius = 20
+min_radius = 18
+x_plus_y_max = 5
+
+on = "xx"
+off = "  "
+
+main = || -> I64 {
+	for@outer y in 0 - max_radius ..= max_radius {
+	    for x in 0 - max_radius ..= max_radius {
+		    num = x*x + y*y
+			if min_radius * min_radius <= num and num <= max_radius * max_radius {
+				print(on)
+				continue
+			}
+
+            // TODO: Get this working
+			// if x + y > x_plus_y_max {
+			//   println(string_repeat(on, max_radius-x))
+			// 	 continue@outer
+			// }
+
+			print(off)
+		}
+		println("")
+	}
+	return 0
+}

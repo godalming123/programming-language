@@ -234,6 +234,7 @@ ConditionControlledLoop :: struct {
 }
 
 ForInLoop :: struct {
+    label:     IdentAndPos,
     // At most there can be 3 variables:
     // - The iteration the for loop is on
     // - The key of the thing being iterated over
@@ -261,7 +262,9 @@ MatchStatement :: struct {
 
 ReturnStatement :: distinct []Unit
 YieldStatement :: distinct []Unit
-ContinueStatement :: struct {}
+ContinueStatement :: struct {
+    label: IdentAndPos,
+}
 UnreachableStatement :: struct {}
 
 Statement :: struct {

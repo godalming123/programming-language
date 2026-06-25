@@ -30,6 +30,7 @@ builtin_run_executable :: 8
 builtin_exit :: 9
 builtin_get_os_args :: 10 // TODO
 builtin_emit_js_code :: 11
+builtin_string_repeat :: 12
 
 get_builtin_func_from_name :: proc(name: string) -> (u32, Type) {
     switch name {
@@ -53,6 +54,8 @@ get_builtin_func_from_name :: proc(name: string) -> (u32, Type) {
         return builtin_run_executable, array_of_strings_to_nil_type
     case "exit":
         return builtin_exit, i64_to_nil_type
+    case "string_repeat":
+        return builtin_string_repeat, string_i64_to_string_type
     case:
         return max(u32), invalid_type
     }
@@ -168,6 +171,7 @@ is_builtin :: proc(name: string) -> bool {
          "Type",
          "OrderedHashMap",
          "to_str",
+         "string_repeat",
          "function_id":
         return true
     case:

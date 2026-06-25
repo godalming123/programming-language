@@ -98,7 +98,11 @@ build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
         fmt.printfln("Successfully checked with %s and %s", errors, warnings)
     }
 
-    absolute_file_name, err2 := filepath.abs(file_name, context.allocator)
+    absolute_file_name, err := filepath.abs(file_name, context.allocator)
+    if err != nil {
+        fmt.eprintfln("Failed make path absolute: %#v", err)
+        return "", false
+    }
     defer delete(absolute_file_name)
     absolute_file_dir := filepath.dir(absolute_file_name)
     builtin_handler := BuiltinHandler {

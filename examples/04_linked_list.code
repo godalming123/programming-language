@@ -1,4 +1,4 @@
-// TODO: Be able to implement `insert`, `to_array`, and `empty_list` for any linked list type
+// TODO: Be able to implement `insert`, `reverse`, `to_array`, and `empty_list` for any linked list type
 
 LinkedList[T] : <
     Empty,
@@ -9,12 +9,23 @@ insert = |list: LinkedList[I64], number: I64| -> LinkedList[I64] {
     return .NotEmpty(number, list)
 }
 
+reverse = |list: LinkedList[I64], end: LinkedList[I64]| -> LinkedList[I64] {
+    match list {
+        _: .Empty {
+            return end
+        }
+        not_empty: .NotEmpty {
+            return reverse(not_empty.tail, .NotEmpty(not_empty.head, end))
+        }
+    }
+}
+
 to_array = |list: LinkedList[I64]| -> []I64 {
     mut array = []I64()
     mut l = list
     while true {
         match l {
-            _: .Empty {
+            .Empty {
                 return array
             }
             not_empty: .NotEmpty {
@@ -25,8 +36,27 @@ to_array = |list: LinkedList[I64]| -> []I64 {
     }
 }
 
+foreach = |list: LinkedList[I64], func: (I64) -> ()| {
+    mut l = list
+    while true {
+        match l {
+            .Empty {
+                return
+            }
+            not_empty: .NotEmpty {
+                func(not_empty.head)
+                ~l = not_empty.tail
+            }
+        }
+    }
+}
+
 empty_list = || -> LinkedList[I64] {
     return .Empty()
+}
+
+debug_number = |number: I64| {
+    println(number.to_str)
 }
 
 main = || -> I64 {
@@ -43,5 +73,7 @@ main = || -> I64 {
     for number in to_array(l) {
         println(number.to_str)
     }
+    println("Reversed:")
+    foreach(reverse(l, .Empty()), debug_number)
     return 0
 }

@@ -263,13 +263,17 @@ emit_js_block_body :: proc(
             emit_js_block(s, nesting_level + 1, stmt.variables, stmt.enter)
             strings.write_string(&s.b, "loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, ": while (true) {")
+            strings.write_string(&s.b, ": while (true) {loop")
+            strings.write_uint(&s.b, stmt.loop_index)
+            strings.write_string(&s.b, "_body: do {")
             emit_js_block(s, nesting_level + 1, nil, stmt.body)
+            strings.write_string(&s.b, "} while (false)")
+            emit_js_block(s, nesting_level + 1, nil, stmt.continue_code)
             strings.write_string(&s.b, "}}")
         case ContinueLoop:
-            strings.write_string(&s.b, "continue loop")
+            strings.write_string(&s.b, "break loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_byte(&s.b, ';')
+            strings.write_string(&s.b, "_body;")
         case BreakLoop:
             strings.write_string(&s.b, "break loop")
             strings.write_uint(&s.b, stmt.loop_index)
@@ -331,7 +335,7 @@ emit_js_block :: proc(
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
     s := GeneralEmitterState{strings.builder_make(), c.types, c}
-    strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has(b, a)}")
+    strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
     for _, index in c.types.values {
         emit_js_global_type(&s, index)

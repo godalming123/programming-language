@@ -238,7 +238,7 @@ example_04_linked_list :: proc(t: ^testing.T) {
     ran := run_normal_example(t, "examples/04_linked_list.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
-    testing.expect(t, ran.stdout == "1\n2\n3\n")
+    testing.expect(t, ran.stdout == "1\n2\n3\nReversed:\n3\n2\n1\n")
 }
 
 expect_ui_render :: proc(

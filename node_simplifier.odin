@@ -101,18 +101,22 @@ iterate_array :: proc(
             CheckedArrayAccess{new_clone(array_value), new_clone(CheckedValue(index_variable))},
         },
     )
-    dynamic_append_elem(
-        body,
-        CheckedMutation {
+    continue_code := make([]CheckedStatement, 1)
+    continue_code[0] = CheckedMutation {
+        index_variable,
+        create_joined_values(
+            .Addition,
             index_variable,
-            create_joined_values(
-                .Addition,
-                index_variable,
-                CompileTimeValue(NumberValue{big_int_from_i64(1)}),
-            ),
-        },
-    )
-    return CheckedLoop{loop_index, body_variables, dynamic_to_fixed(body^), loop_enter}
+            CompileTimeValue(NumberValue{big_int_from_i64(1)}),
+        ),
+    }
+    return CheckedLoop {
+        loop_index,
+        body_variables,
+        loop_enter,
+        continue_code,
+        dynamic_to_fixed(body^),
+    }
 }
 
 iterate_start_end_step :: proc(
@@ -142,11 +146,18 @@ iterate_start_end_step :: proc(
             CheckedBlock{},
         },
     )
-    dynamic_append_elem(
-        body,
-        CheckedMutation{index_variable, create_joined_values(.Addition, index_variable, step)},
-    )
-    return CheckedLoop{loop_index, body_variables, dynamic_to_fixed(body^), loop_enter}
+    loop_continue := make([]CheckedStatement, 1)
+    loop_continue[0] = CheckedMutation {
+        index_variable,
+        create_joined_values(.Addition, index_variable, step),
+    }
+    return CheckedLoop {
+        loop_index,
+        body_variables,
+        loop_enter,
+        loop_continue,
+        dynamic_to_fixed(body^),
+    }
 }
 
 iterate_ordered_hash_map :: proc(

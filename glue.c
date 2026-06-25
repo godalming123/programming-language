@@ -142,3 +142,20 @@ char* builtin11(uint64_t id) {
   return read_until(EOT);
 }
 */
+
+// string_repeat
+char *builtin12(char *string, uint64_t repetitions) {
+  size_t size = strlen(string) * repetitions;
+  if (size == 0) {
+    return "";
+  }
+  char *out = malloc(size);
+
+  out[0] = '\0';
+  while (repetitions > 0) {
+    repetitions -= 1;
+    strcat(out, string);
+  }
+
+  return out;
+}

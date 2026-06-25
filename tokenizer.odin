@@ -21,6 +21,7 @@ GreaterThanOrEqualToken :: struct {} // >=
 OpenBraceToken :: struct {} // {
 CloseBraceToken :: struct {} // }
 CommaToken :: struct {} // ,
+AtToken :: struct {} // @
 ColonToken :: struct {} // :
 ColonColonToken :: struct {} // ::
 SemiColonToken :: struct {} // ;
@@ -73,6 +74,7 @@ TokenContents :: union {
     OpenBraceToken,
     CloseBraceToken,
     CommaToken,
+    AtToken,
     ColonToken,
     ColonColonToken,
     SemiColonToken,
@@ -132,6 +134,8 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "a greater than or equal sign (`>=`)"
     case CommaToken:
         return "a comma (`,`)"
+    case AtToken:
+        return "an at sign (`@`)"
     case ColonToken:
         return "`:`"
     case ColonColonToken:
@@ -437,6 +441,9 @@ tokenizer_get_next_token :: proc(
     case ',':
         state.index += 1
         state.last_token = CommaToken{}
+    case '@':
+        state.index += 1
+        state.last_token = AtToken{}
     case ':':
         state.index += 1
         if state.index < len(file.code) && file.code[state.index] == ':' {

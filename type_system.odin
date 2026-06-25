@@ -27,6 +27,7 @@ comptime_u64_to_string_type :: Type{4} // #comptime ((U64) -> String)
 no_args_to_nil_type :: Type{5} // ()
 array_of_strings_to_nil_type :: Type{6} // ([]String)
 i64_to_nil_type :: Type{7} // (I64)
+string_i64_to_string_type :: Type{8} // (String, I64) -> String
 
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics

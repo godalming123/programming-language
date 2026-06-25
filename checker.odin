@@ -55,6 +55,11 @@ CheckerGlobalValue :: struct {
     value:    CheckedGlobalValue,
 }
 
+LabelRef :: struct {
+    nesting_level: uint,
+    loop_index:    uint,
+}
+
 CheckerState :: struct {
     // The following fields do not change while checking
     files:                         []File,
@@ -70,6 +75,7 @@ CheckerState :: struct {
     // The following fields depend on which variables are in scope
     scopes:                        [dynamic]Scope,
     variables_map:                 map[string]VariableRef,
+    labels_map:                    map[string]LabelRef,
 
     // The following fields change while checking
     types:                         Types,
@@ -506,10 +512,11 @@ CheckedIf :: struct {
 // }
 
 CheckedLoop :: struct {
-    loop_index: uint,
-    variables:  []Type,
-    body:       []CheckedStatement,
-    enter:      []CheckedStatement,
+    loop_index:    uint,
+    variables:     []Type,
+    enter:         []CheckedStatement,
+    continue_code: []CheckedStatement,
+    body:          []CheckedStatement,
 }
 
 ContinueLoop :: struct {
@@ -1049,6 +1056,13 @@ pop_scope :: proc(s: ^CheckerState, loc := #caller_location) {
             assert(var_ref.nesting_level < len(s.scopes))
         }
     }
+    for label_name, label_ref in s.labels_map {
+        if label_ref.nesting_level == len(s.scopes) {
+            delete_key(&s.labels_map, label_name)
+        } else {
+            assert(label_ref.nesting_level < len(s.scopes))
+        }
+    }
 }
 
 get_array_type :: proc(
@@ -1297,7 +1311,10 @@ check_block :: proc(
                 append_elem(&loop_body_array, condition_check)
             }
 
-            append_elem(body, CheckedLoop{loop_index, loop_variables, loop_body_array[:], nil})
+            append_elem(
+                body,
+                CheckedLoop{loop_index, loop_variables, nil, nil, loop_body_array[:]},
+            )
 
         case ForInLoop:
             append_elem(&s.scopes, Scope{})
@@ -1305,6 +1322,13 @@ check_block :: proc(
             old_parent_loop_index := s.parent_loop_index
             defer s.parent_loop_index = old_parent_loop_index
             loop_index := s.loop_index
+            if value.label.ident != "" {
+                if value.label.ident in s.labels_map {
+                    err(s, value.label.pos, "The label `%s` is already defined")
+                    return nil, false
+                }
+                s.labels_map[value.label.ident] = LabelRef{len(s.scopes) - 1, loop_index}
+            }
             s.parent_loop_index = loop_index
             s.loop_index += 1
             loop_body_array := make([dynamic]CheckedStatement)
@@ -1468,7 +1492,21 @@ check_block :: proc(
                 err(s, stmt.position, "Continue statement must go inside a loop")
                 return nil, false
             }
-            append_elem(body, ContinueLoop{s.parent_loop_index})
+            if value.label.ident == "" {
+                append_elem(body, ContinueLoop{s.parent_loop_index})
+            } else {
+                loop_ref, ok := s.labels_map[value.label.ident]
+                if !ok {
+                    err(
+                        s,
+                        value.label.pos,
+                        "There is no parent loop labelled with `%s`",
+                        value.label.ident,
+                    )
+                    return nil, false
+                }
+                append_elem(body, ContinueLoop{loop_ref.loop_index})
+            }
 
         case UnreachableStatement:
             if stmt_index + 1 != len(block) {
@@ -2748,6 +2786,10 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     array_with_dynamic_array_of_strings := make([]Type, 1)
     array_with_dynamic_array_of_strings[0] = dynamic_array_of_strings
 
+    array_with_string_i64_types := make([]Type, 2)
+    array_with_string_i64_types[0] = string_type
+    array_with_string_i64_types[1] = i64_type
+
     assert(dynamic_array_of_strings == create_type(&state.types, ArrayType{0, string_type}).type)
     assert(
         string_to_nil_type ==
@@ -2773,6 +2815,10 @@ check :: proc(parsed: ParsedProject) -> CheckerOutput {
     assert(
         i64_to_nil_type ==
         create_type(&state.types, FuncType{array_with_i64_type, nil, .Normal}).type,
+    )
+    assert(
+        string_i64_to_string_type ==
+        create_type(&state.types, FuncType{array_with_string_i64_types, array_with_string_type, .Normal}).type,
     )
 
     for value, i in parsed.global_values {

@@ -23,12 +23,13 @@ main = || -> I64 {
 
     mut shopping = Shopping()
     while true {
+	    clear()
 	    view(shopping)
 		command = readline("Enter a command: ")
 		if command == "" {
 			continue
 		} else if command == "exit" {
-		    clear()
+			clear()
 			return 0
 		} else if command == "add" {
 		    item_name = readline("Enter the name of the item to add: ")
@@ -48,6 +49,7 @@ main = || -> I64 {
 			}
 		} else {
 			println("Unrecognized command `" & command & "`")
+			_ = readline("Press enter to continue")
 		}
 	}
 	return 0
