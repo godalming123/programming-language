@@ -172,13 +172,25 @@ merge_type_value :: proc(
     bool,
     TypeValue,
 ) {
-    #partial switch va in a {
+    switch va in a {
+    case OrderedHashMapTypeWithStringKey:
+        vb, ok := b.(OrderedHashMapTypeWithStringKey)
+        if ok && va.value_type == vb.value_type {
+            return true, a
+        }
+        return false, nil
+    case OrderedHashMapTypeWithI64Key:
+        vb, ok := b.(OrderedHashMapTypeWithI64Key)
+        if ok && va.value_type == vb.value_type {
+            return true, a
+        }
+        return false, nil
     case ArrayType:
         vb, ok := b.(ArrayType)
-        if !ok {
-            return false, nil
+        if ok && va.length == vb.length && va.item_type.index == vb.item_type.index {
+            return true, a
         }
-        return va.length == vb.length && va.item_type.index == vb.item_type.index, a
+        return false, nil
     case SumType(Type):
         vb, ok := b.(SumType(Type))
         if !ok {
@@ -218,8 +230,9 @@ merge_type_value :: proc(
             return true, va
         }
         return true, vb
+    case:
+        panic("Unreachable")
     }
-    return false, nil
 }
 
 merge_struct_types :: proc(

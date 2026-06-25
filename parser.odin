@@ -85,7 +85,7 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
         }
         if field.ident in fields_map {
             file := s.files[s.file_ref.index]
-            line, col := get_location(file.file.code, fields_map[field.ident])
+            line, col := get_location(file.file.code, fields[fields_map[field.ident]].name.pos)
             diagnostic(
                 file.file,
                 field.pos,

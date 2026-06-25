@@ -115,16 +115,16 @@ UnitJoinMethod :: enum {
     Arrow, // Used for function types (for example `(String) -> U64`)
 
     // Prioraty 4
-    Multiplication,
-    Division,
-
-    // Prioraty 5
     Addition,
     Subtraction,
     Modulo,
+
+    // Prioraty 5
+    Multiplication,
+    Division,
 }
 
-// Operations with higher prioraty (prioraty 3 is the highest prioraty) are executed first
+// Operations with higher prioraty (prioraty 5 is the highest prioraty) are executed first
 // See https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
 get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
     switch join_method {
@@ -141,9 +141,9 @@ get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
         return 2
     case .Append, .Concat, .StringConcat, .Colon, .Arrow:
         return 3
-    case .Division, .Multiplication:
-        return 4
     case .Subtraction, .Addition, .Modulo:
+        return 4
+    case .Division, .Multiplication:
         return 5
     }
     panic("Unreachable")

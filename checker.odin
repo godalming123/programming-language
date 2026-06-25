@@ -2126,6 +2126,7 @@ check_joined_unit_value :: proc(
                 "Expected an ordered hash map type\nGot the type %s",
                 type_to_string(s, val1_type),
             )
+            return nil
         }
         if !expect_exact_type(s, value.unit0.pos, val0_expected_type, val0_type, "") {
             return nil

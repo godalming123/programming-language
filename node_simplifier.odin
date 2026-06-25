@@ -125,6 +125,7 @@ iterate_start_end_step :: proc(
     body: ^Dynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
+    // TODO: Handle when `step` is negative
     loop_enter := make([]CheckedStatement, 1)
     loop_enter[0] = CheckedMutation{index_variable, start}
     if_block := make([]CheckedStatement, 1)

@@ -95,11 +95,15 @@ A new language for the web, because it's time to stop working around javascript.
   - Arena backed array with an embedded freelist
   - Tree
   - Hash based data structures:
-    - [ ] Hash map
-    - [ ] Hash set
-    - [ ] Ordered hash map
-    - [ ] Ordered hash set
-    - [ ] Should there be an efficient way to store a reference to a particulair item in one of these data structures?
+    - TODO: Unimplemented: Hash map
+    - TODO: Unimplemented: Hash set
+    - Partially implemented: Ordered hash map
+      - TODO: A `delete` function
+      - TODO: A `keys` function to get an array of the keys in the hash map
+      - TODO: Emit correct C code for ordered hash maps
+      - TODO: Emit correct JS code for ordered hash maps
+    - TODO: Unimplemented: Ordered hash set
+    - TODO: Should there be an efficient way to store a reference to a particulair item in one of these data structures?
   - Arena backed buffer with an embedded freelist?
   - Arena backed malloc/free/free_all implementation?
 - Support length based strings as well as null terminated strings
