@@ -144,11 +144,12 @@ char* builtin11(uint64_t id) {
 */
 
 // string_repeat
-char *builtin12(char *string, uint64_t repetitions) {
-  size_t size = strlen(string) * repetitions;
-  if (size == 0) {
-    return "";
+char *builtin12(char *string, int64_t repetitions) {
+  if (repetitions < 0) {
+    fprintf(stderr, "Negative repeat count");
+    exit(1);
   }
+  size_t size = strlen(string) * repetitions + 1;
   char *out = malloc(size);
 
   out[0] = '\0';

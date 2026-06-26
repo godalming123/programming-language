@@ -63,7 +63,8 @@ create_joined_values :: proc(
                 panic("Unreachable")
             }
         }
-        flip_values = val0_is_comptime
+        // TODO: Be able to move the constant right for non-commutative operations
+        flip_values = val0_is_comptime && (method == .Multiplication || method == .Addition)
     }
     if flip_values {
         return CheckedJoinedValues{method, new_clone(val1), new_clone(val0)}
@@ -169,7 +170,7 @@ iterate_ordered_hash_map :: proc(
     body: ^Dynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
-    keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)}
+    keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)} // TODO: Handle for I64 keys
     insert(
         body,
         CheckedMutation {

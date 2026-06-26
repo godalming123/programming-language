@@ -247,7 +247,7 @@ expect_ui_render :: proc(
     focused_button_num: int,
     pos := #caller_location,
 ) {
-    expect_string(t, "\033[1;1H\033[2J- ", pos)
+    expect_string(t, ansi_clear + "- ", pos)
     expect_string(t, text, pos)
     expect_string(t, "\n", pos)
     for i in 1 ..= 3 {
@@ -280,6 +280,8 @@ example_05_ui :: proc(t: ^testing.T) {
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 3", 3) // After click
+    expect_string(&text_expecter, ansi_clear)
+    expect_finished(&text_expecter)
 }
 
 /*
@@ -392,6 +394,46 @@ example_09_hashmap :: proc(t: ^testing.T) {
     // TODO: Implement the test
 }
 */
+
+@(test)
+example_10_geometry :: proc(t: ^testing.T) {
+    ran := run_normal_example(t, "examples/10_geometry.code", "")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    e := TestingTextExpecter{0, ran.stdout, t}
+    expect_string(&e, "                              cc                              \n")
+    expect_string(&e, "                    cccccccccccccccccccccc                    \n")
+    expect_string(&e, "                cccc                      cccc                \n")
+    expect_string(&e, "            cccc                              cccc            \n")
+    expect_string(&e, "          cccc                                  cccc          \n")
+    expect_string(&e, "        cccc                                      cccc        \n")
+    expect_string(&e, "      cccc                                          cccc      \n")
+    expect_string(&e, "      cc                                              cc      \n")
+    expect_string(&e, "    cc                                                  cc    \n")
+    expect_string(&e, "    cc                                                  cc    \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "cccc                                                      cccc\n")
+    expect_string(&e, "  cc                                                      cctt\n")
+    expect_string(&e, "  cc                                                      tttt\n")
+    expect_string(&e, "  cc                                                    tttttt\n")
+    expect_string(&e, "  cc                                                  tttttttt\n")
+    expect_string(&e, "  cc                                                tttttttttt\n")
+    expect_string(&e, "    cc                                            tttttttttttt\n")
+    expect_string(&e, "    cc                                          tttttttttttttt\n")
+    expect_string(&e, "      cc                                      tttttttttttttttt\n")
+    expect_string(&e, "      cccc                                  tttttttttttttttttt\n")
+    expect_string(&e, "        cccc                              tttttttttttttttttttt\n")
+    expect_string(&e, "          cccc                          tttttttttttttttttttttt\n")
+    expect_string(&e, "            cccc                      tttttttttttttttttttttttt\n")
+    expect_string(&e, "                cccc                tttttttttttttttttttttttttt\n")
+    expect_string(&e, "                    cccccccccccccctttttttttttttttttttttttttttt\n")
+    expect_string(&e, "                              cctttttttttttttttttttttttttttttt\n")
+    expect_finished(&e)
+}
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
 

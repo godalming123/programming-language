@@ -265,6 +265,7 @@ interp_pop_scope :: proc(state: ^InterpState, loc := #caller_location) {
 }
 
 interp_destroy_value :: proc(val: ^RuntimeValue, loc := #caller_location) {
+    /*
     when debug_interpreter {
         print_call(loc, "interp_destroy_value")
     }
@@ -334,9 +335,13 @@ interp_destroy_value :: proc(val: ^RuntimeValue, loc := #caller_location) {
          RuntimeStringOrderedHashMapInitFunc,
          RuntimeI64OrderedHashMapInitFunc:
     }
+    */
 }
 
-interp_clone_value :: proc(val: RuntimeValue) -> RuntimeValue {
+interp_clone_value :: proc(val: RuntimeValue, loc := #caller_location) -> RuntimeValue {
+    when debug_interpreter {
+        print_call(loc, "interp_clone_value")
+    }
     switch v in val {
     case nil:
         panic("Unreachable: Uninitialised")
@@ -452,6 +457,8 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
                     state.control_flow_op = nil
                 }
             }
+
+            interp_exec_block(state, s.continue_code)
         }
         interp_pop_scope(state)
 
@@ -655,7 +662,6 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
 
     case CheckedJoinedValues:
         lhs := interp_eval_value(s, value.val0^)
-        rhs := interp_eval_value(s, value.val1^)
 
         switch value.join_method {
 
@@ -735,7 +741,10 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
             return RuntimeString {
                 true,
                 strings.concatenate(
-                    []string{lhs.(RuntimeString).value, rhs.(RuntimeString).value},
+                    []string {
+                        lhs.(RuntimeString).value,
+                        interp_eval_value(s, value.val1^).(RuntimeString).value,
+                    },
                 ),
             }
 
@@ -863,7 +872,7 @@ default_builtin_handler_procedure :: proc(
         return nil
     case builtin_clear:
         assert(len(args) == 0)
-        fmt.print("\033[1;1H\033[2J")
+        fmt.print(ansi_clear)
         return nil
     case builtin_exit:
         assert(len(args) == 1)

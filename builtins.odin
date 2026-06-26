@@ -223,7 +223,9 @@ add_variable :: proc(
         return VariableRef{}, false
     }
     var_ref := add_unnamed_variable(s, variable_type, variable_is_mut)
-    s.variables_map[variable.ident] = var_ref
+    if variable.ident != "" {
+        s.variables_map[variable.ident] = var_ref
+    }
     return var_ref, true
 }
 

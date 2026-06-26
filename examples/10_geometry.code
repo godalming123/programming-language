@@ -1,26 +1,26 @@
-max_radius = 20
-min_radius = 18
-x_plus_y_max = 5
+max_radius = 15
+min_radius = 14
+x_plus_y_max = 15
 
-on = "xx"
-off = "  "
+circle = "cc"
+triangle = "tt"
+nothing = "  "
 
 main = || -> I64 {
 	for@outer y in 0 - max_radius ..= max_radius {
 	    for x in 0 - max_radius ..= max_radius {
+			if x + y > x_plus_y_max {
+			  println(string_repeat(triangle, max_radius - x + 1))
+			  continue@outer
+			}
+
 		    num = x*x + y*y
 			if min_radius * min_radius <= num and num <= max_radius * max_radius {
-				print(on)
+				print(circle)
 				continue
 			}
 
-            // TODO: Get this working
-			// if x + y > x_plus_y_max {
-			//   println(string_repeat(on, max_radius-x))
-			// 	 continue@outer
-			// }
-
-			print(off)
+			print(nothing)
 		}
 		println("")
 	}

@@ -504,7 +504,7 @@ parse_unit :: proc(
     // Parse possible arithmetic
     append_elems(
         &other_possible_tokens,
-        "a value joiner (`and`, `or`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `*`, `/`, `+`, `-`, `%`, `::`, `:`, `->`)",
+        "a value joiner (`and`, `or`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `*`, `/`, `+`, `-`, `%`, `::`, `:`, `->`, `in`)",
     )
     value_type: UnitJoinMethod
     #partial switch token in s.last_token {
@@ -1400,6 +1400,15 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 }
 
                 get_next_token(s, false)
+
+                if len(generic) == 0 {
+                    diagnostic(
+                        s.files[s.file_ref.index].file,
+                        position,
+                        "The parser is interpreting this as a non-generic type\nThe empty `[]` can be omitted",
+                        type = "Warning",
+                    )
+                }
             }
             #partial switch _ in s.last_token {
             case:

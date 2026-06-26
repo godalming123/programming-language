@@ -424,10 +424,9 @@ check_array_type :: proc(
         number := compile_time_value.(NumberValue)
         assert(len(body) == 0)
         length, ok = big_int_to_u32(number.value)
-        if !ok {
+        if !ok || length == 0 {
             err(s, pos, "Expected an integer (n) where 0 < n <= max(u32)", type.args[0].pos)
             return ArrayType{}, false
-
         }
     } else {
         err(s, pos, "Expected either 0 or 1 unit inside `[]`, got %d units", len(type.args))
@@ -1104,7 +1103,7 @@ check_mutation_destination :: proc(
     if key == nil {
         return var_type, var_ref
     }
-    #partial switch var_type_value in get_type(s.types, var_type) {
+    #partial switch var_type_value in get_type(s.types, simplify_type(s, var_type)) {
     case ArrayType:
         warn(s, key.pos, "This array access is not bounds checked\nTODO: Bounds checks")
         index_value := check_runtime_value(s, key^, body, i64_type)
@@ -1324,7 +1323,7 @@ check_block :: proc(
             loop_index := s.loop_index
             if value.label.ident != "" {
                 if value.label.ident in s.labels_map {
-                    err(s, value.label.pos, "The label `%s` is already defined")
+                    err(s, value.label.pos, "The label `%s` is already defined", value.label.ident)
                     return nil, false
                 }
                 s.labels_map[value.label.ident] = LabelRef{len(s.scopes) - 1, loop_index}
