@@ -425,7 +425,7 @@ check_array_type :: proc(
         assert(len(body) == 0)
         length, ok = big_int_to_u32(number.value)
         if !ok || length == 0 {
-            err(s, pos, "Expected an integer (n) where 0 < n <= max(u32)", type.args[0].pos)
+            err(s, type.args[0].pos, "Expected an integer, n, where 0 < n <= max(u32)")
             return ArrayType{}, false
         }
     } else {

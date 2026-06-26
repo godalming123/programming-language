@@ -558,6 +558,19 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
     }
 }
 
+interp_is_equal :: proc(s: ^InterpState, lhs: RuntimeValue, val1: CheckedValue) -> bool {
+    rhs := interp_eval_value(s, val1)
+    a_i64, a_is_i64 := lhs.(i64)
+    if a_is_i64 {
+        return a_i64 == rhs.(i64)
+    }
+    a_bool, a_is_bool := lhs.(bool)
+    if a_is_bool {
+        return a_bool == rhs.(bool)
+    }
+    panic("Unreachable")
+}
+
 interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
     switch value in v {
     case OrderedHashMapInitFunc:
@@ -690,28 +703,10 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
             return lhs.(i64) % interp_eval_value(s, value.val1^).(i64)
 
         case .IsEqual:
-            a_i64, a_is_i64 := lhs.(i64)
-            if a_is_i64 {
-                return a_i64 == interp_eval_value(s, value.val1^).(i64)
-            }
-            a_bool, a_is_bool := lhs.(bool)
-            if a_is_bool {
-                return a_bool == interp_eval_value(s, value.val1^).(bool)
-            }
-            panic("Unreachable")
+            return interp_is_equal(s, lhs, value.val1^)
 
         case .IsNotEqual:
-            a_i64, a_is_i64 := lhs.(i64)
-            b_i64, b_is_i64 := interp_eval_value(s, value.val1^).(i64)
-            if a_is_i64 && b_is_i64 {
-                return a_i64 != b_i64
-            }
-            a_bool, a_is_bool := lhs.(bool)
-            b_bool, b_is_bool := interp_eval_value(s, value.val1^).(bool)
-            if a_is_bool && b_is_bool {
-                return a_bool != b_bool
-            }
-            return true
+            return !interp_is_equal(s, lhs, value.val1^)
 
         case .IsLessThan:
             return lhs.(i64) < interp_eval_value(s, value.val1^).(i64)
