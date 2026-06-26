@@ -11,10 +11,11 @@ increment_counter = |s: I64| -> I64 {
 	return s + 1
 }
 
-counter = |s: I64| -> []html.Elem[I64] {
-    return []html.Elem[I64](
+counter = |s: I64| -> html.UI[I64] {
+    contents = []html.Elem[I64](
         .Button([]html.Elem[I64](.Text("The count is " & s.to_str)), increment_counter),
     )
+    return html.UI[I64]("Counter", contents)
 }
 
 build = #comptime || -> I64 {

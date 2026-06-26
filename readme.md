@@ -41,6 +41,7 @@ A new language for the web, because it's time to stop working around javascript.
 # Todo
 
 - Choose a name
+- Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
 - Emit better JS code:
@@ -57,13 +58,13 @@ A new language for the web, because it's time to stop working around javascript.
     - Currently `x.len` is used rather than `len(x)`
     - Currently `x.to_str` is used rather than `to_str(x)`
     - Currently `a :: b` is used rather than `append(a, b)`
-  - With the addition of subtypes/supertypes, `Any` and in the case of `append`, function generics, these functions could be represented like so:
+  - With the addition of subtypes/supertypes, `Any` and in the case of `append` and `delete`, function generics, these functions could be represented like so:
     - `len: ([]Any) -> I64`
     - `to_str: (Any) -> String`
     - `append[T]: ([]T, []T) -> []T`
+    - `delete[K, V]: (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
-- Add modules and namespaces
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
 - Do not leak memory in the compiler
 - Tell the c compiler the type of the number literals that are emitted
@@ -94,11 +95,15 @@ A new language for the web, because it's time to stop working around javascript.
   - Arena backed array with an embedded freelist
   - Tree
   - Hash based data structures:
-    - Hash map
-    - Hash set
-    - Ordered hash map
-    - Ordered hash set
-    - Should there be an efficient way to store a reference to a particulair item in one of these data structures?
+    - TODO: Unimplemented: Hash map
+    - TODO: Unimplemented: Hash set
+    - Partially implemented: Ordered hash map
+      - TODO: A `delete` function
+      - TODO: A `keys` function to get an array of the keys in the hash map
+      - TODO: Emit correct C code for ordered hash maps
+      - TODO: Emit correct JS code for ordered hash maps
+    - TODO: Unimplemented: Ordered hash set
+    - TODO: Should there be an efficient way to store a reference to a particulair item in one of these data structures?
   - Arena backed buffer with an embedded freelist?
   - Arena backed malloc/free/free_all implementation?
 - Support length based strings as well as null terminated strings
@@ -181,11 +186,23 @@ A new language for the web, because it's time to stop working around javascript.
       - An executable for a server to handle requests
       - JS code that could run on the edge
   - Metaprogramming:
-    - Decide which metaprogramming capabilities should be ran by the compiler interpreting them and which should be ran by the compiler compiling them into an executable and running the executable
-      - An advantage of the interpreter-based approach is that you can guarantee that the metaprogram does the same thing regardless of:
-        - Which OS it runs on
-        - Which architecture it runs on
-        - Whether the C emitter or the JS emitter was used (because no emitter would be used)
+    - [x] Decide which metaprogramming capabilities should be ran by the compiler interpreting bytecode and which should be ran by the compiler compiling them into an executable and running the executable
+      - Advantages of the interpreter-based approach
+        - You can guarantee that the metaprogram does the same thing regardless of:
+          - Which OS it runs on
+          - Which architecture it runs on
+          - Whether the C emitter or the JS emitter was used (because no emitter would be used)
+        - The metaprogram and the compiler can send any data structure to one another very easily
+        - Certain information is lost when emitting code
+          - For example, if you transpile the following to C, it becomes non-trivial for the compiler to emit the javascript because all the metaprogram has is a function pointer:
+            ```
+            compiler.emit_js_code(|a: I64| {return a + 1})
+            ```
+        - The interpreter can act as a sandbox, rather than giving full access to the host system
+      - Advantages of the emission and compilation based approach
+        - The metaprogram would be able to use capabilities from C or JS
+        - The metaprogram may run faster
+      - Current decision: Use an interpreter for all the metaprogramming except maybe if I think that there is an important use case where interpreting is too slow and/or it would be useful to use capabilities from C or JS in the metaprogram
     - It could be nice to be able to define a couple different `build` functions in the standard library for different types of website, and have that be sufficient for building 99%+ of websites
     - There could be a different `build` function for:
       - Static site generation
@@ -234,6 +251,7 @@ A new language for the web, because it's time to stop working around javascript.
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
       - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
       - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
+  - Maybe add a REPL
   - Type inference?
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value
       - However this approach has disadvantages:

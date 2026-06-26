@@ -105,23 +105,26 @@ UnitJoinMethod :: enum {
     IsLessThanOrEqual,
 
     // Prioraty 2
+    In,
+
+    // Prioraty 3
     Append, // ::
     Concat, // ++
     StringConcat, // &
     Colon, // Used for array indexing (for example `my_array[start_index:end_index]`)
     Arrow, // Used for function types (for example `(String) -> U64`)
 
-    // Prioraty 3
-    Multiplication,
-    Division,
-
     // Prioraty 4
     Addition,
     Subtraction,
     Modulo,
+
+    // Prioraty 5
+    Multiplication,
+    Division,
 }
 
-// Operations with higher prioraty (prioraty 3 is the highest prioraty) are executed first
+// Operations with higher prioraty (prioraty 5 is the highest prioraty) are executed first
 // See https://en.wikipedia.org/wiki/Order_of_operations#Programming_languages
 get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
     switch join_method {
@@ -134,12 +137,14 @@ get_prioraty :: proc(join_method: UnitJoinMethod) -> uint {
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual:
         return 1
-    case .Append, .Concat, .StringConcat, .Colon, .Arrow:
+    case .In:
         return 2
-    case .Division, .Multiplication:
+    case .Append, .Concat, .StringConcat, .Colon, .Arrow:
         return 3
     case .Subtraction, .Addition, .Modulo:
         return 4
+    case .Division, .Multiplication:
+        return 5
     }
     panic("Unreachable")
 }
@@ -166,9 +171,20 @@ VariableDestType :: enum {
 }
 
 VariableDest :: struct {
-    name:        IdentAndPos,
-    type:        VariableDestType,
-    array_index: ^Unit, // nil if there isn't an array index
+    name: IdentAndPos,
+    type: VariableDestType,
+
+    // The unit in square brackets
+    // nil if there isn't a key
+    key:  ^Unit,
+}
+
+MutationType :: enum {
+    IncrementBy,
+    DecrementBy,
+    MultiplyBy,
+    DivideBy,
+    SetTo,
 }
 
 VariableManagement :: struct {
@@ -218,6 +234,7 @@ ConditionControlledLoop :: struct {
 }
 
 ForInLoop :: struct {
+    label:     IdentAndPos,
     // At most there can be 3 variables:
     // - The iteration the for loop is on
     // - The key of the thing being iterated over
@@ -245,6 +262,10 @@ MatchStatement :: struct {
 
 ReturnStatement :: distinct []Unit
 YieldStatement :: distinct []Unit
+ContinueStatement :: struct {
+    label: IdentAndPos,
+}
+UnreachableStatement :: struct {}
 
 Statement :: struct {
     position: uint,
@@ -257,6 +278,8 @@ Statement :: struct {
         ReturnStatement,
         YieldStatement,
         MatchStatement,
+        ContinueStatement,
+        UnreachableStatement,
     },
 }
 

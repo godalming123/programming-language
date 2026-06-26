@@ -1,10 +1,8 @@
 package main
 
-import "core:bufio"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
-import "core:strconv"
 import "core:strings"
 import "core:time"
 
@@ -12,8 +10,8 @@ debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
-debug_equivalency_arrays :: false
 debug_ordered_hash_sets :: false
+debug_interpreter :: false
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
@@ -51,7 +49,12 @@ done_command :: "done"
 
 // - The `string` returned is the path to the executable
 // - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string) -> (string, bool) {
+build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
+    build_start := time.now()
+    defer {
+        fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
+    }
+
     parsed, ok := parse_project(file_name)
     if !ok {
         return "", false
@@ -95,14 +98,28 @@ build :: proc(file_name: string) -> (string, bool) {
         fmt.printfln("Successfully checked with %s and %s", errors, warnings)
     }
 
-    fmt.printfln("Emitting C code...")
-    c := emit_c(
-        checker_output.checked,
-        checker_output.entry_func_ref,
-        checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
-    )
+    absolute_file_name, err := filepath.abs(file_name, context.allocator)
+    if err != nil {
+        fmt.eprintfln("Failed make path absolute: %#v", err)
+        return "", false
+    }
+    defer delete(absolute_file_name)
+    absolute_file_dir := filepath.dir(absolute_file_name)
+    builtin_handler := BuiltinHandler {
+        &DefaultBuiltinHandlerData{absolute_file_dir},
+        default_builtin_handler_procedure,
+    }
 
     if checker_output.entry_func_type == .BuildFunc {
+        if interpret_file {
+            fmt.eprintln("Cannot use `interpret` with files that use a custom `build` func")
+            return "", false
+        }
+        fmt.printfln("Interpreting metaprogram...")
+        result := interpret(checker_output.checked, builtin_handler, checker_output.entry_func_ref)
+        return "", result.(i64) == 0 ? true : false
+        /*
+        // OLD(METAPROGRAM_IN_C)
         tmp, err := os.temp_directory(context.allocator)
         if err != nil {
             fmt.eprintfln("Failed to get temporary directory: %#v", file_name, err)
@@ -141,7 +158,23 @@ build :: proc(file_name: string) -> (string, bool) {
 
         run_metaprogram(absolute_file_dir, executable_path, checker_output.checked)
         return "", true
+        */
+    } else if interpret_file {
+        fmt.printfln(
+            "Finished building in %f ms!",
+            time.duration_milliseconds(time.since(build_start)),
+        )
+        fmt.printfln("Interpreting...")
+        result := interpret(checker_output.checked, builtin_handler, checker_output.entry_func_ref)
+        return "", result.(i64) == 0 ? true : false
     } else {
+        fmt.printfln("Emitting C code...")
+        c := emit_c(
+            checker_output.checked,
+            checker_output.entry_func_ref,
+            checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
+        )
+
         executable_path, ok := write_and_compile_c(c, file_name)
         if !ok {
             return "", false
@@ -150,6 +183,8 @@ build :: proc(file_name: string) -> (string, bool) {
     }
 }
 
+/*
+// OLD(METAPROGRAM_IN_C)
 run_metaprogram :: proc(
     metaprogram_working_dir: string,
     metaprogram_path: string,
@@ -209,7 +244,6 @@ run_metaprogram :: proc(
             }
             defer delete(arg_raw)
             assert(arg_raw[len(arg_raw) - 1] == EOT)
-            // TODO: Tree shake functions which the function being emitted (`arg`) does not use
             arg, ok := strconv.parse_uint(arg_raw[:len(arg_raw) - 1])
             assert(ok)
             fmt.printfln("Compiler received compiler.emit_js_code(%d) from metaprogram", arg)
@@ -227,9 +261,13 @@ run_metaprogram :: proc(
         }
     }
 }
+*/
 
 print_help :: proc(exit_code: int) -> ! {
     fmt.println("- `build file_name` build a file")
+    fmt.println(
+        "- `interpret file_name` interpret a file (only works for files that don't use a custom `build` func)",
+    )
     fmt.println("- `help` show this help message")
     os.exit(exit_code)
 }
@@ -259,14 +297,24 @@ main :: proc() {
     case "build":
         if len(os.args) != 3 {
             fmt.eprintfln(
-                "Expected 3 arguments for the build command, but got %d arguments",
+                "Expected 3 arguments for the `build` command, but got %d arguments",
                 len(os.args),
             )
             print_help(1)
         }
-        build_start := time.now()
         _, ok := build(os.args[2])
-        fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
+        if !ok {
+            os.exit(1)
+        }
+    case "interpret":
+        if len(os.args) != 3 {
+            fmt.eprintfln(
+                "Expected 3 arguments for the `interpret` command, but got %d arguments",
+                len(os.args),
+            )
+            print_help(1)
+        }
+        _, ok := build(os.args[2], interpret_file = true)
         if !ok {
             os.exit(1)
         }

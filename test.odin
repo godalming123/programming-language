@@ -1,6 +1,10 @@
 package main
 
-import "core:bufio"
+// TODO: Implement some stuff so that all examples work in the interpreter and
+//       the C emitter
+// TODO: Check that the interpreter, the JS emitter, and the C emitter all have
+//       the same behavior in all the tests
+
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -234,7 +238,7 @@ example_04_linked_list :: proc(t: ^testing.T) {
     ran := run_normal_example(t, "examples/04_linked_list.code", "")
     if !ran.ok {return}
     testing.expect(t, ran.stderr == "")
-    testing.expect(t, ran.stdout == "1\n2\n3\n")
+    testing.expect(t, ran.stdout == "1\n2\n3\nReversed:\n3\n2\n1\n")
 }
 
 expect_ui_render :: proc(
@@ -243,7 +247,7 @@ expect_ui_render :: proc(
     focused_button_num: int,
     pos := #caller_location,
 ) {
-    expect_string(t, "\033[1;1H\033[2J- ", pos)
+    expect_string(t, ansi_clear + "- ", pos)
     expect_string(t, text, pos)
     expect_string(t, "\n", pos)
     for i in 1 ..= 3 {
@@ -276,8 +280,12 @@ example_05_ui :: proc(t: ^testing.T) {
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 1", 3) // After next
     expect_ui_render(&text_expecter, "Text 3", 3) // After click
+    expect_string(&text_expecter, ansi_clear)
+    expect_finished(&text_expecter)
 }
 
+/*
+// OLD(METAPROGRAM_IN_C)
 @(test)
 buffered_pipe_test :: proc(t: ^testing.T) {
     str :: "Hello world\n"
@@ -291,11 +299,15 @@ buffered_pipe_test :: proc(t: ^testing.T) {
         testing.fail_now(t, fmt.aprintf("Expected %q, got %q", str, read_str))
     }
 }
+*/
 
 // TODO: Mock a browser to test the counter and conways game of life
 
 @(test)
 example_06_counter :: proc(t: ^testing.T) {
+    err := os.remove_all("examples/counter.html")
+    testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
+
     ok := run_comptime_example(t, "examples/06_counter.code")
     if !ok {return}
     testing.expect(t, os.exists("examples/counter.html"))
@@ -303,10 +315,12 @@ example_06_counter :: proc(t: ^testing.T) {
 
 @(test)
 example_07_conways_game_of_life :: proc(t: ^testing.T) {
+    err := os.remove_all("examples/conways_game_of_life.html")
+    testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
+
     ok := run_comptime_example(t, "examples/07_conways_game_of_life.code")
     if !ok {return}
     testing.expect(t, os.exists("examples/conways_game_of_life.html"))
-
 }
 
 @(test)
@@ -340,15 +354,85 @@ basic_fuzz_test :: proc(t: ^testing.T) {
 @(test)
 basic_type_system_test :: proc(t: ^testing.T) {
     types: Types
-    type0 := string_type
-    type1 := bool_type
-    generic0 := create_type(&types, GenericTypeValue{7, type0, unknown_type}).type
-    generic1 := create_type(&types, GenericTypeValue{7, type0, i64_type}).type
-    generic2 := create_type(&types, GenericTypeValue{7, type1, unknown_type}).type
+    generic_args0 := make([]Type, 1)
+    generic_args0[0] = string_type
+    generic_args1 := make([]Type, 1)
+    generic_args1[0] = bool_type
+    generic0 := create_type(&types, GenericTypeValue{7, generic_args0, unknown_type}).type
+    generic1 := create_type(&types, GenericTypeValue{7, generic_args0, i64_type}).type
+    generic2 := create_type(&types, GenericTypeValue{7, generic_args1, unknown_type}).type
     testing.expect(t, generic0 == generic1)
     generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
     testing.expect(t, generic0_initialised == i64_type)
     testing.expect(t, generic0 != generic2)
+}
+
+@(test)
+example_08_result :: proc(t: ^testing.T) {
+    // TODO: Test inputs other than `dog`
+    ran := run_normal_example(t, "examples/08_result.code", "dog\n")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    if ran.stdout != "Enter the name of an animal: You entered the animal dog\n" {
+        testing.fail_now(t, fmt.aprintf("Got the stdout `%s`", ran.stdout))
+    }
+}
+
+/*
+// TODO:
+// - Add support for hashmaps to the C backend so that 09_hashmap.code can be tested with the C backend
+// - Add support for testing with the interpreter so that 09_hashmap.code can be tested with the interpreter
+@(test)
+example_09_hashmap :: proc(t: ^testing.T) {
+    ran := run_normal_example(
+        t,
+        "examples/09_hashmap.code",
+        "add\nbanana\nadd\napple\nadd\nbanana\nremove\napple\nexit\n",
+    )
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    // TODO: Implement the test
+}
+*/
+
+@(test)
+example_10_geometry :: proc(t: ^testing.T) {
+    ran := run_normal_example(t, "examples/10_geometry.code", "")
+    if !ran.ok {return}
+    testing.expect(t, ran.stderr == "")
+    e := TestingTextExpecter{0, ran.stdout, t}
+    expect_string(&e, "                              cc                              \n")
+    expect_string(&e, "                    cccccccccccccccccccccc                    \n")
+    expect_string(&e, "                cccc                      cccc                \n")
+    expect_string(&e, "            cccc                              cccc            \n")
+    expect_string(&e, "          cccc                                  cccc          \n")
+    expect_string(&e, "        cccc                                      cccc        \n")
+    expect_string(&e, "      cccc                                          cccc      \n")
+    expect_string(&e, "      cc                                              cc      \n")
+    expect_string(&e, "    cc                                                  cc    \n")
+    expect_string(&e, "    cc                                                  cc    \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "  cc                                                      cc  \n")
+    expect_string(&e, "cccc                                                      cccc\n")
+    expect_string(&e, "  cc                                                      cctt\n")
+    expect_string(&e, "  cc                                                      tttt\n")
+    expect_string(&e, "  cc                                                    tttttt\n")
+    expect_string(&e, "  cc                                                  tttttttt\n")
+    expect_string(&e, "  cc                                                tttttttttt\n")
+    expect_string(&e, "    cc                                            tttttttttttt\n")
+    expect_string(&e, "    cc                                          tttttttttttttt\n")
+    expect_string(&e, "      cc                                      tttttttttttttttt\n")
+    expect_string(&e, "      cccc                                  tttttttttttttttttt\n")
+    expect_string(&e, "        cccc                              tttttttttttttttttttt\n")
+    expect_string(&e, "          cccc                          tttttttttttttttttttttt\n")
+    expect_string(&e, "            cccc                      tttttttttttttttttttttttt\n")
+    expect_string(&e, "                cccc                tttttttttttttttttttttttttt\n")
+    expect_string(&e, "                    cccccccccccccctttttttttttttttttttttttttttt\n")
+    expect_string(&e, "                              cctttttttttttttttttttttttttttttt\n")
+    expect_finished(&e)
 }
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors

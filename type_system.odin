@@ -16,7 +16,8 @@ u8_type :: Type{max(u32) - 8}
 bool_type :: Type{max(u32) - 9}
 invalid_type :: Type{max(u32) - 10}
 unknown_type :: Type{max(u32) - 11}
-max_index :: max(u32) - 12
+type_type :: Type{max(u32) - 12}
+max_index :: max(u32) - 13
 
 dynamic_array_of_strings :: Type{0} // []String
 string_to_nil_type :: Type{1} // (String)
@@ -26,15 +27,18 @@ comptime_u64_to_string_type :: Type{4} // #comptime ((U64) -> String)
 no_args_to_nil_type :: Type{5} // ()
 array_of_strings_to_nil_type :: Type{6} // ([]String)
 i64_to_nil_type :: Type{7} // (I64)
+string_i64_to_string_type :: Type{8} // (String, I64) -> String
 
 GenericTypeValue :: struct {
     generic_type_index: u32, // an index into CheckerState.global_types_with_generics
-    generic_arg:        Type,
+    generic_args:       []Type,
     initialised_type:   Type, // Set to `unknown_type` when not initialised yet
 }
 
 TypeValue :: union {
     ArrayType,
+    OrderedHashMapTypeWithStringKey,
+    OrderedHashMapTypeWithI64Key,
     FuncType,
     GenericTypeValue,
     SumType(Type), // The type is always a struct
@@ -92,6 +96,10 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     switch v in value {
     case ArrayType:
         return v.length ~ v.item_type.index
+    case OrderedHashMapTypeWithStringKey:
+        return v.value_type.index + 1
+    case OrderedHashMapTypeWithI64Key:
+        return v.value_type.index + 2
     case SumType(Type):
         return hash_sum_type(v)
     case Struct(Type, Type):
@@ -99,7 +107,11 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     case FuncType:
         return hash_func_type(v)
     case GenericTypeValue:
-        return v.generic_type_index ~ v.generic_arg.index
+        result := v.generic_type_index
+        for arg in v.generic_args {
+            result ~= arg.index
+        }
+        return result
     }
     panic("Unreachable")
 }
@@ -161,13 +173,25 @@ merge_type_value :: proc(
     bool,
     TypeValue,
 ) {
-    #partial switch va in a {
+    switch va in a {
+    case OrderedHashMapTypeWithStringKey:
+        vb, ok := b.(OrderedHashMapTypeWithStringKey)
+        if ok && va.value_type == vb.value_type {
+            return true, a
+        }
+        return false, nil
+    case OrderedHashMapTypeWithI64Key:
+        vb, ok := b.(OrderedHashMapTypeWithI64Key)
+        if ok && va.value_type == vb.value_type {
+            return true, a
+        }
+        return false, nil
     case ArrayType:
         vb, ok := b.(ArrayType)
-        if !ok {
-            return false, nil
+        if ok && va.length == vb.length && va.item_type.index == vb.item_type.index {
+            return true, a
         }
-        return va.length == vb.length && va.item_type.index == vb.item_type.index, a
+        return false, nil
     case SumType(Type):
         vb, ok := b.(SumType(Type))
         if !ok {
@@ -191,15 +215,25 @@ merge_type_value :: proc(
         if !ok {
             return false, nil
         }
-        if va.generic_type_index == vb.generic_type_index && va.generic_arg == vb.generic_arg {
-            if va.initialised_type != unknown_type {
-                assert(vb.initialised_type == unknown_type)
-                return true, va
-            }
-            return true, vb
+        if va.generic_type_index != vb.generic_type_index {
+            return false, nil
         }
+        if len(va.generic_args) != len(vb.generic_args) {
+            return false, nil
+        }
+        for arg, i in va.generic_args {
+            if arg.index != vb.generic_args[i].index {
+                return false, nil
+            }
+        }
+        if va.initialised_type != unknown_type {
+            assert(vb.initialised_type == unknown_type)
+            return true, va
+        }
+        return true, vb
+    case:
+        panic("Unreachable")
     }
-    return false, nil
 }
 
 merge_struct_types :: proc(

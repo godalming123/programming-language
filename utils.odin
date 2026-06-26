@@ -1,12 +1,11 @@
 package main
 
 import "base:runtime"
-import "core:bufio"
 import "core:fmt"
-import "core:io"
 import "core:math/rand"
 import "core:os"
 import "core:slice"
+import "core:strings"
 import "core:testing"
 
 random_string :: proc(max_length: int, gen := context.random_generator) -> string {
@@ -23,6 +22,10 @@ random_string :: proc(max_length: int, gen := context.random_generator) -> strin
     return string(out)
 }
 
+ansi_clear :: "\033[1;1H\033[2J"
+
+/*
+// OLD(METAPROGRAM_IN_C)
 EOT :: '\x04'
 
 BufferedPipe :: struct {
@@ -58,6 +61,7 @@ close_buffered_pipe :: proc(pipe: BufferedPipe) {
 //         return "", false
 //     }
 // }
+*/
 
 TestingTextExpecter :: struct {
     index:    uint,
@@ -68,39 +72,52 @@ TestingTextExpecter :: struct {
 expect_string :: proc(
     comparer: ^TestingTextExpecter,
     expected: string,
-    loc1: runtime.Source_Code_Location,
-    loc2 := #caller_location,
+    first_location := #caller_location,
+    other_locations: ..runtime.Source_Code_Location,
 ) {
-    half_format :: "expect_string called from file %s at line %d column %d\n"
-    format :: half_format + half_format
+    build_error_info :: proc(
+        first_location: runtime.Source_Code_Location,
+        other_locations: []runtime.Source_Code_Location,
+    ) -> strings.Builder {
+        add_code_location :: proc(b: ^strings.Builder, loc: runtime.Source_Code_Location) {
+            strings.write_string(b, "expect_string called from file ")
+            strings.write_string(b, loc.file_path)
+            strings.write_string(b, " at line ")
+            strings.write_int(b, int(loc.line))
+            strings.write_string(b, " column ")
+            strings.write_int(b, int(loc.column))
+            strings.write_byte(b, '\n')
+        }
+        builder := strings.builder_make()
+        add_code_location(&builder, first_location)
+        for other_location in other_locations {
+            add_code_location(&builder, other_location)
+        }
+        return builder
+    }
     start := comparer.index
     comparer.index += len(expected)
-    if comparer.index >= len(comparer.got_text) {
-        formatted := fmt.aprintf(
-            format + "Expected text is longer than got text",
-            loc1.file_path,
-            loc1.line,
-            loc1.column,
-            loc2.file_path,
-            loc2.line,
-            loc2.column,
-        )
-        testing.fail_now(comparer.t, formatted)
+    if comparer.index > len(comparer.got_text) {
+        builder := build_error_info(first_location, other_locations)
+        strings.write_string(&builder, "Expected text is longer than got text")
+        testing.fail_now(comparer.t, strings.to_string(builder))
     }
     got := comparer.got_text[start:comparer.index]
     if got != expected {
-        formatted := fmt.aprintf(
-            format + "\nMismatching expect_string: Got %q expected %q",
-            loc1.file_path,
-            loc1.line,
-            loc1.column,
-            loc2.file_path,
-            loc2.line,
-            loc2.column,
-            got,
-            expected,
-        )
-        testing.fail_now(comparer.t, formatted)
+        builder := build_error_info(first_location, other_locations)
+        strings.write_string(&builder, "Mismatching expect_string: Got ")
+        strings.write_quoted_string(&builder, got)
+        strings.write_string(&builder, " expected ")
+        strings.write_quoted_string(&builder, expected)
+        testing.fail_now(comparer.t, strings.to_string(builder))
+    }
+}
+
+expect_finished :: proc(e: ^TestingTextExpecter) {
+    if e.index < len(e.got_text) {
+        testing.fail_now(e.t, fmt.aprintf("Got additional code %q", e.got_text[e.index:]))
+    } else {
+        testing.expect(e.t, e.index == len(e.got_text))
     }
 }
 
@@ -119,7 +136,6 @@ OrderedMap :: struct(Key: typeid, Value: typeid) {
     elements: []OrderedMapElement(Key, Value),
     map: map[Key]uint,
 }
-*/
 
 combine_u32 :: proc(a: u32, b: u32) -> (out: u64) {
     out = u64(a) << 32
@@ -131,6 +147,45 @@ separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
     a = u32(combined >> 32)
     b = u32(combined)
     return
+}
+*/
+
+// Like a dynamic array, except can also be inserted into in average O(1) time
+Dynamic :: struct(T: typeid) {
+    elems:       [dynamic]T,
+    start_index: int,
+}
+
+dynamic_grow_front :: proc(array: ^Dynamic($T), grow_by: int) {
+    old_start_index := array.start_index
+    array.start_index += grow_by
+
+    old_elems := array.elems
+    array.elems = make([dynamic]T, cap(array.elems) + grow_by)
+
+    copy_slice(array.elems[array.start_index:], old_elems[old_start_index:])
+    delete(old_elems)
+}
+
+dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
+    if array.start_index < len(elems) {
+        dynamic_grow_front(array, max(len(array.elems), len(elems)))
+    }
+    array.start_index -= len(elems)
+    copy(array.elems[array.start_index:], elems)
+}
+
+dynamic_append_elem :: proc(array: ^Dynamic($T), elem: T) {
+    append_elem(&array.elems, elem)
+}
+
+dynamic_to_fixed :: proc(array: Dynamic($T)) -> []T {
+    return array.elems[array.start_index:]
+}
+
+insert :: proc {
+    dynamic_insert,
+    ordered_hash_set_insert,
 }
 
 up_line :: "\033[A"

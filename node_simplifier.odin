@@ -41,7 +41,8 @@ create_joined_values :: proc(
          .IsGreaterThanOrEqual,
          .IsLessThanOrEqual,
          .Modulo,
-         .StringConcat: // TODO
+         .StringConcat,
+         .In: // TODO
     case .Append, .Concat, .Colon, .Arrow:
         panic(fmt.aprintf("Unreachable (%v)", method))
     case .Multiplication, .Division, .Addition, .Subtraction:
@@ -62,11 +63,132 @@ create_joined_values :: proc(
                 panic("Unreachable")
             }
         }
-        flip_values = val0_is_comptime
+        // TODO: Be able to move the constant right for non-commutative operations
+        flip_values = val0_is_comptime && (method == .Multiplication || method == .Addition)
     }
     if flip_values {
         return CheckedJoinedValues{method, new_clone(val1), new_clone(val0)}
     }
     return CheckedJoinedValues{method, new_clone(val0), new_clone(val1)}
+}
+
+iterate_array :: proc(
+    loop_index: uint,
+    index_variable: VariableRef,
+    value_variable: VariableRef,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+    array_value: CheckedValue,
+    array_type: ArrayType,
+) -> CheckedLoop {
+    loop_enter := make([]CheckedStatement, 1)
+    loop_enter[0] = CheckedMutation{index_variable, CompileTimeValue(NumberValue{int_zero})}
+
+    if_block := make([]CheckedStatement, 1)
+    if_block[0] = BreakLoop{loop_index}
+    insert(
+        body,
+        CheckedIf {
+            create_joined_values(
+                .IsGreaterThanOrEqual,
+                index_variable,
+                length_of_array(array_type, array_value),
+            ),
+            CheckedBlock{nil, if_block},
+            CheckedBlock{},
+        },
+        CheckedMutation {
+            value_variable,
+            CheckedArrayAccess{new_clone(array_value), new_clone(CheckedValue(index_variable))},
+        },
+    )
+    continue_code := make([]CheckedStatement, 1)
+    continue_code[0] = CheckedMutation {
+        index_variable,
+        create_joined_values(
+            .Addition,
+            index_variable,
+            CompileTimeValue(NumberValue{big_int_from_i64(1)}),
+        ),
+    }
+    return CheckedLoop {
+        loop_index,
+        body_variables,
+        loop_enter,
+        continue_code,
+        dynamic_to_fixed(body^),
+    }
+}
+
+iterate_start_end_step :: proc(
+    loop_index: uint,
+    index_variable: VariableRef,
+    type: NumericIteratorType,
+    start: CheckedValue,
+    end: CheckedValue,
+    step: CheckedValue,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+) -> CheckedLoop {
+    // TODO: Handle when `step` is negative
+    loop_enter := make([]CheckedStatement, 1)
+    loop_enter[0] = CheckedMutation{index_variable, start}
+    if_block := make([]CheckedStatement, 1)
+    if_block[0] = BreakLoop{loop_index}
+    insert(
+        body,
+        CheckedIf {
+            create_joined_values(
+                type == .IncludeEndValue ? .IsGreaterThan : .IsGreaterThanOrEqual,
+                index_variable,
+                end,
+            ),
+            CheckedBlock{nil, if_block},
+            CheckedBlock{},
+        },
+    )
+    loop_continue := make([]CheckedStatement, 1)
+    loop_continue[0] = CheckedMutation {
+        index_variable,
+        create_joined_values(.Addition, index_variable, step),
+    }
+    return CheckedLoop {
+        loop_index,
+        body_variables,
+        loop_enter,
+        loop_continue,
+        dynamic_to_fixed(body^),
+    }
+}
+
+iterate_ordered_hash_map :: proc(
+    loop_index: uint,
+    hash_map: CheckedValue,
+    index_variable: VariableRef,
+    key_variable: VariableRef,
+    value_variable: VariableRef,
+    body: ^Dynamic(CheckedStatement),
+    body_variables: []Type,
+) -> CheckedLoop {
+    keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)} // TODO: Handle for I64 keys
+    insert(
+        body,
+        CheckedMutation {
+            value_variable,
+            CheckedOrderedHashMapAccess {
+                new_clone(hash_map),
+                new_clone(CheckedValue(key_variable)),
+            },
+        },
+    )
+    return iterate_array(
+        loop_index,
+        index_variable,
+        key_variable,
+        body,
+        body_variables,
+        keys,
+        ArrayType{0, string_type},
+    )
 }
 

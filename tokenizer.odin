@@ -21,6 +21,7 @@ GreaterThanOrEqualToken :: struct {} // >=
 OpenBraceToken :: struct {} // {
 CloseBraceToken :: struct {} // }
 CommaToken :: struct {} // ,
+AtToken :: struct {} // @
 ColonToken :: struct {} // :
 ColonColonToken :: struct {} // ::
 SemiColonToken :: struct {} // ;
@@ -44,6 +45,8 @@ ElseToken :: struct {} // else
 ImportToken :: struct {} // import
 ReturnToken :: struct {} // return
 YieldToken :: struct {} // yield
+ContinueToken :: struct {} // continue
+UnreachableToken :: struct {} // unreachable
 AndToken :: struct {} // and
 OrToken :: struct {} // or
 MatchToken :: struct {} // match
@@ -71,6 +74,7 @@ TokenContents :: union {
     OpenBraceToken,
     CloseBraceToken,
     CommaToken,
+    AtToken,
     ColonToken,
     ColonColonToken,
     SemiColonToken,
@@ -90,6 +94,8 @@ TokenContents :: union {
     ForToken,
     WhileToken,
     IfToken,
+    ContinueToken,
+    UnreachableToken,
     ElseToken,
     ImportToken,
     ReturnToken,
@@ -128,6 +134,8 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "a greater than or equal sign (`>=`)"
     case CommaToken:
         return "a comma (`,`)"
+    case AtToken:
+        return "an at sign (`@`)"
     case ColonToken:
         return "`:`"
     case ColonColonToken:
@@ -182,6 +190,10 @@ token_contents_to_string :: proc(token: TokenContents) -> string {
         return "the keyword `return`"
     case YieldToken:
         return "the keyword `yield`"
+    case ContinueToken:
+        return "the keyword `continue`"
+    case UnreachableToken:
+        return "the keyword `unreachable`"
     case AndToken:
         return "the keyword `and`"
     case OrToken:
@@ -429,6 +441,9 @@ tokenizer_get_next_token :: proc(
     case ',':
         state.index += 1
         state.last_token = CommaToken{}
+    case '@':
+        state.index += 1
+        state.last_token = AtToken{}
     case ':':
         state.index += 1
         if state.index < len(file.code) && file.code[state.index] == ':' {
@@ -524,6 +539,10 @@ tokenizer_get_next_token :: proc(
             state.last_token = ReturnToken{}
         case "yield":
             state.last_token = YieldToken{}
+        case "continue":
+            state.last_token = ContinueToken{}
+        case "unreachable":
+            state.last_token = UnreachableToken{}
         case "and":
             state.last_token = AndToken{}
         case "or":

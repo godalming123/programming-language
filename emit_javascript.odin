@@ -17,8 +17,18 @@ emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
 
 emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
+    case OrderedHashMapInitFunc:
+        panic("TODO")
+    case CheckedOrderedHashMapAccess,
+         KeysOfOrderedHashMapWithStringKey,
+         KeysOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CompileTimeValue:
         switch comptime in v {
+        case Type, UninitialisedOrderedHashMapType:
+            panic("Unreachable")
+        case GlobalTypeWithGenericRef:
+            panic("Unreachable")
         case StringLiteralValue:
             strings.write_byte(&s.b, '"')
             for char in comptime {
@@ -56,6 +66,10 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case LengthOfArray:
         emit_js_value(s, v.array^)
         strings.write_string(&s.b, ".length")
+    case LengthOfOrderedHashMapWithStringKey:
+        panic("TODO")
+    case LengthOfOrderedHashMapWithI64Key:
+        panic("TODO")
     case CheckedArrayAccess:
         emit_js_value(s, v.array^)
         strings.write_byte(&s.b, '[')
@@ -83,10 +97,18 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         emit_js_value(s, v.str1^)
         strings.write_byte(&s.b, ')')
     case CheckedJoinedValues:
+        if v.join_method == .In {
+            strings.write_string(&s.b, "in_map(")
+            emit_js_value(s, v.val0^)
+            strings.write_string(&s.b, ", ")
+            emit_js_value(s, v.val1^)
+            strings.write_string(&s.b, ")")
+            return
+        }
         strings.write_byte(&s.b, '(')
         emit_js_value(s, v.val0^)
         switch v.join_method {
-        case .Append, .Concat, .Colon, .Arrow:
+        case .Append, .Concat, .Colon, .Arrow, .In:
             panic("Unreachable")
         case .BooleanAnd:
             strings.write_string(&s.b, "&&")
@@ -129,6 +151,8 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
     switch t in s.types.values[index].value.value {
+    case OrderedHashMapTypeWithStringKey:
+    case OrderedHashMapTypeWithI64Key:
     case ArrayType:
     case FuncType:
     case GenericTypeValue:
@@ -196,6 +220,8 @@ emit_js_block_body :: proc(
 ) {
     for statement in body {
         switch stmt in statement {
+        case UnreachableStatement:
+            strings.write_string(&s.b, "throw new Error(\"Unreachable\")")
         case CheckedFunctionCall:
             emit_js_func_call(s, stmt)
             strings.write_byte(&s.b, ';')
@@ -237,13 +263,17 @@ emit_js_block_body :: proc(
             emit_js_block(s, nesting_level + 1, stmt.variables, stmt.enter)
             strings.write_string(&s.b, "loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_string(&s.b, ": while (true) {")
+            strings.write_string(&s.b, ": while (true) {loop")
+            strings.write_uint(&s.b, stmt.loop_index)
+            strings.write_string(&s.b, "_body: do {")
             emit_js_block(s, nesting_level + 1, nil, stmt.body)
+            strings.write_string(&s.b, "} while (false)")
+            emit_js_block(s, nesting_level + 1, nil, stmt.continue_code)
             strings.write_string(&s.b, "}}")
         case ContinueLoop:
-            strings.write_string(&s.b, "continue loop")
+            strings.write_string(&s.b, "break loop")
             strings.write_uint(&s.b, stmt.loop_index)
-            strings.write_byte(&s.b, ';')
+            strings.write_string(&s.b, "_body;")
         case BreakLoop:
             strings.write_string(&s.b, "break loop")
             strings.write_uint(&s.b, stmt.loop_index)
@@ -268,25 +298,8 @@ emit_js_block_body :: proc(
             }
             strings.write_string(&s.b, "];")
         case CheckedMutation:
-            emit_variable(&s.b, stmt.destination.variable)
-            if stmt.destination.index != nil {
-                strings.write_byte(&s.b, '[')
-                emit_js_value(s, stmt.destination.index)
-                strings.write_byte(&s.b, ']')
-
-            }
-            switch stmt.mutation_type {
-            case .SetTo:
-                strings.write_byte(&s.b, '=')
-            case .IncrementBy:
-                strings.write_string(&s.b, "+=")
-            case .DecrementBy:
-                strings.write_string(&s.b, "-=")
-            case .MultiplyBy:
-                strings.write_string(&s.b, "*=")
-            case .DivideBy:
-                strings.write_string(&s.b, "/=")
-            }
+            emit_js_value(s, stmt.destination)
+            strings.write_byte(&s.b, '=')
             emit_js_value(s, stmt.value)
             strings.write_byte(&s.b, ';')
         }
@@ -322,6 +335,7 @@ emit_js_block :: proc(
 
 emit_javascript :: proc(c: Checked) -> strings.Builder {
     s := GeneralEmitterState{strings.builder_make(), c.types, c}
+    strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
     for _, index in c.types.values {
         emit_js_global_type(&s, index)
