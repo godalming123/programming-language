@@ -19,16 +19,15 @@ UI[State] : {
     ui_contents: []Elem[State],
 }
 
-reactive_page = #comptime |
-	reactivity_function_id: U64, // TODO: Check that the type is `(T) -> UI[T]`
-	initial_state_js: String, // TODO: Check that the type is `T`
+reactive_page[T] = #comptime |
+	reactivity_function: (T) -> UI[T],
+	initial_state: T,
 | -> String {
     glue = #load "./html.js"
-    js =
-        compiler.emit_js_code(reactivity_function_id) &
-        "let state = " & initial_state_js & ";"
-        "const state_to_ui = func" & reactivity_function_id.to_str & ";" &
-        glue
+    mut map = OrderedHashMap[String, Any]()
+    ~map["state_to_ui"] = reactivity_function
+    ~map["state"] = initial_state
+    js = compiler.emit_js_code(glue, map)
     // The close tags are split up so that the browser interprets them as JS strings rather than HTML close tags
 	// TODO: JS should be tree-shaked so the `reactive_page` function shouldn't even be included in the emitted JS code
     return

@@ -9,11 +9,6 @@ import "core:strings"
 FileRef :: struct {
     index: uint, // An index into `ParsedProject.files`
 }
-GlobalValue :: struct {
-    unit: Unit,
-    file: FileRef,
-}
-
 get_next_token :: proc(
     s: ^ParserState,
     skip_newlines_and_comments_and_semicolons: bool,
@@ -27,34 +22,18 @@ get_next_token :: proc(
     )
 }
 
-wrong_token_err :: proc(
-    s: ^ParserState,
-    expected_possibilities: []string,
-    infos: ..string,
-    loc := #caller_location,
-) {
-    tokenizer_wrong_token_err(
-        &s.tokenizer_state,
-        s.files[s.file_ref.index].file,
-        expected_possibilities,
-        ..infos,
-        loc = loc,
-    )
-}
-
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
     // Updated every time the parser starts parsing a different file
-    file_ref:                      FileRef,
-    using tokenizer_state:         TokenizerState,
+    file_ref:                       FileRef,
+    using tokenizer_state:          TokenizerState,
 
     // Grow as the project is parsed
-    files_map:                     map[string]FileRef,
-    files:                         [dynamic]File,
-    global_types_without_generics: [dynamic]GlobalTypeWithoutGeneric,
-    global_types_with_generics:    [dynamic]GlobalTypeWithGeneric,
-    global_values:                 [dynamic]GlobalValue,
-    function_defs:                 [dynamic]FunctionDefinition,
+    files_map:                      map[string]FileRef,
+    files:                          #soa[dynamic]File,
+    global_values_without_generics: [dynamic]GlobalValueWithoutGeneric,
+    global_values_with_generics:    [dynamic]GlobalValueWithGeneric,
+    function_defs:                  [dynamic]FunctionDefinition,
 }
 
 // Does not include the `{`
@@ -79,20 +58,22 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             if len(token) != 1 {
                 return wrong_token(s)
             }
-            field = token[0]
+            field = IdentAndPos{token[0].ident, Pos{token[0].index, s.file_ref}}
         case:
             return wrong_token(s)
         }
         if field.ident in fields_map {
             file := s.files[s.file_ref.index]
-            line, col := get_location(file.file.code, fields[fields_map[field.ident]].name.pos)
+            loc := get_location(
+                s.files.file[:len(s.files)],
+                fields[fields_map[field.ident]].name.pos,
+            )
             diagnostic(
-                file.file,
+                s.files.file[:len(s.files)],
                 field.pos,
-                "There is already a field called `%s` defined in this struct on line %d column %d",
+                "There is already a field called `%s` defined in this struct at %s",
                 field.ident,
-                line,
-                col,
+                loc,
             )
             return Struct(Unit, struct {}){}, false
         }
@@ -141,7 +122,7 @@ parse_initial_unit :: proc(
     bool,
 ) {
     out := Unit {
-        pos = s.last_token_pos,
+        pos = Pos{s.last_token_pos, s.file_ref},
     }
     e :: proc(
         s: ^ParserState,
@@ -190,8 +171,8 @@ parse_initial_unit :: proc(
         )
         if join_err != nil {
             diagnostic(
-                s.files[s.file_ref.index].file,
-                max(uint),
+                s.files.file[:len(s.files)],
+                unknown_pos,
                 "Failed to join filepath: %v",
                 join_err,
             )
@@ -203,8 +184,8 @@ parse_initial_unit :: proc(
             data, data_err := os.read_entire_file(joined, context.allocator)
             if data_err != nil {
                 diagnostic(
-                    s.files[s.file_ref.index].file,
-                    s.last_token_pos,
+                    s.files.file[:len(s.files)],
+                    Pos{s.last_token_pos, s.file_ref},
                     "Failed to read `%s`: %#v",
                     joined,
                     data_err,
@@ -212,7 +193,7 @@ parse_initial_unit :: proc(
                 return Unit{}, nil, false
             }
             out.value = Import{FileRef{len(s.files)}}
-            append_elem(
+            append_soa_elem(
                 &s.files,
                 File{nil, CompilerFile{string(data), joined, filepath.dir(joined)}},
             )
@@ -257,8 +238,8 @@ parse_initial_unit :: proc(
                 variant_name := token2[0]
                 if variant_name.ident in variants_map {
                     diagnostic(
-                        s.files[s.file_ref.index].file,
-                        variant_name.pos,
+                        s.files.file[:len(s.files)],
+                        Pos{variant_name.index, s.file_ref},
                         "There is already a variant called `%s` in this sum type",
                         variant_name.ident,
                     )
@@ -277,7 +258,10 @@ parse_initial_unit :: proc(
                 variants_map[variant_name.ident] = len(&variants)
                 append(
                     &variants,
-                    SumTypeVariant(Struct(Unit, struct {})){variant_name, variant_payload},
+                    SumTypeVariant(Struct(Unit, struct {})) {
+                        IdentAndPos{variant_name.ident, Pos{variant_name.index, s.file_ref}},
+                        variant_payload,
+                    },
                 )
                 #partial switch _ in s.last_token {
                 case:
@@ -326,17 +310,17 @@ parse_initial_unit :: proc(
         return out, other_possible_tokens, true
 
     case IdentToken:
-        out.value = Ident(token)
+        out.value = make_ident(token, s.file_ref)
 
     case MarkerToken:
-        markers := [dynamic]IdentAndPos{{string(token), s.last_token_pos}}
+        markers := [dynamic]IdentAndPos{{string(token), Pos{s.last_token_pos, s.file_ref}}}
         for {
             get_next_token(s, false)
             marker, is_marker := s.last_token.(MarkerToken)
             if !is_marker {
                 break
             }
-            append_elem(&markers, IdentAndPos{string(marker), s.last_token_pos})
+            append_elem(&markers, IdentAndPos{string(marker), Pos{s.last_token_pos, s.file_ref}})
         }
         value_pos := s.last_token_pos
         val, descriptions_of_other_possible_tokens, ok := parse_initial_unit(s, nil)
@@ -465,7 +449,7 @@ parse_unit :: proc(
     s: ^ParserState,
     descriptions_of_other_possible_tokens: ..string,
 ) -> ParsedUnit {
-    value_pos := s.last_token_pos
+    value_pos := Pos{s.last_token_pos, s.file_ref}
     val, other_possible_tokens, ok := parse_initial_unit(s, descriptions_of_other_possible_tokens)
     if !ok {
         return ParsedUnit{ok = false}
@@ -620,7 +604,7 @@ parse_possible_loop_label :: proc(s: ^ParserState) -> (IdentAndPos, bool) {
             return IdentAndPos{}, false
         }
         get_next_token(s, false)
-        return ident[0], true
+        return IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}, true
     }
     return IdentAndPos{}, true
 }
@@ -646,7 +630,7 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
             wrong_token_err(s, possible)
             return ForInLoop{}, false
         }
-        variables[variable_index] = ident[0]
+        variables[variable_index] = IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}
         variable_index += 1
 
         get_next_token(s, false)
@@ -659,8 +643,8 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
         case CommaToken:
             if variable_index >= 3 {
                 diagnostic(
-                    s.files[s.file_ref.index].file,
-                    s.last_token_pos,
+                    s.files.file[:len(s.files)],
+                    Pos{s.last_token_pos, s.file_ref},
                     "There cannot be more than 3 variables in a for loop head (the iteration the for loop is on, the key of the thing being iterated over, and the value of the thing being iterated over)",
                 )
                 return ForInLoop{}, false
@@ -715,7 +699,7 @@ parse_if :: proc(s: ^ParserState) -> (^IfElseStatement, [dynamic]string, bool) {
     get_next_token(s, true)
     #partial switch _ in s.last_token {
     case ElseToken:
-        else_pos := s.last_token_pos
+        else_pos := Pos{s.last_token_pos, s.file_ref}
         get_next_token(s, true)
         #partial switch _ in s.last_token {
         case:
@@ -769,7 +753,13 @@ get_identifier :: proc(
     if !is_open_square_brace {
         others := make([dynamic]string, 1)
         others[0] = "`[`"
-        return VariableDest{ident, variable_dest_type, nil}, others, true
+        return VariableDest {
+                IdentAndPos{ident.ident, Pos{ident.index, s.file_ref}},
+                variable_dest_type,
+                nil,
+            },
+            others,
+            true
     }
     get_next_token(s, true)
     value := parse_unit(s)
@@ -783,7 +773,13 @@ get_identifier :: proc(
         return VariableDest{}, nil, false
     }
     get_next_token(s, true)
-    return VariableDest{ident, variable_dest_type, new_clone(value.unit)}, nil, true
+    return VariableDest {
+            IdentAndPos{ident.ident, Pos{ident.index, s.file_ref}},
+            variable_dest_type,
+            new_clone(value.unit),
+        },
+        nil,
+        true
 }
 
 
@@ -836,7 +832,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
     get_next_token(s, true)
     other_possible_tokens := [dynamic]string{}
     for {
-        pos := s.last_token_pos
+        pos := Pos{s.last_token_pos, s.file_ref}
         #partial switch_stmt: switch token in s.last_token {
         case:
             // TODO: I would like to remove this mingling of expected tokens as it makes the error messages less clear
@@ -943,7 +939,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                     return nil, false
                 }
                 get_next_token(s, true)
-                variable := Ident(token)
+                variable := make_ident(token, s.file_ref)
                 append_elem(
                     &out,
                     Statement{pos, CallWithBrackets{new_clone(Unit{pos, variable}), args}},
@@ -955,8 +951,8 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             }
             if len(token) != 1 {
                 diagnostic(
-                    s.files[s.file_ref.index].file,
-                    s.last_token_pos,
+                    s.files.file[:len(s.files)],
+                    Pos{s.last_token_pos, s.file_ref},
                     "TODO: Support assigns where the destination has more than one segment",
                 )
                 return nil, false
@@ -965,7 +961,11 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             ok: bool = ---
             stmt, other_possible_tokens, ok = parse_variable_management_after_first_var(
                 s,
-                VariableDest{IdentAndPos{token[0].ident, s.last_token_pos}, .Constant, nil},
+                VariableDest {
+                    IdentAndPos{token[0].ident, Pos{s.last_token_pos, s.file_ref}},
+                    .Constant,
+                    nil,
+                },
             )
             if !ok {
                 return nil, false
@@ -990,7 +990,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                     wrong_token_err(s, []string{"An identifier with one segment"})
                     return nil, false
                 }
-                label = ident[0]
+                label = IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}
                 get_next_token(s, true)
             }
             clear_dynamic_array(&other_possible_tokens)
@@ -1212,14 +1212,14 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
                     wrong_token_err(s, expected)
                     return FunctionDefinition{}, false
                 }
-                arg.name = token2[0]
+                arg.name = IdentAndPos{token2[0].ident, Pos{token2[0].index, s.file_ref}}
             }
         case IdentToken:
             if len(token) != 1 {
                 wrong_token_err(s, expected)
                 return FunctionDefinition{}, false
             }
-            arg.name = token[0]
+            arg.name = IdentAndPos{token[0].ident, Pos{token[0].index, s.file_ref}}
         }
 
         get_next_token(s, true)
@@ -1280,29 +1280,25 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
     return FunctionDefinition{args[:], new_clone(return_type), block, nil}, true
 }
 
-GlobalTypeWithGeneric :: struct {
+GlobalValueWithGeneric :: struct {
     name:     string,
-    generics: []IdentAndPos, // The parser should check that the name of each generic argument is unique
+    generics: []IdentAndPos, // The parser checks that the name of each generic argument is unique
     value:    Unit,
     file:     FileRef,
 }
 
-GlobalTypeWithoutGeneric :: struct {
-    name:  string,
-    value: Unit,
-    file:  FileRef,
+GlobalValueWithoutGeneric :: struct {
+    name: string,
+    unit: Unit,
+    file: FileRef,
 }
 
-GlobalTypeWithGenericRef :: struct {
-    index: u32,
+GlobalValueWithGenericRef :: struct {
+    index: u32, // An index into `CheckerState.global_values_with_generic`
 }
 
-GlobalTypeWithoutGenericRef :: struct {
-    index: uint, // An index into `CheckerState.global_types_without_generics`
-}
-
-GlobalValueRef :: struct {
-    index: uint, // An index into `File.global_values`
+GlobalValueWithoutGenericRef :: struct {
+    index: uint, // An index into `CheckerState.global_values_without_generics`
 }
 
 Import :: struct {
@@ -1310,12 +1306,9 @@ Import :: struct {
 }
 
 ParsedGlobal :: struct {
-    pos:   uint,
-    value: union {
-        GlobalValueRef,
-        GlobalTypeWithGenericRef,
-        GlobalTypeWithoutGenericRef,
-    },
+    pos:          uint,
+    index:        u32,
+    has_generics: bool,
 }
 
 parse_file :: proc(s: ^ParserState) -> bool {
@@ -1335,26 +1328,25 @@ parse_file :: proc(s: ^ParserState) -> bool {
         case EndOfFileToken:
             return true
         case IdentToken:
-            position := s.last_token_pos
+            position := Pos{s.last_token_pos, s.file_ref}
             if len(token) != 1 {
                 wrong_token_err(s, other_possible_tokens[:])
                 return false
             }
             name := token[0].ident
             if def, exists := s.files[s.file_ref.index].globals[name]; exists {
-                line, column := get_location(s.files[s.file_ref.index].file.code, def.pos)
+                loc := get_location(s.files.file[:len(s.files)], Pos{def.pos, s.file_ref})
                 diagnostic(
-                    s.files[s.file_ref.index].file,
+                    s.files.file[:len(s.files)],
                     position,
-                    "The global `%s` is already declared at line %d and column %d",
+                    "The global `%s` is already declared at %s",
                     name,
-                    line,
-                    column,
+                    loc,
                 )
                 return false
             }
             get_next_token(s, false)
-            generic_map := make(map[string]uint) // The key is the position of the generic arg
+            generic_map := make(map[string]Pos) // The key is the position of the generic arg
             generic := make([dynamic]IdentAndPos)
             _, is_open_square_bracket := s.last_token.(OpenSquareBracketToken)
             if is_open_square_bracket {
@@ -1369,20 +1361,20 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     }
 
                     if segments[0].ident in generic_map {
-                        file := s.files[s.file_ref.index].file
-                        line, col := get_location(file.code, generic_map[segments[0].ident])
+                        pos := generic_map[segments[0].ident]
+                        loc := get_location(s.files.file[:len(s.files)], pos)
                         diagnostic(
-                            file,
-                            s.last_token_pos,
-                            "There is already a generic argument called `%s` defined on line %d column %d in this global type",
+                            s.files.file[:len(s.files)],
+                            Pos{s.last_token_pos, s.file_ref},
+                            "There is already a generic argument called `%s` defined on %s in this global type",
                             segments[0].ident,
-                            line,
-                            col,
+                            loc,
                         )
                         return false
                     }
-                    append_elem(&generic, segments[0])
-                    generic_map[segments[0].ident] = segments[0].pos
+                    pos := Pos{segments[0].index, s.file_ref}
+                    append_elem(&generic, IdentAndPos{segments[0].ident, pos})
+                    generic_map[segments[0].ident] = pos
 
                     get_next_token(s, false)
                     _, is_comma := s.last_token.(CommaToken)
@@ -1403,7 +1395,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
                 if len(generic) == 0 {
                     diagnostic(
-                        s.files[s.file_ref.index].file,
+                        s.files.file[:len(s.files)],
                         position,
                         "The parser is interpreting this as a non-generic type\nThe empty `[]` can be omitted",
                         type = "Warning",
@@ -1431,29 +1423,31 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 }
                 if len(generic) == 0 {
                     s.files[s.file_ref.index].globals[name] = ParsedGlobal {
-                        position,
-                        GlobalTypeWithoutGenericRef{len(s.global_types_without_generics)},
+                        position.index,
+                        u32(len(s.global_values_without_generics)),
+                        false,
                     }
                     append_elem(
-                        &s.global_types_without_generics,
-                        GlobalTypeWithoutGeneric{name, type.unit, s.file_ref},
+                        &s.global_values_without_generics,
+                        GlobalValueWithoutGeneric{name, type.unit, s.file_ref},
                     )
                 } else {
                     s.files[s.file_ref.index].globals[name] = ParsedGlobal {
-                        position,
-                        GlobalTypeWithGenericRef{u32(len(s.global_types_with_generics))},
+                        position.index,
+                        u32(len(s.global_values_with_generics)),
+                        true,
                     }
                     append_elem(
-                        &s.global_types_with_generics,
-                        GlobalTypeWithGeneric{name, generic[:], type.unit, s.file_ref},
+                        &s.global_values_with_generics,
+                        GlobalValueWithGeneric{name, generic[:], type.unit, s.file_ref},
                     )
                 }
                 other_possible_tokens = type.descriptions_of_other_possible_tokens
             case AssignToken:
                 if len(generic) != 0 {
                     diagnostic(
-                        s.files[s.file_ref.index].file,
-                        s.last_token_pos,
+                        s.files.file[:len(s.files)],
+                        Pos{s.last_token_pos, s.file_ref},
                         "Cannot define global value with generic argument",
                     )
                     return false
@@ -1464,10 +1458,14 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     return false
                 }
                 s.files[s.file_ref.index].globals[name] = ParsedGlobal {
-                    position,
-                    GlobalValueRef{len(s.global_values)},
+                    position.index,
+                    u32(len(s.global_values_without_generics)),
+                    false,
                 }
-                append_elem(&s.global_values, GlobalValue{value.unit, s.file_ref})
+                append_elem(
+                    &s.global_values_without_generics,
+                    GlobalValueWithoutGeneric{name, value.unit, s.file_ref},
+                )
                 other_possible_tokens = value.descriptions_of_other_possible_tokens
             }
         }
@@ -1476,10 +1474,9 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
 ParsedProject :: struct {
     files_map:                     map[string]FileRef,
-    files:                         []File,
-    global_types_without_generics: []GlobalTypeWithoutGeneric,
-    global_types_with_generics:    []GlobalTypeWithGeneric,
-    global_values:                 []GlobalValue,
+    files:                         #soa[]File,
+    global_values_without_generic: []GlobalValueWithoutGeneric,
+    global_values_with_generics:   []GlobalValueWithGeneric,
     function_defs:                 []FunctionDefinition,
 }
 
@@ -1498,7 +1495,7 @@ parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, bool)
     }
 
     state := ParserState{}
-    append_elem(
+    append_soa_elem(
         &state.files,
         File {
             nil,
@@ -1527,9 +1524,8 @@ parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, bool)
     return ParsedProject {
             state.files_map,
             state.files[:],
-            state.global_types_without_generics[:],
-            state.global_types_with_generics[:],
-            state.global_values[:],
+            state.global_values_without_generics[:],
+            state.global_values_with_generics[:],
             state.function_defs[:],
         },
         true

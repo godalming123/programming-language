@@ -198,10 +198,10 @@ join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     return dyn[:]
 }
 
-// Set the position to max(uint) to not have a position for the error message
+// Set the position to `unknown_pos` to not have a position for the error message
 diagnostic :: proc(
-    file: CompilerFile,
-    position: uint,
+    files: []CompilerFile,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     type: string = "Error",
@@ -209,7 +209,7 @@ diagnostic :: proc(
     newline_after: bool = false,
     loc := #caller_location,
 ) {
-    when debug_tokenizer || debug_checker {
+    when debug_diagnostics {
         print_call(loc, "diagnostic")
     }
     if newline_before {
@@ -217,18 +217,11 @@ diagnostic :: proc(
     }
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
-    if position == max(uint) {
-        fmt.eprintf("%s compiling `%s`:\n%s\n", type, file.file_path, message)
+    if position == unknown_pos {
+        fmt.eprintf("%s compiling %s\n%s\n", type, message)
     } else {
-        line, column := get_location(file.code, position)
-        fmt.eprintf(
-            "%s compiling `%s`:\nLine %d column %d:\n%s\n",
-            type,
-            file.file_path,
-            line,
-            column,
-            message,
-        )
+        loc := get_location(files, position)
+        fmt.eprintf("%s compiling %s\n%s\n", type, loc, message)
     }
     if newline_after {
         fmt.println("")
@@ -237,7 +230,7 @@ diagnostic :: proc(
 
 err :: proc(
     s: ^CheckerState,
-    position: uint,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     loc := #caller_location,
@@ -246,7 +239,7 @@ err :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_errors += 1
     diagnostic(
-        s.files[s.file.index].file,
+        s.files.file[:len(s.files)],
         position,
         message_fmt,
         ..message_args,
@@ -259,7 +252,7 @@ err :: proc(
 
 warn :: proc(
     s: ^CheckerState,
-    position: uint,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     loc := #caller_location,
@@ -268,7 +261,7 @@ warn :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_warnings += 1
     diagnostic(
-        s.files[s.file.index].file,
+        s.files.file[:len(s.files)],
         position,
         message_fmt,
         ..message_args,

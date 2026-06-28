@@ -31,7 +31,7 @@ RuntimeValue :: union {
     RuntimeStructTypeInitFunc,
     RuntimeSumType,
     SumTypeInitFunc,
-    FuncDefinitionRef,
+    CheckedFuncRef,
     BuiltinFunction,
 }
 
@@ -75,7 +75,7 @@ Frame :: struct {
 
 BuiltinHandler :: struct {
     data:      rawptr,
-    procedure: proc(state: ^InterpState, index: u32, args: []RuntimeValue) -> RuntimeValue,
+    procedure: proc(state: ^InterpState, f: BuiltinFunction, args: []RuntimeValue) -> RuntimeValue,
 }
 
 ReturnFromFunction :: struct {
@@ -99,7 +99,7 @@ InterpState :: struct {
 interpret :: proc(
     c: Checked,
     builtin_handler: BuiltinHandler,
-    entry_func_ref: FuncDefinitionRef,
+    entry_func_ref: CheckedFuncRef,
 ) -> RuntimeValue {
     state := InterpState {
         c               = c,
@@ -134,8 +134,8 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
     result: RuntimeValue
     #partial switch val in fn_val {
     case BuiltinFunction:
-        return s.builtin_handler.procedure(s, val.index, args)
-    case FuncDefinitionRef:
+        return s.builtin_handler.procedure(s, val, args)
+    case CheckedFuncRef:
         return interp_execute_function2(s, val.index, args)
     case RuntimeI64OrderedHashMapInitFunc:
         assert(len(args) == 0)
@@ -388,7 +388,7 @@ interp_clone_value :: proc(val: RuntimeValue, loc := #caller_location) -> Runtim
          u16,
          u8,
          bool,
-         FuncDefinitionRef,
+         CheckedFuncRef,
          BuiltinFunction,
          RuntimeStructTypeInitFunc,
          SumTypeInitFunc,
@@ -621,7 +621,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
             return i64(0)
         case BoolValue:
             return bool(comptime)
-        case Type, GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
+        case Type, GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
             panic("Unreachable")
         }
 
@@ -653,7 +653,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         case RuntimeArray,
              RuntimeStruct,
              RuntimeSumType,
-             FuncDefinitionRef,
+             CheckedFuncRef,
              BuiltinFunction,
              RuntimeStringOrderedHashMap,
              RuntimeI64OrderedHashMap,
@@ -798,7 +798,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         str1 := interp_eval_value(s, value.str1^)
         return str0.(RuntimeString).value == str1.(RuntimeString).value
 
-    case FuncDefinitionRef:
+    case CheckedFuncRef:
         return value
 
     case BuiltinFunction:
@@ -814,39 +814,39 @@ DefaultBuiltinHandlerData :: struct {
 
 default_builtin_handler_procedure :: proc(
     state: ^InterpState,
-    index: u32,
+    index: BuiltinFunction,
     args: []RuntimeValue,
 ) -> RuntimeValue {
     data := cast(^DefaultBuiltinHandlerData)state.builtin_handler.data
     // TODO: Maybe we should use the definitions in glue.c
     // https://odin-lang.org/news/binding-to-c/
     switch index {
-    case builtin_print:
+    case .print:
         assert(len(args) == 1)
         fmt.print(args[0].(RuntimeString).value)
         return nil
-    case builtin_println:
+    case .println:
         assert(len(args) == 1)
         fmt.println(args[0].(RuntimeString).value)
         return nil
-    case builtin_eprint:
+    case .eprint:
         assert(len(args) == 1)
         fmt.eprint(args[0].(RuntimeString).value)
         return nil
-    case builtin_eprintln:
+    case .eprintln:
         assert(len(args) == 1)
         fmt.eprintln(args[0].(RuntimeString).value)
         return nil
-    case builtin_readline:
+    case .readline:
         assert(len(args) == 1)
         fmt.print(args[0].(RuntimeString).value)
         scanner: bufio.Scanner
         bufio.scanner_init(&scanner, os.to_reader(os.stdin))
         assert(bufio.scan(&scanner))
         return RuntimeString{false, bufio.scanner_text(&scanner)}
-    case builtin_read_file:
+    case .read_file:
         panic("TODO")
-    case builtin_write_file:
+    case .write_file:
         assert(len(args) == 2)
         file_name := args[0].(RuntimeString).value
         path: string = ---
@@ -865,27 +865,31 @@ default_builtin_handler_procedure :: proc(
             panic(fmt.aprintf("Failed to write file at `%s`: %v", path, err2))
         }
         return nil
-    case builtin_clear:
+    case .clear:
         assert(len(args) == 0)
         fmt.print(ansi_clear)
         return nil
-    case builtin_exit:
+    case .run_executable:
+        panic("TODO")
+    case .exit:
         assert(len(args) == 1)
         os.exit(int(args[0].(i64)))
-    case builtin_get_os_args:
+    case .get_os_args:
         panic("TODO")
-    case builtin_emit_js_code:
+    case .emit_js_code:
         // TODO: Tree shake functions which the function being emitted (`arg`) does not use
         assert(len(args) == 1)
-        function_id := args[0].(i64)
+        function_ref := args[0].(CheckedFuncRef)
         builder := emit_javascript(state.c)
         return RuntimeString{true, strings.to_string(builder)}
-    case builtin_string_repeat:
+    case .string_repeat:
         assert(len(args) == 2)
         return RuntimeString {
             true,
             strings.repeat(args[0].(RuntimeString).value, int(args[1].(i64))),
         }
+    case .invalid_builtin:
+        panic("Unreachable")
     case:
         panic(fmt.aprintf("Unreachable (index is %d)", index))
     }

@@ -116,7 +116,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
             strings.write_string(&s.b, comptime ? "true" : "false")
         case Type:
             panic("Unreachable")
-        case GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
+        case GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
             panic("Unreachable")
         }
     case ToString:
@@ -146,7 +146,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
         strings.write_string(&s.b, ")")
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(value.index))
+        strings.write_uint(&s.b, uint(value))
     case CheckedFieldAccess:
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
@@ -260,7 +260,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     //    strings.write_string(&s.b, "readline(")
     //    emit_c_value(s, value.prompt^)
     //    strings.write_byte(&s.b, ')')
-    case FuncDefinitionRef:
+    case CheckedFuncRef:
         strings.write_string(&s.b, "func")
         strings.write_uint(&s.b, value.index)
     }
@@ -429,6 +429,14 @@ emit_c_block :: proc(
     emit_c_block_body(s, nesting_level, body)
 }
 
+emit_forward_struct_definition :: proc(s: ^CEmitterState, name: string) {
+    strings.write_string(&s.forward_struct_definitions, "typedef struct ")
+    strings.write_string(&s.forward_struct_definitions, name)
+    strings.write_string(&s.forward_struct_definitions, "Struct ")
+    strings.write_string(&s.forward_struct_definitions, name)
+    strings.write_byte(&s.forward_struct_definitions, ';')
+}
+
 emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_c_global_type")
@@ -451,15 +459,27 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             emit_type(&s.other_type_definitions, "", type.item_type)
             strings.write_string(&s.other_type_definitions, "* elems;};")
         }
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
     case OrderedHashMapTypeWithStringKey:
-        panic("TODO")
+        emit_forward_struct_definition(s, name)
+        strings.write_string(&s.other_type_definitions, "typedef struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(
+            &s.other_type_definitions,
+            "Struct {/* TODO: Ordered hash map with String key */}",
+        )
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_byte(&s.other_type_definitions, ';')
     case OrderedHashMapTypeWithI64Key:
-        panic("TODO")
+        emit_forward_struct_definition(s, name)
+        strings.write_string(&s.other_type_definitions, "typedef struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(
+            &s.other_type_definitions,
+            "Struct {/* TODO: Ordered hash map with I64 key */}",
+        )
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_byte(&s.other_type_definitions, ';')
     case FuncType:
         strings.write_string(&s.other_type_definitions, "typedef ")
         switch len(type.return_types) {
@@ -503,11 +523,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.sum_type_definitions, "} payload;};")
 
         // Type def
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
 
         // Variant funcs
         for variant, i in type.variants {
@@ -555,11 +571,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         }
     case Struct(Type, Type):
         // Type def
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
 
         // Struct def
         strings.write_string(&s.other_type_definitions, "struct ")
@@ -625,7 +637,7 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
+emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: string) -> []byte {
     s := CEmitterState {
         strings.builder_make(),
         strings.builder_make(),

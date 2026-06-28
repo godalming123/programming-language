@@ -36,7 +36,7 @@ A new language for the web, because it's time to stop working around javascript.
     - JS has inline function definitions
 - Maybe with this emphasis on JS, there should have been more of an emphasis on every value having any type and constraints rather than a type system
 - I think a good language design for writing high level code should be prioratised over being able to write performant code
-- I think maybe some of the syntax should have been copied from JS to make JS devs more at home
+- I think maybe some of the syntax should have been copied from JS to make JS devs feel more at home
 
 # Todo
 
@@ -246,6 +246,7 @@ A new language for the web, because it's time to stop working around javascript.
   - Formatter
   - Automatically generate documentation from code comments
   - Be able to fully run the compiler in a web browser
+    - I could write a web IDE in the programming language
   - Nice quality of life features for print debugging:
     - Although using a debugger is probably better, the combination of a couple of language features can create a really nice print debugging experience:
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)

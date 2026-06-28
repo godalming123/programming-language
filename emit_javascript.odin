@@ -27,7 +27,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         switch comptime in v {
         case Type, UninitialisedOrderedHashMapType:
             panic("Unreachable")
-        case GlobalTypeWithGenericRef:
+        case GlobalValueWithGenericRef, Import:
             panic("Unreachable")
         case StringLiteralValue:
             strings.write_byte(&s.b, '"')
@@ -58,7 +58,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ')')
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(v.index))
+        strings.write_uint(&s.b, uint(v))
     case CheckedFieldAccess:
         emit_js_value(s, v.value^)
         strings.write_string(&s.b, ".field")
@@ -141,7 +141,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ')')
     case VariableRef:
         emit_variable(&s.b, v)
-    case FuncDefinitionRef:
+    case CheckedFuncRef:
         strings.write_string(&s.b, "func")
         strings.write_uint(&s.b, v.index)
     }

@@ -24,7 +24,18 @@ SumType :: struct(VariantPayload: typeid) {
     variants:     #soa[]SumTypeVariant(VariantPayload),
 }
 
-Ident :: distinct IdentToken
+Ident :: struct {
+    segments: #soa[]IdentAndPos,
+}
+
+make_ident :: proc(token: IdentToken, file: FileRef) -> Ident {
+    // TODO: Do not copy the token
+    out := make(#soa[]IdentAndPos, len(token))
+    for segment, i in token {
+        out[i] = IdentAndPos{segment.ident, Pos{segment.index, file}}
+    }
+    return Ident{out}
+}
 
 Number :: struct {
     is_negated:      bool,
@@ -50,7 +61,13 @@ FuncDefinitionRef :: struct {
     // an index into:
     // - `ParserState.function_defs`
     // - `ParsedProject.function_defs`
+    index: uint,
+}
+
+CheckedFuncRef :: struct {
+    // An index into:
     // - `CheckerOutput.checked_funcs`
+    // - `CheckerState.checked_functions`
     index: uint,
 }
 
@@ -82,7 +99,7 @@ UnitWithoutPos :: union {
 }
 
 Unit :: struct {
-    pos:   uint,
+    pos:   Pos,
     value: UnitWithoutPos,
 }
 
@@ -219,9 +236,21 @@ NumericIterator :: struct {
     type:  NumericIteratorType,
 }
 
+Pos :: struct {
+    index: uint,
+    file:  FileRef,
+}
+
+unknown_pos :: Pos{max(uint), FileRef{max(uint)}}
+
+IdentAndIndex :: struct {
+    ident: string,
+    index: uint,
+}
+
 IdentAndPos :: struct {
     ident: string,
-    pos:   uint,
+    pos:   Pos,
 }
 
 ConditionControlledLoop :: struct {
@@ -268,7 +297,7 @@ ContinueStatement :: struct {
 UnreachableStatement :: struct {}
 
 Statement :: struct {
-    position: uint,
+    position: Pos,
     value:    union {
         VariableManagement,
         CallWithBrackets,
@@ -428,7 +457,7 @@ debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
     case Ident:
         debug("ident")
         debug_nesting += 1
-        for segment in v {
+        for segment in v.segments {
             debug("%q", segment.ident)
         }
         debug_nesting -= 1

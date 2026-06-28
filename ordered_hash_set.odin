@@ -4,6 +4,8 @@ package main
 // - Also has "merging", where 2 slightly different values in the has map can be
 //   merged into one value with the same reference
 
+// TODO Maybe this should be an ordered hash map, and then maybe merging doesn't need to exist
+
 // TODO: Benchmarks:
 // - u64 hashes instead of u32 hashes
 // - without the hash being cached in `OrderedHashSetValue`

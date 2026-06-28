@@ -20,6 +20,6 @@ counter = |s: I64| -> html.UI[I64] {
 
 build = #comptime || -> I64 {
     initial_state_js = "1" // TODO: Actually use `counter_initial_state` rather than inlining the 1
-    write_file("counter.html", html.reactive_page(counter.function_id, initial_state_js))
+    write_file("counter.html", html.reactive_page(counter, initial_state_js))
     return 0
 }
