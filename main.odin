@@ -8,7 +8,7 @@ import "core:time"
 
 debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
-debug_checker :: false
+debug_checker :: true
 debug_emitter :: false
 debug_ordered_hash_sets :: false
 debug_interpreter :: false

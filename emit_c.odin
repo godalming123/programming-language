@@ -92,6 +92,9 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
         panic("TODO")
     case CompileTimeValue:
         switch comptime in value {
+        case CheckedFuncRef:
+            strings.write_string(&s.b, "func")
+            strings.write_uint(&s.b, comptime.index)
         case NumberValue:
             if comptime.value.is_negated {
                 strings.write_byte(&s.b, '-')
@@ -260,9 +263,6 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     //    strings.write_string(&s.b, "readline(")
     //    emit_c_value(s, value.prompt^)
     //    strings.write_byte(&s.b, ')')
-    case CheckedFuncRef:
-        strings.write_string(&s.b, "func")
-        strings.write_uint(&s.b, value.index)
     }
 }
 

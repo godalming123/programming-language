@@ -193,10 +193,9 @@ add_unnamed_variable :: proc(
     when debug_checker {
         print_call(loc, "add_unnamed_variable")
     }
-    scopes := &s.cur_func_frame.scopes
-    var_ref := VariableRef{len(scopes) - 1, len(scopes[len(scopes) - 1].variables)}
+    var_ref := VariableRef{len(s.scopes) - 1, len(s.scopes[len(s.scopes) - 1].variables)}
     append_soa_elem(
-        &scopes[len(scopes) - 1].variables,
+        &s.scopes[len(s.scopes) - 1].variables,
         ScopeVariable{variable_type, variable_is_mut},
     )
     return var_ref
@@ -222,13 +221,13 @@ add_variable :: proc(
         err(s, variable.pos, builtins_err, variable.ident)
         return VariableRef{}, false
     }
-    if variable.ident in s.cur_func_frame.variables_map {
+    if variable.ident in s.variables_map {
         err(s, variable.pos, "Redeclaration of variable `%s`", variable.ident)
         return VariableRef{}, false
     }
     var_ref := add_unnamed_variable(s, variable_type, variable_is_mut)
     if variable.ident != "" {
-        s.cur_func_frame.variables_map[variable.ident] = var_ref
+        s.variables_map[variable.ident] = var_ref
     }
     return var_ref, true
 }

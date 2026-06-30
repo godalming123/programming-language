@@ -25,6 +25,9 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         panic("TODO")
     case CompileTimeValue:
         switch comptime in v {
+        case CheckedFuncRef:
+            strings.write_string(&s.b, "func")
+            strings.write_uint(&s.b, comptime.index)
         case Type, UninitialisedOrderedHashMapType:
             panic("Unreachable")
         case GlobalValueWithGenericRef, Import:
@@ -141,9 +144,6 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ')')
     case VariableRef:
         emit_variable(&s.b, v)
-    case CheckedFuncRef:
-        strings.write_string(&s.b, "func")
-        strings.write_uint(&s.b, v.index)
     }
 }
 

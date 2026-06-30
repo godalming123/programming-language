@@ -608,6 +608,8 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
 
     case CompileTimeValue:
         switch comptime in value {
+        case CheckedFuncRef:
+            return comptime
         case StringLiteralValue:
             return RuntimeString{false, string(comptime)}
         case NumberValue:
@@ -797,9 +799,6 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         str0 := interp_eval_value(s, value.str0^)
         str1 := interp_eval_value(s, value.str1^)
         return str0.(RuntimeString).value == str1.(RuntimeString).value
-
-    case CheckedFuncRef:
-        return value
 
     case BuiltinFunction:
         return value

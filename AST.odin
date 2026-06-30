@@ -80,6 +80,21 @@ CheckedFuncRef :: struct {
 //   - A value with a type like `{ Text: (String) -> I64 }`, or;
 //   - A sum type like `< Text{contents: String} >`
 
+/*
+InitialUnit :: union {
+    Struct(Unit),
+    SumType(Unit, struct {}),
+    Tuple,
+    FuncDefinitionRef,
+    Ident,
+    Number,
+    String,
+    Char,
+    Bool,
+    Import,
+}
+*/
+
 UnitWithoutPos :: union {
     Struct(Unit, struct {}),
     SumType(Struct(Unit, struct {})),

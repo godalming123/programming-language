@@ -1397,25 +1397,25 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     diagnostic(
                         s.files.file[:len(s.files)],
                         position,
-                        "The parser is interpreting this as a non-generic type\nThe empty `[]` can be omitted",
+                        "The parser is interpreting this as a non-generic value\nThe empty `[]` can be omitted",
                         type = "Warning",
                     )
                 }
+
+                clear(&other_possible_tokens)
+            } else {
+                clear(&other_possible_tokens)
+                append_elem(
+                    &other_possible_tokens,
+                    "`[` to define the name of a generic argument to the value",
+                )
             }
             #partial switch _ in s.last_token {
             case:
-                if len(generic) == 0 {
-                    expected :: []string {
-                        "`=` to define a global value",
-                        "`:` to define a global type",
-                        "`[` to define the name of a generic argument to a type",
-                    }
-                    wrong_token_err(s, expected)
-                } else {
-                    wrong_token_err(s, []string{"`:` to define a global type"})
-                }
+                append_elem(&other_possible_tokens, "`=` to define a global value")
+                wrong_token_err(s, other_possible_tokens[:])
                 return false
-            case ColonToken:
+            case AssignToken:
                 get_next_token(s, false)
                 type := parse_unit(s)
                 if !type.ok {
@@ -1443,30 +1443,6 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     )
                 }
                 other_possible_tokens = type.descriptions_of_other_possible_tokens
-            case AssignToken:
-                if len(generic) != 0 {
-                    diagnostic(
-                        s.files.file[:len(s.files)],
-                        Pos{s.last_token_pos, s.file_ref},
-                        "Cannot define global value with generic argument",
-                    )
-                    return false
-                }
-                get_next_token(s, false)
-                value := parse_unit(s)
-                if !value.ok {
-                    return false
-                }
-                s.files[s.file_ref.index].globals[name] = ParsedGlobal {
-                    position.index,
-                    u32(len(s.global_values_without_generics)),
-                    false,
-                }
-                append_elem(
-                    &s.global_values_without_generics,
-                    GlobalValueWithoutGeneric{name, value.unit, s.file_ref},
-                )
-                other_possible_tokens = value.descriptions_of_other_possible_tokens
             }
         }
     }
