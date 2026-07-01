@@ -336,7 +336,7 @@ basic_fuzz_test :: proc(t: ^testing.T) {
     }
 
 
-    for i in 0 ..< 100 {
+    for _ in 0 ..< 100 {
         code := random_string(800)
 
         // `%q` rather then `%s` to escape invalid runes and ANSI terminal escape codes

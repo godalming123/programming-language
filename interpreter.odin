@@ -120,7 +120,7 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         args[i] = interp_clone_value(interp_eval_value(s, arg_val))
     }
 
-    if val, is_struct_init_func := fn_val.(RuntimeStructTypeInitFunc); is_struct_init_func {
+    if _, is_struct_init_func := fn_val.(RuntimeStructTypeInitFunc); is_struct_init_func {
         return RuntimeStruct{true, args}
     }
 
@@ -131,7 +131,6 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         delete(args)
     }
 
-    result: RuntimeValue
     #partial switch val in fn_val {
     case BuiltinFunction:
         return s.builtin_handler.procedure(s, val, args)
@@ -879,6 +878,7 @@ default_builtin_handler_procedure :: proc(
         // TODO: Tree shake functions which the function being emitted (`arg`) does not use
         assert(len(args) == 1)
         function_ref := args[0].(CheckedFuncRef)
+        _ = function_ref
         builder := emit_javascript(state.c)
         return RuntimeString{true, strings.to_string(builder)}
     case .string_repeat:

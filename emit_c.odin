@@ -498,9 +498,9 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             if !is_first_arg {
                 strings.write_byte(&s.other_type_definitions, ',')
             }
-            name := fmt.aprintf("arg%d", i)
-            defer delete(name)
-            emit_type(&s.other_type_definitions, name, arg)
+            arg_name := fmt.aprintf("arg%d", i)
+            defer delete(arg_name)
+            emit_type(&s.other_type_definitions, arg_name, arg)
             is_first_arg = false
         }
         strings.write_string(&s.other_type_definitions, ");")

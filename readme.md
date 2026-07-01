@@ -41,6 +41,29 @@ A new language for the web, because it's time to stop working around javascript.
 # Todo
 
 - Choose a name
+- Improve the generic function implementation
+  ```
+  Result[Ok, Err] = <
+    Ok{value: Ok},
+    Err{value: Err},
+  >
+
+  debug[T] = |arg: T| -> T {
+  	println(arg.to_str)
+  	return arg
+  }
+
+  main = || -> I64 {
+    // TODO: Cleanup syntax
+  	result = debug[I64](debug[I64](42) * debug[I64](64))
+
+  	// TODO: Not specifying the generic argument causes there to be a bad error message
+  	message = debug("The result is " & result.to_str)
+
+  	// TODO: There is a bad error message because the compiler cannot generate a to_str function for the Result[I64, String] type
+    result2 = debug[Result[I64, String]](.Ok(result))
+  }
+  ```
 - Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
@@ -48,21 +71,21 @@ A new language for the web, because it's time to stop working around javascript.
   - Tree shake the emitted JS code
   - Minify the emitted JS code
   - Update the JS emitter to emit less code
-- Implement subtypes/supertypes in the type checker
+- Extend subtypes/supertypes implementation
   - For example:
     - `[]I64` is a supertype of `[32]I64`
     - `I64` is a supertype of `I32`
     - `SumType` is a supertype of `SumType.Variant`
-  - Some things use a different syntax rather than `operation(value)` because the way that the type of value that is passed to `operation` and/or the type of value that `operation` returns cannot be expressed in the type system
-  - For example:
-    - Currently `x.len` is used rather than `len(x)`
-    - Currently `x.to_str` is used rather than `to_str(x)`
-    - Currently `a :: b` is used rather than `append(a, b)`
-  - With the addition of subtypes/supertypes, `Any` and in the case of `append` and `delete`, function generics, these functions could be represented like so:
-    - `len: ([]Any) -> I64`
-    - `to_str: (Any) -> String`
-    - `append[T]: ([]T, []T) -> []T`
-    - `delete[K, V]: (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
+  - Update some of the syntax
+    - Use `len(x)` rather than `x.len`
+    - Use `to_str[T](x)` rather than `x.to_str`
+    - Use `append[T](a, b)` rather than `a :: b`
+  - Add a `delete` function for ordered hash maps
+  - These functions would have the following types:
+    - `len = ([]Any) -> I64`
+    - `to_str = (Any) -> String`
+    - `append[T] = ([]T, []T) -> []T`
+    - `delete[K, V] = (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
@@ -251,7 +274,7 @@ A new language for the web, because it's time to stop working around javascript.
     - Although using a debugger is probably better, the combination of a couple of language features can create a really nice print debugging experience:
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
       - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
-      - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
+      - Being able to convert a value of any arbitrary type to a string without writing any extra code (like in odin)
   - Maybe add a REPL
   - Type inference?
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value

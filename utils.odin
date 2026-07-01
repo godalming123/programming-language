@@ -3,7 +3,6 @@ package main
 import "base:runtime"
 import "core:fmt"
 import "core:math/rand"
-import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:testing"
@@ -328,9 +327,9 @@ debug :: proc(format: string, args: ..any, loc := #caller_location) {
     }
 }
 
+/*
 debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     debug("type is %#v", type)
-    /*
     debug_nesting += 1
     #partial switch value in type {
     case GenericTypeRef:
@@ -344,8 +343,8 @@ debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     // debug("type %v", info.type)
     }
     debug_nesting -= 1
-    */
 }
+*/
 
 print_arg :: proc(arg_name: string, arg_value: any) {
     debug("arg `%s`: %v", arg_name, arg_value)

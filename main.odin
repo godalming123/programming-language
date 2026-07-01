@@ -8,7 +8,7 @@ import "core:time"
 
 debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
-debug_checker :: true
+debug_checker :: false
 debug_emitter :: false
 debug_ordered_hash_sets :: false
 debug_interpreter :: false
@@ -176,8 +176,8 @@ build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
             checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
         )
 
-        executable_path, ok := write_and_compile_c(c, file_name)
-        if !ok {
+        executable_path, ok2 := write_and_compile_c(c, file_name)
+        if !ok2 {
             return "", false
         }
         return executable_path, true

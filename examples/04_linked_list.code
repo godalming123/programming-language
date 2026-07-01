@@ -15,7 +15,7 @@ reverse[T] = |list: LinkedList[T], end: LinkedList[T]| -> LinkedList[T] {
             return end
         }
         not_empty: .NotEmpty {
-            return reverse(not_empty.tail, .NotEmpty(not_empty.head, end))
+            return reverse[T](not_empty.tail, .NotEmpty(not_empty.head, end))
         }
     }
 }

@@ -63,7 +63,6 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             return wrong_token(s)
         }
         if field.ident in fields_map {
-            file := s.files[s.file_ref.index]
             loc := get_location(
                 s.files.file[:len(s.files)],
                 fields[fields_map[field.ident]].name.pos,
@@ -201,6 +200,9 @@ parse_initial_unit :: proc(
 
     case OpenBracketToken:
         elements, ok := parse_units_until(s, is_close_bracket, "`)` to end the tuple")
+        if !ok {
+            return Unit{}, nil, false
+        }
         out.value = Tuple{elements}
 
     // case DynamicToken:
@@ -286,8 +288,8 @@ parse_initial_unit :: proc(
         out.value = SumType(Struct(Unit, struct {})){variants_map, variants[:]}
 
     case OpenSquareBracketToken:
-        args, ok := parse_units_until(s, is_close_square_bracket, "`]`")
-        if !ok {
+        args, args_ok := parse_units_until(s, is_close_square_bracket, "`]`")
+        if !args_ok {
             return Unit{}, nil, false
         }
         get_next_token(s, false)
@@ -298,11 +300,11 @@ parse_initial_unit :: proc(
         // TODO: Update the syntax so that this exception to the parsed order of operations is not necersarry
         if _, is_open_square_bracket := s.last_token.(OpenSquareBracketToken);
            is_open_square_bracket {
-            args, args_ok := parse_units_until(s, is_close_square_bracket, "`]`")
-            if !args_ok {
+            args2, args2_ok := parse_units_until(s, is_close_square_bracket, "`]`")
+            if !args2_ok {
                 return Unit{}, nil, false
             }
-            unit.value = CallWithSquareBrackets{new_clone(unit), args}
+            unit.value = CallWithSquareBrackets{new_clone(unit), args2}
             clear(&other_possible_tokens)
             get_next_token(s, true)
         }
@@ -322,7 +324,6 @@ parse_initial_unit :: proc(
             }
             append_elem(&markers, IdentAndPos{string(marker), Pos{s.last_token_pos, s.file_ref}})
         }
-        value_pos := s.last_token_pos
         val, descriptions_of_other_possible_tokens, ok := parse_initial_unit(s, nil)
         if !ok {
             return Unit{}, nil, false
@@ -1251,7 +1252,7 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
     }
 
     get_next_token(s, true)
-    return_type := Unit{}
+    return_type: ^Unit = nil
     open_brace :: "`{` to start the body of the function"
     #partial switch _ in s.last_token {
     case:
@@ -1269,7 +1270,7 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
             wrong_token_err(s, parsed_return_type.descriptions_of_other_possible_tokens[:])
             return FunctionDefinition{}, false
         }
-        return_type = parsed_return_type.unit
+        return_type = new_clone(parsed_return_type.unit)
     case OpenBraceToken:
     }
 
@@ -1277,7 +1278,7 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
     if !ok {
         return FunctionDefinition{}, false
     }
-    return FunctionDefinition{args[:], new_clone(return_type), block, nil}, true
+    return FunctionDefinition{args[:], return_type, block, nil}, true
 }
 
 GlobalValueWithGeneric :: struct {
