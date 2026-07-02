@@ -50,13 +50,13 @@ done_command :: "done"
 
 // - The `string` returned is the path to the executable
 // - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
+build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -> (string, bool) {
     build_start := time.now()
     defer {
         fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
     }
 
-    parsed, ok := parse_project(file_name)
+    parsed, ok := parse_project(file_name, stderr)
     if !ok {
         return "", false
     }
@@ -74,7 +74,7 @@ build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
     }
 
     fmt.printfln("Checking...")
-    checker_output := check(parsed)
+    checker_output := check(parsed, stderr)
 
     errors, warnings: string = ---, ---
 

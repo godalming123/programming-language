@@ -2,10 +2,36 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:io"
 import "core:math/rand"
+import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:testing"
+
+file_mock :: proc() -> (^os.File, ^strings.Builder) {
+    builder := new_clone(strings.builder_make())
+    stream_proc: os.File_Stream_Proc : proc(
+        stream_data: rawptr,
+        mode: os.File_Stream_Mode,
+        p: []byte,
+        offset: i64,
+        whence: io.Seek_From,
+        _: runtime.Allocator,
+    ) -> (
+        i64,
+        os.Error,
+    ) {
+        assert(mode == .Write)
+        assert(offset == 0)
+        assert(whence == io.Seek_From(0))
+        file := cast(^os.File)stream_data
+        builder := cast(^strings.Builder)file.stream.data
+        strings.write_bytes(builder, p)
+        return i64(len(p)), nil
+    }
+    return new_clone(os.File{nil, os.File_Stream{stream_proc, builder}}), builder
+}
 
 random_string :: proc(max_length: int, gen := context.random_generator) -> string {
     context.random_generator = gen
@@ -199,6 +225,7 @@ join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
 
 // Set the position to `unknown_pos` to not have a position for the error message
 diagnostic :: proc(
+    stderr: ^os.File,
     files: []CompilerFile,
     position: Pos,
     message_fmt: string,
@@ -212,18 +239,18 @@ diagnostic :: proc(
         print_call(loc, "diagnostic")
     }
     if newline_before {
-        fmt.println("")
+        fmt.fprintf(stderr, "\n")
     }
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
     if position == unknown_pos {
-        fmt.eprintf("%s compiling %s\n%s\n", type, message)
+        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, message)
     } else {
         loc := get_location(files, position)
-        fmt.eprintf("%s compiling %s\n%s\n", type, loc, message)
+        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, loc, message)
     }
     if newline_after {
-        fmt.println("")
+        fmt.fprintf(stderr, "\n")
     }
 }
 
@@ -238,6 +265,7 @@ err :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_errors += 1
     diagnostic(
+        s.stderr,
         s.files.file[:len(s.files)],
         position,
         message_fmt,
@@ -260,6 +288,7 @@ warn :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_warnings += 1
     diagnostic(
+        s.stderr,
         s.files.file[:len(s.files)],
         position,
         message_fmt,

@@ -8,50 +8,61 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import "core:testing"
 
-RanExample :: struct {
-    stdout: string,
-    stderr: string,
-    ok:     bool,
+CompilationFailed :: struct {
+    compiler_stderr: string,
+}
+
+CompilationSuccessful :: struct {
+    compiler_stderr: string,
+    program_stdout:  string,
+    program_stderr:  string,
+}
+
+RanNormalExample :: union {
+    CompilationFailed,
+    CompilationSuccessful,
+}
+
+RanComptimeExample :: struct {
+    compiler_stderr: string,
+    ok:              bool,
 }
 
 run_normal_example :: proc(
     t: ^testing.T,
-    relative_path: string,
+    absolute_path: string,
     stdin_to_send: string,
-) -> RanExample {
-    base_dir, err := filepath.abs(filepath.dir(os.args[0]), context.allocator)
-    if err != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to make path absolute: %v", err))
-    }
-    fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
+) -> RanNormalExample {
 
-    executable, ok := build(fullpath)
+    compiler_stderr_writer, compiler_stderr_builder := file_mock()
+    executable, ok := build(absolute_path, compiler_stderr_writer)
+    compiler_stderr := strings.to_string(compiler_stderr_builder^)
     if !ok {
-        testing.fail(t)
-        return RanExample{ok = false}
+        return CompilationFailed{compiler_stderr}
     }
     if executable == "" {
         testing.fail(t)
-        return RanExample{ok = false}
+        return nil
     }
 
     // TODO: Check for memory leaks when the process runs
-    stdin_reader, stdin_writer, err2 := os.pipe()
+    stdin_reader, stdin_writer, err := os.pipe()
+    if err != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err))
+    }
+    _, err2 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
     if err2 != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err2))
+        testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err2))
     }
-    _, err3 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
-    if err3 != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err3))
-    }
-    state, stdout, stderr, err4 := os.process_exec(
+    state, stdout, stderr, err3 := os.process_exec(
         os.Process_Desc{command = []string{executable}, stdin = stdin_reader},
         context.allocator,
     )
-    if err4 != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to run `%s`: %#v", executable, err4))
+    if err3 != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to run `%s`: %#v", executable, err3))
     }
 
     if state.exit_code != 0 {
@@ -63,59 +74,60 @@ run_normal_example :: proc(
             stderr,
         )
         testing.fail(t)
-        return RanExample{"", "", false}
+        return nil
     }
-    return RanExample{string(stdout), string(stderr), true}
+    return CompilationSuccessful{compiler_stderr, string(stdout), string(stderr)}
 }
 
-run_comptime_example :: proc(t: ^testing.T, relative_path: string) -> bool {
-    base_dir, err := filepath.abs(filepath.dir(os.args[0]), context.allocator)
-    if err != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to make path absolute: %v", err))
-    }
-    fullpath := fmt.aprintf("%s/%s", base_dir, relative_path)
-
-    executable, ok := build(fullpath)
+run_comptime_example :: proc(t: ^testing.T, absolute_path: string) -> RanComptimeExample {
+    compiler_stderr_writer, compiler_stderr_builder := file_mock()
+    executable, ok := build(absolute_path, compiler_stderr_writer)
     if !ok {
         testing.fail(t)
-        return false
+        return RanComptimeExample{ok = false}
     }
 
     if executable != "" {
         testing.fail(t)
-        return false
+        return RanComptimeExample{ok = false}
     }
-    return true
+    return RanComptimeExample{strings.to_string(compiler_stderr_builder^), true}
 }
 
 @(test)
 example_00_fizzbuzz :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/00_fizzbuzz.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
+    ran := run_normal_example(t, #directory + "examples/00_fizzbuzz.code", "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
     testing.expect(
         t,
-        ran.stdout ==
+        out.program_stdout ==
         "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzbuzz\n16\n17\nFizz\n19\nBuzz\nFizz\n22\n23\nFizz\nBuzz\n26\nFizz\n28\n29\nFizzbuzz\n31\n32\nFizz\n34\nBuzz\nFizz\n37\n38\nFizz\nBuzz\n41\nFizz\n43\n44\nFizzbuzz\n46\n47\nFizz\n49\nBuzz\nFizz\n52\n53\nFizz\nBuzz\n56\nFizz\n58\n59\nFizzbuzz\n61\n62\nFizz\n64\nBuzz\nFizz\n67\n68\nFizz\nBuzz\n71\nFizz\n73\n74\nFizzbuzz\n76\n77\nFizz\n79\nBuzz\nFizz\n82\n83\nFizz\nBuzz\n86\nFizz\n88\n89\nFizzbuzz\n91\n92\nFizz\n94\nBuzz\nFizz\n97\n98\nFizz\nBuzz\n",
     )
 }
 
 @(test)
 example_01_factorial :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/01_factorial.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
-    testing.expect(t, ran.stdout == "120\n")
+    ran := run_normal_example(t, #directory + "examples/01_factorial.code", "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
+    testing.expect(t, out.program_stdout == "120\n")
 }
 
 @(test)
 example_02_primes :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/02_primes.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
+    ran := run_normal_example(t, #directory + "examples/02_primes.code", "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    // testing.expect(t, out.compiler_stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
+    testing.expect(t, out.program_stderr == "")
     testing.expect(
         t,
-        ran.stdout ==
+        out.program_stdout ==
         `The number 1 is not prime
 The number 2 is prime
 The number 3 is prime
@@ -222,12 +234,17 @@ The number 100 is not prime
 
 @(test)
 example_03_comptime_fibonacci :: proc(t: ^testing.T) {
-    ok := run_comptime_example(t, "examples/03_comptime_fibonacci.code")
-    if !ok {return}
-    file :: "examples/fibonacci.txt"
-    data, err := os.read_entire_file(file, context.allocator)
-    if err != nil {
-        testing.fail_now(t, fmt.aprintf("Failed to read `%s`: %#v", file, err))
+    file :: #directory + "examples/fibonacci.txt"
+    err := os.remove_all(file)
+    testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
+
+    ran := run_comptime_example(t, #directory + "examples/03_comptime_fibonacci.code")
+    if !ran.ok {return}
+    // testing.expect(ran.compiler_stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
+
+    data, err2 := os.read_entire_file(file, context.allocator)
+    if err2 != nil {
+        testing.fail_now(t, fmt.aprintf("Failed to read `%s`: %#v", file, err2))
     }
     defer delete(data, context.allocator)
     testing.expect(t, string(data) == "1597")
@@ -235,10 +252,12 @@ example_03_comptime_fibonacci :: proc(t: ^testing.T) {
 
 @(test)
 example_04_linked_list :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/04_linked_list.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
-    testing.expect(t, ran.stdout == "1\n2\n3\nReversed:\n3\n2\n1\n")
+    ran := run_normal_example(t, #directory + "examples/04_linked_list.code", "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
+    testing.expect(t, out.program_stdout == "1\n2\n3\nReversed:\n3\n2\n1\n")
 }
 
 expect_ui_render :: proc(
@@ -263,13 +282,15 @@ expect_ui_render :: proc(
 example_05_ui :: proc(t: ^testing.T) {
     ran := run_normal_example(
         t,
-        "examples/05_ui.code",
+        #directory + "examples/05_ui.code",
         "next\nclick\nprev\nprev\nclick\nnext\nnext\nnext\nclick\nquit\n",
     )
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
 
-    text_expecter := TestingTextExpecter{0, ran.stdout, t}
+    text_expecter := TestingTextExpecter{0, out.program_stdout, t}
     expect_ui_render(&text_expecter, "Initial text", 1)
     expect_ui_render(&text_expecter, "Initial text", 2) // After next
     expect_ui_render(&text_expecter, "Text 2", 2) // After click
@@ -305,22 +326,26 @@ buffered_pipe_test :: proc(t: ^testing.T) {
 
 @(test)
 example_06_counter :: proc(t: ^testing.T) {
-    err := os.remove_all("examples/counter.html")
+    file :: #directory + "examples/counter.html"
+    err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
-    ok := run_comptime_example(t, "examples/06_counter.code")
-    if !ok {return}
-    testing.expect(t, os.exists("examples/counter.html"))
+    ran := run_comptime_example(t, #directory + "examples/06_counter.code")
+    if !ran.ok {return}
+    testing.expect(t, ran.compiler_stderr == "")
+    testing.expect(t, os.exists(file))
 }
 
 @(test)
 example_07_conways_game_of_life :: proc(t: ^testing.T) {
-    err := os.remove_all("examples/conways_game_of_life.html")
+    file :: #directory + "examples/conways_game_of_life.html"
+    err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
-    ok := run_comptime_example(t, "examples/07_conways_game_of_life.code")
-    if !ok {return}
-    testing.expect(t, os.exists("examples/conways_game_of_life.html"))
+    ran := run_comptime_example(t, #directory + "examples/07_conways_game_of_life.code")
+    if !ran.ok {return}
+    // testing.expect(t, ran.compiler_stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
+    testing.expect(t, os.exists(file))
 }
 
 @(test)
@@ -373,11 +398,13 @@ basic_type_system_test :: proc(t: ^testing.T) {
 @(test)
 example_08_result :: proc(t: ^testing.T) {
     // TODO: Test inputs other than `dog`
-    ran := run_normal_example(t, "examples/08_result.code", "dog\n")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
-    if ran.stdout != "Enter the name of an animal: You entered the animal dog\n" {
-        testing.fail_now(t, fmt.aprintf("Got the stdout `%s`", ran.stdout))
+    ran := run_normal_example(t, #directory + "examples/08_result.code", "dog\n")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
+    if out.program_stdout != "Enter the name of an animal: You entered the animal dog\n" {
+        testing.fail_now(t, fmt.aprintf("Got the stdout `%s`", out.program_stdout))
     }
 }
 
@@ -400,10 +427,12 @@ example_09_hashmap :: proc(t: ^testing.T) {
 
 @(test)
 example_10_geometry :: proc(t: ^testing.T) {
-    ran := run_normal_example(t, "examples/10_geometry.code", "")
-    if !ran.ok {return}
-    testing.expect(t, ran.stderr == "")
-    e := TestingTextExpecter{0, ran.stdout, t}
+    ran := run_normal_example(t, #directory + "examples/10_geometry.code", "")
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.compiler_stderr == "")
+    testing.expect(t, out.program_stderr == "")
+    e := TestingTextExpecter{0, out.program_stdout, t}
     expect_string(&e, "                              cc                              \n")
     expect_string(&e, "                    cccccccccccccccccccccc                    \n")
     expect_string(&e, "                cccc                      cccc                \n")
@@ -438,6 +467,60 @@ example_10_geometry :: proc(t: ^testing.T) {
     expect_finished(&e)
 }
 
+@(test)
+invalid_example_00_uninitialised_global_value_with_generics :: proc(t: ^testing.T) {
+    ran := run_normal_example(
+        t,
+        #directory + "examples/invalid/00_uninitialised_global_value_with_generics.code",
+        "",
+    )
+    if ran == nil {return}
+    out := ran.(CompilationFailed)
+    e := TestingTextExpecter{0, out.compiler_stderr, t}
+    expect_string(&e, "\n")
+    expect_string(
+        &e,
+        "Error compiling `" +
+        #directory +
+        "examples/invalid/00_uninitialised_global_value_with_generics.code` (15:13)\n",
+    )
+    expect_string(
+        &e,
+        "Expected a func type, but got an uninitialised global value with generics\n",
+    )
+    expect_string(&e, "Hint: Try initialising the global value with something like `debug[T]`\n")
+    expect_string(&e, "\n")
+    expect_finished(&e)
+}
+
+@(test)
+invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
+    ran := run_normal_example(
+        t,
+        #directory + "examples/invalid/01_wrong_identifier_casing.code",
+        "",
+    )
+    if ran == nil {return}
+    out := ran.(CompilationSuccessful)
+    testing.expect(t, out.program_stderr == "")
+    testing.expect(t, out.program_stdout == "Hello world\n")
+    e := TestingTextExpecter{0, out.compiler_stderr, t}
+    expect_string(&e, "\n")
+    expect_string(&e, "Warning compiling `" + #directory)
+    expect_string(&e, "examples/invalid/01_wrong_identifier_casing.code` (7:8)\n")
+    expect_string(&e, "Expected generic names to be `CamelCase`, got `ok`\n")
+    expect_string(&e, "First character in a camel case identifier must be an uppercase letter\n")
+    expect_string(&e, "Got 'o'\n")
+    expect_string(&e, "\n")
+    expect_string(&e, "Warning compiling `" + #directory)
+    expect_string(&e, "examples/invalid/01_wrong_identifier_casing.code` (7:12)\n")
+    expect_string(&e, "Expected generic names to be `CamelCase`, got `err`\n")
+    expect_string(&e, "First character in a camel case identifier must be an uppercase letter\n")
+    expect_string(&e, "Got 'e'\n")
+    expect_string(&e, "\n")
+    expect_finished(&e)
+}
+
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
 
 // TODO: Add a fuzz test where the code that gets compiled has no invalid utf8 runes
@@ -446,11 +529,7 @@ example_10_geometry :: proc(t: ^testing.T) {
 
 //@(test)
 //run_examples :: proc(t: ^testing.T) {
-//    base_dir, ok := filepath.abs(filepath.dir(os.args[0]))
-//    if !ok {
-//        testing.fail_now(t, "Failed to make path absolute")
-//    }
-//    examples_dir := fmt.aprintf("%s/examples", base_dir)
+//    examples_dir := fmt.aprintf("%s/examples", #directory)
 //
 //    opened, err := os.open(examples_dir)
 //    if err != nil {

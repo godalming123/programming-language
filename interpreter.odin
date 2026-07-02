@@ -570,6 +570,34 @@ interp_is_equal :: proc(s: ^InterpState, lhs: RuntimeValue, val1: CheckedValue) 
     panic("Unreachable")
 }
 
+interp_eval_comptime_value :: proc(s: ^InterpState, value: CompileTimeValue) -> RuntimeValue {
+    switch comptime in value {
+    case CompileTimeStructInitialisation:
+        out_args := make([]RuntimeValue, len(comptime.args))
+        for arg, i in comptime.args {
+            out_args[i] = interp_eval_comptime_value(s, arg)
+        }
+        return RuntimeStruct{true, out_args}
+    case CheckedFuncRef:
+        return comptime
+    case StringLiteralValue:
+        return RuntimeString{false, string(comptime)}
+    case NumberValue:
+        as_u64, ok := big_uint_to_u64(comptime.value.absolute_value)
+        assert(ok)
+        if comptime.value.is_negated {
+            return -i64(as_u64)
+        }
+        return i64(as_u64)
+    case BoolValue:
+        return bool(comptime)
+    case Type, GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
+        panic("Unreachable")
+    case:
+        panic("Unreachable")
+    }
+}
+
 interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
     switch value in v {
     case OrderedHashMapInitFunc:
@@ -606,25 +634,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         return RuntimeArray{true, out}
 
     case CompileTimeValue:
-        switch comptime in value {
-        case CheckedFuncRef:
-            return comptime
-        case StringLiteralValue:
-            return RuntimeString{false, string(comptime)}
-        case NumberValue:
-            as_u64, ok := big_uint_to_u64(comptime.value.absolute_value)
-            if ok {
-                if comptime.value.is_negated {
-                    return i64(-i64(as_u64))
-                }
-                return i64(i64(as_u64))
-            }
-            return i64(0)
-        case BoolValue:
-            return bool(comptime)
-        case Type, GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
-            panic("Unreachable")
-        }
+        return interp_eval_comptime_value(s, value)
 
     case ToString:
         inner := interp_eval_value(s, value.value^)
@@ -875,11 +885,19 @@ default_builtin_handler_procedure :: proc(
     case .get_os_args:
         panic("TODO")
     case .emit_js_code:
-        // TODO: Tree shake functions which the function being emitted (`arg`) does not use
-        assert(len(args) == 1)
-        function_ref := args[0].(CheckedFuncRef)
-        _ = function_ref
+        // TODO: Tree shake globals which are not used by the globals in `globals_map`
+        assert(len(args) == 2)
+        globals_map := args[0].(RuntimeStringOrderedHashMap)
+        glue := args[1].(RuntimeString)
         builder := emit_javascript(state.c)
+        for global_name in globals_map.order {
+            strings.write_string(&builder, "let ")
+            strings.write_string(&builder, global_name)
+            strings.write_string(&builder, "=")
+            emit_js_runtime_value(&builder, globals_map.hashmap[global_name])
+            strings.write_string(&builder, ";")
+        }
+        strings.write_string(&builder, glue.value)
         return RuntimeString{true, strings.to_string(builder)}
     case .string_repeat:
         assert(len(args) == 2)

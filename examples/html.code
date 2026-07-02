@@ -8,13 +8,13 @@
 //                 |--|
 // Implemented in the programming language 
 
-Elem[State] : <
+Elem[State] = <
     Button {children: []Elem[State], onclick: (State) -> State},
     Div {style: String, children: []Elem[State]},
     Text {text: String},
 >
 
-UI[State] : {
+UI[State] = {
     page_title: String,
     ui_contents: []Elem[State],
 }
@@ -24,10 +24,12 @@ reactive_page[T] = #comptime |
 	initial_state: T,
 | -> String {
     glue = #load "./html.js"
+    // TODO: Be able to define the map like `{"state_to_ui": reactivity_function, "state": initial_state}`
     mut map = OrderedHashMap[String, Any]()
     ~map["state_to_ui"] = reactivity_function
     ~map["state"] = initial_state
-    js = compiler.emit_js_code(glue, map)
+    // Maybe there could be an argument with the type `<.Minify{}, .LeaveNames{}>` in the future
+    js = compiler.emit_js_code(map, glue)
     // The close tags are split up so that the browser interprets them as JS strings rather than HTML close tags
 	// TODO: JS should be tree-shaked so the `reactive_page` function shouldn't even be included in the emitted JS code
     return

@@ -64,7 +64,7 @@ game_of_life = |s: [game_size]Bool| -> html.UI[[game_size]Bool] {
 }
 
 build = #comptime || -> I64 {
-    pulsar_initial_state = "[
+    pulsar_initial_state = [game_size]Bool(
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
@@ -80,7 +80,7 @@ build = #comptime || -> I64 {
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
-    ]"
-    write_file("conways_game_of_life.html", html.reactive_page(game_of_life, pulsar_initial_state))
+    )
+    write_file("conways_game_of_life.html", html.reactive_page[[game_size]Bool](game_of_life, pulsar_initial_state))
     return 0
 }

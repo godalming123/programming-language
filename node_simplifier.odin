@@ -72,6 +72,36 @@ create_joined_values :: proc(
     return CheckedJoinedValues{method, new_clone(val0), new_clone(val1)}
 }
 
+create_field_access :: proc(value: CheckedValue, field_index: uint) -> CheckedValue {
+    #partial switch v in value {
+    case CompileTimeValue:
+        return v.(CompileTimeStructInitialisation).args[field_index]
+    case CheckedFunctionCall:
+    // Cannot simplify something like `{a: 5, b: do_stuff()}.a` to `5` because the `do_stuff` call may cause side effects
+    // TODO: Be able to make simplifications like this and preserve side effects
+    }
+    return CheckedFieldAccess{new_clone(value), field_index}
+}
+
+create_checked_func_call :: proc(func: CheckedValue, args: []CheckedValue) -> union {
+        CheckedFunctionCall,
+        CompileTimeValue,
+    } {
+    #partial outer: switch func_value in func {
+    case StructTypeInitFunc:
+        comptime_args := make([]CompileTimeValue, len(args))
+        for arg, i in args {
+            comptime, is_comptime := arg.(CompileTimeValue)
+            if is_comptime == false {
+                break outer
+            }
+            comptime_args[i] = comptime
+        }
+        return CompileTimeValue(CompileTimeStructInitialisation{func_value, comptime_args})
+    }
+    return CheckedFunctionCall{new_clone(func), args}
+}
+
 iterate_array :: proc(
     loop_index: uint,
     index_variable: VariableRef,

@@ -88,6 +88,8 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
         return string_type
     case "Type":
         return type_type
+    case "ImportedFile":
+        return imported_file_type
     case "Any":
         return any_type
     case:
@@ -174,6 +176,7 @@ is_builtin :: proc(name: string) -> bool {
          "Bool",
          "String",
          "Type",
+         "ImportedFile",
          "OrderedHashMap",
          "Any",
          "to_str",

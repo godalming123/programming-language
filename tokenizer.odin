@@ -354,6 +354,7 @@ wrong_token_err :: proc(
         i += 1
     }
     diagnostic(
+        state.stderr,
         state.files.file[:len(state.files)],
         Pos{state.last_token_pos, state.file_ref},
         "%sExpected%s\nGot %s",

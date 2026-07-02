@@ -1,5 +1,3 @@
-// TODO: Be able to implement `insert`, `reverse`, `to_array`, and `empty_list` for any linked list type
-
 LinkedList[T] = <
     Empty,
     NotEmpty{head: T, tail: LinkedList[T]},

@@ -24,6 +24,9 @@ get_next_token :: proc(
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
+    // This field does not change as the project is parsed
+    stderr:                         ^os.File,
+
     // Updated every time the parser starts parsing a different file
     file_ref:                       FileRef,
     using tokenizer_state:          TokenizerState,
@@ -68,6 +71,7 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
                 fields[fields_map[field.ident]].name.pos,
             )
             diagnostic(
+                s.stderr,
                 s.files.file[:len(s.files)],
                 field.pos,
                 "There is already a field called `%s` defined in this struct at %s",
@@ -170,6 +174,7 @@ parse_initial_unit :: proc(
         )
         if join_err != nil {
             diagnostic(
+                s.stderr,
                 s.files.file[:len(s.files)],
                 unknown_pos,
                 "Failed to join filepath: %v",
@@ -183,6 +188,7 @@ parse_initial_unit :: proc(
             data, data_err := os.read_entire_file(joined, context.allocator)
             if data_err != nil {
                 diagnostic(
+                    s.stderr,
                     s.files.file[:len(s.files)],
                     Pos{s.last_token_pos, s.file_ref},
                     "Failed to read `%s`: %#v",
@@ -240,6 +246,7 @@ parse_initial_unit :: proc(
                 variant_name := token2[0]
                 if variant_name.ident in variants_map {
                     diagnostic(
+                        s.stderr,
                         s.files.file[:len(s.files)],
                         Pos{variant_name.index, s.file_ref},
                         "There is already a variant called `%s` in this sum type",
@@ -644,6 +651,7 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
         case CommaToken:
             if variable_index >= 3 {
                 diagnostic(
+                    s.stderr,
                     s.files.file[:len(s.files)],
                     Pos{s.last_token_pos, s.file_ref},
                     "There cannot be more than 3 variables in a for loop head (the iteration the for loop is on, the key of the thing being iterated over, and the value of the thing being iterated over)",
@@ -952,6 +960,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             }
             if len(token) != 1 {
                 diagnostic(
+                    s.stderr,
                     s.files.file[:len(s.files)],
                     Pos{s.last_token_pos, s.file_ref},
                     "TODO: Support assigns where the destination has more than one segment",
@@ -1338,6 +1347,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
             if def, exists := s.files[s.file_ref.index].globals[name]; exists {
                 loc := get_location(s.files.file[:len(s.files)], Pos{def.pos, s.file_ref})
                 diagnostic(
+                    s.stderr,
                     s.files.file[:len(s.files)],
                     position,
                     "The global `%s` is already declared at %s",
@@ -1365,6 +1375,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                         pos := generic_map[segments[0].ident]
                         loc := get_location(s.files.file[:len(s.files)], pos)
                         diagnostic(
+                            s.stderr,
                             s.files.file[:len(s.files)],
                             Pos{s.last_token_pos, s.file_ref},
                             "There is already a generic argument called `%s` defined on %s in this global type",
@@ -1396,6 +1407,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
                 if len(generic) == 0 {
                     diagnostic(
+                        s.stderr,
                         s.files.file[:len(s.files)],
                         position,
                         "The parser is interpreting this as a non-generic value\nThe empty `[]` can be omitted",
@@ -1457,10 +1469,16 @@ ParsedProject :: struct {
     function_defs:                 []FunctionDefinition,
 }
 
-parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, bool) {
+parse_project :: proc(
+    first_file_relative_path: string,
+    stderr: ^os.File,
+) -> (
+    ParsedProject,
+    bool,
+) {
     first_file_absolute_path, err := filepath.abs(first_file_relative_path, context.allocator)
     if err != nil {
-        fmt.eprintfln("Failed to make filepath absolute: %v", err)
+        fmt.eprintfln("Failed to make filepath `%s` absolute: %v", first_file_relative_path, err)
         return ParsedProject{}, false
     }
 
@@ -1471,7 +1489,9 @@ parse_project :: proc(first_file_relative_path: string) -> (ParsedProject, bool)
         return ParsedProject{}, false
     }
 
-    state := ParserState{}
+    state := ParserState {
+        stderr = stderr,
+    }
     append_soa_elem(
         &state.files,
         File {

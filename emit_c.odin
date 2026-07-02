@@ -82,6 +82,53 @@ emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
+emit_c_comptime_value :: proc(s: ^CEmitterState, value: CompileTimeValue) {
+    switch comptime in value {
+    case CompileTimeStructInitialisation:
+        strings.write_string(&s.b, "init_Type")
+        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_string(&s.b, "(")
+        first_arg := true
+        for arg in comptime.args {
+            if first_arg == false {
+                strings.write_byte(&s.b, ',')
+            }
+            emit_c_comptime_value(s, arg)
+            first_arg = false
+        }
+        strings.write_string(&s.b, ")")
+    case CheckedFuncRef:
+        strings.write_string(&s.b, "func")
+        strings.write_uint(&s.b, comptime.index)
+    case NumberValue:
+        if comptime.value.is_negated {
+            strings.write_byte(&s.b, '-')
+        }
+        strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
+    case StringLiteralValue:
+        strings.write_byte(&s.b, '"')
+        for char in comptime {
+            switch char {
+            case '\n':
+                strings.write_string(&s.b, "\\n")
+            case '"':
+                strings.write_string(&s.b, "\\\"")
+            case '\\':
+                strings.write_string(&s.b, "\\\\")
+            case:
+                strings.write_rune(&s.b, char)
+            }
+        }
+        strings.write_byte(&s.b, '"')
+    case BoolValue:
+        strings.write_string(&s.b, comptime ? "true" : "false")
+    case Type:
+        panic("Unreachable")
+    case GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
+        panic("Unreachable")
+    }
+}
+
 emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     switch value in v {
     case OrderedHashMapInitFunc:
@@ -91,37 +138,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
          KeysOfOrderedHashMapWithI64Key:
         panic("TODO")
     case CompileTimeValue:
-        switch comptime in value {
-        case CheckedFuncRef:
-            strings.write_string(&s.b, "func")
-            strings.write_uint(&s.b, comptime.index)
-        case NumberValue:
-            if comptime.value.is_negated {
-                strings.write_byte(&s.b, '-')
-            }
-            strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
-        case StringLiteralValue:
-            strings.write_byte(&s.b, '"')
-            for char in comptime {
-                switch char {
-                case '\n':
-                    strings.write_string(&s.b, "\\n")
-                case '"':
-                    strings.write_string(&s.b, "\\\"")
-                case '\\':
-                    strings.write_string(&s.b, "\\\\")
-                case:
-                    strings.write_rune(&s.b, char)
-                }
-            }
-            strings.write_byte(&s.b, '"')
-        case BoolValue:
-            strings.write_string(&s.b, comptime ? "true" : "false")
-        case Type:
-            panic("Unreachable")
-        case GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
-            panic("Unreachable")
-        }
+        emit_c_comptime_value(s, value)
     case ToString:
         strings.write_string(&s.b, "asprintf_value(")
         switch value.from_type {
