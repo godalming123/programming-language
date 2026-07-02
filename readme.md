@@ -36,11 +36,18 @@ A new language for the web, because it's time to stop working around javascript.
     - JS has inline function definitions
 - Maybe with this emphasis on JS, there should have been more of an emphasis on every value having any type and constraints rather than a type system
 - I think a good language design for writing high level code should be prioratised over being able to write performant code
-- I think maybe some of the syntax should have been copied from JS to make JS devs more at home
+- I think maybe some of the syntax should have been copied from JS to make JS devs feel more at home
 
 # Todo
 
 - Choose a name
+- Consider using a different syntax for generics, where `$` is used to specify a generic, and the type of that generic is inferred:
+  - For functions, something like `typeof(append) = ([]$T, []$T) -> []$T`
+  - For types, something like `Result = <Ok{value: $Ok}, Err{value: $Error}>`
+    - To create a result type there might be a syntax like `Result(Ok = I64, Error = String)`
+  - This enables the type system to represent a memoised component with something like:
+    - `HtmlElem = <Div{contents: []HtmlElem}, Component{func: ($T) -> []HtmlElem, arg: $T}>`
+    - This is possible because the type of `$T` can be different for every `HtmlElem.Component` in a tree of `HtmlElem`s
 - Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
@@ -48,21 +55,14 @@ A new language for the web, because it's time to stop working around javascript.
   - Tree shake the emitted JS code
   - Minify the emitted JS code
   - Update the JS emitter to emit less code
-- Implement subtypes/supertypes in the type checker
-  - For example:
-    - `[]I64` is a supertype of `[32]I64`
-    - `I64` is a supertype of `I32`
-    - `SumType` is a supertype of `SumType.Variant`
-  - Some things use a different syntax rather than `operation(value)` because the way that the type of value that is passed to `operation` and/or the type of value that `operation` returns cannot be expressed in the type system
-  - For example:
-    - Currently `x.len` is used rather than `len(x)`
-    - Currently `x.to_str` is used rather than `to_str(x)`
-    - Currently `a :: b` is used rather than `append(a, b)`
-  - With the addition of subtypes/supertypes, `Any` and in the case of `append` and `delete`, function generics, these functions could be represented like so:
-    - `len: ([]Any) -> I64`
-    - `to_str: (Any) -> String`
-    - `append[T]: ([]T, []T) -> []T`
-    - `delete[K, V]: (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
+- Extend subtypes/supertypes implementation:
+  - `[]I64` is a supertype of `[32]I64`
+  - `I64` is a supertype of `I32`
+  - `SumType` is a supertype of `SumType.Variant`
+- Use `len(x)` rather than `x.len`, where `typeof(len) == ([]Any) -> I64`
+- Use `to_str[T](x)` rather than `x.to_str`, where `typeof(to_str[T]) == (T) -> String`
+- Use `append[T](a, b)` rather than `a :: b`, where `typeof(append[T]) = ([]T, []T) -> []T`
+- Add a `delete` function for ordered hash maps, where `typeof(delete[K, V]) = (OrderedHashSet[K, V], K) -> OrderedHashSet[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
@@ -108,6 +108,7 @@ A new language for the web, because it's time to stop working around javascript.
   - Arena backed malloc/free/free_all implementation?
 - Support length based strings as well as null terminated strings
 - Always output error messages and warnings in the order that they appear in the program, rather than a somewhat random order
+- Check that functions which return a value have a `return` statement in all control flow paths
 
 # Stuff that may be added
 
@@ -246,11 +247,12 @@ A new language for the web, because it's time to stop working around javascript.
   - Formatter
   - Automatically generate documentation from code comments
   - Be able to fully run the compiler in a web browser
+    - I could write a web IDE in the programming language
   - Nice quality of life features for print debugging:
     - Although using a debugger is probably better, the combination of a couple of language features can create a really nice print debugging experience:
       - Compile-time constant booleans for whether to debug some information + `when` statements to only include some code to debug that info when the flag is enabled (like in odin)
       - `deferred_in_out` to visualise function calls with nested debug messages (like in odin)
-      - Being able to convert any arbitrary type to a string without writing any extra code (like in odin)
+      - Being able to convert a value of any arbitrary type to a string without writing any extra code (like in odin)
   - Maybe add a REPL
   - Type inference?
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value

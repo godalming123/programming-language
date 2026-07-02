@@ -18,46 +18,49 @@ function_err :: "Within unmarked function, cannot call `#comptime` function"
 // function_err6 :: "First segment of a 2 segment function call that is used as a statement must be `compiler`\nGot `%s`"
 // function_err7 :: "First segment of a 2 segment function call that is used as a value must be either `compiler` or ``\nGot `%s`"
 
-builtin_print :: 0
-builtin_println :: 1
-builtin_eprint :: 2
-builtin_eprintln :: 3
-builtin_readline :: 4
-builtin_read_file :: 5
-builtin_write_file :: 6
-builtin_clear :: 7
-builtin_run_executable :: 8
-builtin_exit :: 9
-builtin_get_os_args :: 10 // TODO
-builtin_emit_js_code :: 11
-builtin_string_repeat :: 12
+BuiltinFunction :: enum u8 {
+    print,
+    println,
+    eprint,
+    eprintln,
+    readline,
+    read_file,
+    write_file,
+    clear,
+    run_executable,
+    exit,
+    get_os_args, // TODO
+    emit_js_code,
+    string_repeat,
+    invalid_builtin = max(u8),
+}
 
-get_builtin_func_from_name :: proc(name: string) -> (u32, Type) {
+get_builtin_func_from_name :: proc(name: string) -> (BuiltinFunction, Type) {
     switch name {
     case "print":
-        return builtin_print, string_to_nil_type
+        return .print, string_to_nil_type
     case "println":
-        return builtin_println, string_to_nil_type
+        return .println, string_to_nil_type
     case "eprint":
-        return builtin_eprint, string_to_nil_type
+        return .eprint, string_to_nil_type
     case "eprintln":
-        return builtin_eprintln, string_to_nil_type
+        return .eprintln, string_to_nil_type
     case "readline":
-        return builtin_readline, string_to_string_type
+        return .readline, string_to_string_type
     case "read_file":
-        return builtin_read_file, string_to_string_type
+        return .read_file, string_to_string_type
     case "write_file":
-        return builtin_write_file, string_string_to_nil_type
+        return .write_file, string_string_to_nil_type
     case "clear":
-        return builtin_clear, no_args_to_nil_type
+        return .clear, no_args_to_nil_type
     case "run_executable":
-        return builtin_run_executable, array_of_strings_to_nil_type
+        return .run_executable, array_of_strings_to_nil_type
     case "exit":
-        return builtin_exit, i64_to_nil_type
+        return .exit, i64_to_nil_type
     case "string_repeat":
-        return builtin_string_repeat, string_i64_to_string_type
+        return .string_repeat, string_i64_to_string_type
     case:
-        return max(u32), invalid_type
+        return .invalid_builtin, invalid_type
     }
 }
 
@@ -85,6 +88,10 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
         return string_type
     case "Type":
         return type_type
+    case "ImportedFile":
+        return imported_file_type
+    case "Any":
+        return any_type
     case:
         return unknown_type
     }
@@ -92,7 +99,7 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
 
 argument_count_mismatch :: proc(
     s: ^CheckerState,
-    pos: uint,
+    pos: Pos,
     num_provided: uint,
     num_expected: uint,
     func_name: ..string,
@@ -116,7 +123,7 @@ argument_count_mismatch :: proc(
     )
 }
 
-to_str :: proc(s: ^CheckerState, pos: uint, val: CheckedValue, type: Type) -> CheckedValue {
+to_str :: proc(s: ^CheckerState, pos: Pos, val: CheckedValue, type: Type) -> CheckedValue {
     from_type: ToStringFromType = ---
     switch type {
     case bool_type:
@@ -169,10 +176,11 @@ is_builtin :: proc(name: string) -> bool {
          "Bool",
          "String",
          "Type",
+         "ImportedFile",
          "OrderedHashMap",
+         "Any",
          "to_str",
-         "string_repeat",
-         "function_id":
+         "string_repeat":
         return true
     case:
         return false
@@ -188,13 +196,11 @@ add_unnamed_variable :: proc(
     when debug_checker {
         print_call(loc, "add_unnamed_variable")
     }
-    assert(
-        len(s.scopes[len(s.scopes) - 1].variable_is_muts) ==
-        len(s.scopes[len(s.scopes) - 1].variable_types),
+    var_ref := VariableRef{len(s.scopes) - 1, len(s.scopes[len(s.scopes) - 1].variables)}
+    append_soa_elem(
+        &s.scopes[len(s.scopes) - 1].variables,
+        ScopeVariable{variable_type, variable_is_mut},
     )
-    var_ref := VariableRef{len(s.scopes) - 1, len(s.scopes[len(s.scopes) - 1].variable_is_muts)}
-    append_elem(&s.scopes[len(s.scopes) - 1].variable_types, variable_type)
-    append_elem(&s.scopes[len(s.scopes) - 1].variable_is_muts, variable_is_mut)
     return var_ref
 }
 

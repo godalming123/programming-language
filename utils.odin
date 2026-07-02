@@ -2,11 +2,36 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:io"
 import "core:math/rand"
 import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:testing"
+
+file_mock :: proc() -> (^os.File, ^strings.Builder) {
+    builder := new_clone(strings.builder_make())
+    stream_proc: os.File_Stream_Proc : proc(
+        stream_data: rawptr,
+        mode: os.File_Stream_Mode,
+        p: []byte,
+        offset: i64,
+        whence: io.Seek_From,
+        _: runtime.Allocator,
+    ) -> (
+        i64,
+        os.Error,
+    ) {
+        assert(mode == .Write)
+        assert(offset == 0)
+        assert(whence == io.Seek_From(0))
+        file := cast(^os.File)stream_data
+        builder := cast(^strings.Builder)file.stream.data
+        strings.write_bytes(builder, p)
+        return i64(len(p)), nil
+    }
+    return new_clone(os.File{nil, os.File_Stream{stream_proc, builder}}), builder
+}
 
 random_string :: proc(max_length: int, gen := context.random_generator) -> string {
     context.random_generator = gen
@@ -198,10 +223,11 @@ join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     return dyn[:]
 }
 
-// Set the position to max(uint) to not have a position for the error message
+// Set the position to `unknown_pos` to not have a position for the error message
 diagnostic :: proc(
-    file: CompilerFile,
-    position: uint,
+    stderr: ^os.File,
+    files: []CompilerFile,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     type: string = "Error",
@@ -209,35 +235,28 @@ diagnostic :: proc(
     newline_after: bool = false,
     loc := #caller_location,
 ) {
-    when debug_tokenizer || debug_checker {
+    when debug_diagnostics {
         print_call(loc, "diagnostic")
     }
     if newline_before {
-        fmt.println("")
+        fmt.fprintf(stderr, "\n")
     }
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
-    if position == max(uint) {
-        fmt.eprintf("%s compiling `%s`:\n%s\n", type, file.file_path, message)
+    if position == unknown_pos {
+        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, message)
     } else {
-        line, column := get_location(file.code, position)
-        fmt.eprintf(
-            "%s compiling `%s`:\nLine %d column %d:\n%s\n",
-            type,
-            file.file_path,
-            line,
-            column,
-            message,
-        )
+        loc := get_location(files, position)
+        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, loc, message)
     }
     if newline_after {
-        fmt.println("")
+        fmt.fprintf(stderr, "\n")
     }
 }
 
 err :: proc(
     s: ^CheckerState,
-    position: uint,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     loc := #caller_location,
@@ -246,7 +265,8 @@ err :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_errors += 1
     diagnostic(
-        s.files[s.file.index].file,
+        s.stderr,
+        s.files.file[:len(s.files)],
         position,
         message_fmt,
         ..message_args,
@@ -259,7 +279,7 @@ err :: proc(
 
 warn :: proc(
     s: ^CheckerState,
-    position: uint,
+    position: Pos,
     message_fmt: string,
     message_args: ..any,
     loc := #caller_location,
@@ -268,7 +288,8 @@ warn :: proc(
         s.diagnostics_info.number_of_errors + s.diagnostics_info.number_of_warnings > 0
     s.diagnostics_info.number_of_warnings += 1
     diagnostic(
-        s.files[s.file.index].file,
+        s.stderr,
+        s.files.file[:len(s.files)],
         position,
         message_fmt,
         ..message_args,
@@ -335,9 +356,9 @@ debug :: proc(format: string, args: ..any, loc := #caller_location) {
     }
 }
 
+/*
 debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     debug("type is %#v", type)
-    /*
     debug_nesting += 1
     #partial switch value in type {
     case GenericTypeRef:
@@ -351,8 +372,8 @@ debug_exact_checked_type :: proc(s: ^CheckerState, type: Type) {
     // debug("type %v", info.type)
     }
     debug_nesting -= 1
-    */
 }
+*/
 
 print_arg :: proc(arg_name: string, arg_value: any) {
     debug("arg `%s`: %v", arg_name, arg_value)

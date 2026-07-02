@@ -31,7 +31,7 @@ RuntimeValue :: union {
     RuntimeStructTypeInitFunc,
     RuntimeSumType,
     SumTypeInitFunc,
-    FuncDefinitionRef,
+    CheckedFuncRef,
     BuiltinFunction,
 }
 
@@ -75,7 +75,7 @@ Frame :: struct {
 
 BuiltinHandler :: struct {
     data:      rawptr,
-    procedure: proc(state: ^InterpState, index: u32, args: []RuntimeValue) -> RuntimeValue,
+    procedure: proc(state: ^InterpState, f: BuiltinFunction, args: []RuntimeValue) -> RuntimeValue,
 }
 
 ReturnFromFunction :: struct {
@@ -99,7 +99,7 @@ InterpState :: struct {
 interpret :: proc(
     c: Checked,
     builtin_handler: BuiltinHandler,
-    entry_func_ref: FuncDefinitionRef,
+    entry_func_ref: CheckedFuncRef,
 ) -> RuntimeValue {
     state := InterpState {
         c               = c,
@@ -120,7 +120,7 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         args[i] = interp_clone_value(interp_eval_value(s, arg_val))
     }
 
-    if val, is_struct_init_func := fn_val.(RuntimeStructTypeInitFunc); is_struct_init_func {
+    if _, is_struct_init_func := fn_val.(RuntimeStructTypeInitFunc); is_struct_init_func {
         return RuntimeStruct{true, args}
     }
 
@@ -131,11 +131,10 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         delete(args)
     }
 
-    result: RuntimeValue
     #partial switch val in fn_val {
     case BuiltinFunction:
-        return s.builtin_handler.procedure(s, val.index, args)
-    case FuncDefinitionRef:
+        return s.builtin_handler.procedure(s, val, args)
+    case CheckedFuncRef:
         return interp_execute_function2(s, val.index, args)
     case RuntimeI64OrderedHashMapInitFunc:
         assert(len(args) == 0)
@@ -388,7 +387,7 @@ interp_clone_value :: proc(val: RuntimeValue, loc := #caller_location) -> Runtim
          u16,
          u8,
          bool,
-         FuncDefinitionRef,
+         CheckedFuncRef,
          BuiltinFunction,
          RuntimeStructTypeInitFunc,
          SumTypeInitFunc,
@@ -558,6 +557,47 @@ interp_exec_statement :: proc(state: ^InterpState, stmt: CheckedStatement) {
     }
 }
 
+interp_is_equal :: proc(s: ^InterpState, lhs: RuntimeValue, val1: CheckedValue) -> bool {
+    rhs := interp_eval_value(s, val1)
+    a_i64, a_is_i64 := lhs.(i64)
+    if a_is_i64 {
+        return a_i64 == rhs.(i64)
+    }
+    a_bool, a_is_bool := lhs.(bool)
+    if a_is_bool {
+        return a_bool == rhs.(bool)
+    }
+    panic("Unreachable")
+}
+
+interp_eval_comptime_value :: proc(s: ^InterpState, value: CompileTimeValue) -> RuntimeValue {
+    switch comptime in value {
+    case CompileTimeStructInitialisation:
+        out_args := make([]RuntimeValue, len(comptime.args))
+        for arg, i in comptime.args {
+            out_args[i] = interp_eval_comptime_value(s, arg)
+        }
+        return RuntimeStruct{true, out_args}
+    case CheckedFuncRef:
+        return comptime
+    case StringLiteralValue:
+        return RuntimeString{false, string(comptime)}
+    case NumberValue:
+        as_u64, ok := big_uint_to_u64(comptime.value.absolute_value)
+        assert(ok)
+        if comptime.value.is_negated {
+            return -i64(as_u64)
+        }
+        return i64(as_u64)
+    case BoolValue:
+        return bool(comptime)
+    case Type, GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
+        panic("Unreachable")
+    case:
+        panic("Unreachable")
+    }
+}
+
 interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
     switch value in v {
     case OrderedHashMapInitFunc:
@@ -594,23 +634,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         return RuntimeArray{true, out}
 
     case CompileTimeValue:
-        switch comptime in value {
-        case StringLiteralValue:
-            return RuntimeString{false, string(comptime)}
-        case NumberValue:
-            as_u64, ok := big_uint_to_u64(comptime.value.absolute_value)
-            if ok {
-                if comptime.value.is_negated {
-                    return i64(-i64(as_u64))
-                }
-                return i64(i64(as_u64))
-            }
-            return i64(0)
-        case BoolValue:
-            return bool(comptime)
-        case Type, GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
-            panic("Unreachable")
-        }
+        return interp_eval_comptime_value(s, value)
 
     case ToString:
         inner := interp_eval_value(s, value.value^)
@@ -640,7 +664,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         case RuntimeArray,
              RuntimeStruct,
              RuntimeSumType,
-             FuncDefinitionRef,
+             CheckedFuncRef,
              BuiltinFunction,
              RuntimeStringOrderedHashMap,
              RuntimeI64OrderedHashMap,
@@ -690,28 +714,10 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
             return lhs.(i64) % interp_eval_value(s, value.val1^).(i64)
 
         case .IsEqual:
-            a_i64, a_is_i64 := lhs.(i64)
-            if a_is_i64 {
-                return a_i64 == interp_eval_value(s, value.val1^).(i64)
-            }
-            a_bool, a_is_bool := lhs.(bool)
-            if a_is_bool {
-                return a_bool == interp_eval_value(s, value.val1^).(bool)
-            }
-            panic("Unreachable")
+            return interp_is_equal(s, lhs, value.val1^)
 
         case .IsNotEqual:
-            a_i64, a_is_i64 := lhs.(i64)
-            b_i64, b_is_i64 := interp_eval_value(s, value.val1^).(i64)
-            if a_is_i64 && b_is_i64 {
-                return a_i64 != b_i64
-            }
-            a_bool, a_is_bool := lhs.(bool)
-            b_bool, b_is_bool := interp_eval_value(s, value.val1^).(bool)
-            if a_is_bool && b_is_bool {
-                return a_bool != b_bool
-            }
-            return true
+            return !interp_is_equal(s, lhs, value.val1^)
 
         case .IsLessThan:
             return lhs.(i64) < interp_eval_value(s, value.val1^).(i64)
@@ -803,9 +809,6 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         str1 := interp_eval_value(s, value.str1^)
         return str0.(RuntimeString).value == str1.(RuntimeString).value
 
-    case FuncDefinitionRef:
-        return value
-
     case BuiltinFunction:
         return value
 
@@ -819,39 +822,39 @@ DefaultBuiltinHandlerData :: struct {
 
 default_builtin_handler_procedure :: proc(
     state: ^InterpState,
-    index: u32,
+    index: BuiltinFunction,
     args: []RuntimeValue,
 ) -> RuntimeValue {
     data := cast(^DefaultBuiltinHandlerData)state.builtin_handler.data
     // TODO: Maybe we should use the definitions in glue.c
     // https://odin-lang.org/news/binding-to-c/
     switch index {
-    case builtin_print:
+    case .print:
         assert(len(args) == 1)
         fmt.print(args[0].(RuntimeString).value)
         return nil
-    case builtin_println:
+    case .println:
         assert(len(args) == 1)
         fmt.println(args[0].(RuntimeString).value)
         return nil
-    case builtin_eprint:
+    case .eprint:
         assert(len(args) == 1)
         fmt.eprint(args[0].(RuntimeString).value)
         return nil
-    case builtin_eprintln:
+    case .eprintln:
         assert(len(args) == 1)
         fmt.eprintln(args[0].(RuntimeString).value)
         return nil
-    case builtin_readline:
+    case .readline:
         assert(len(args) == 1)
         fmt.print(args[0].(RuntimeString).value)
         scanner: bufio.Scanner
         bufio.scanner_init(&scanner, os.to_reader(os.stdin))
         assert(bufio.scan(&scanner))
         return RuntimeString{false, bufio.scanner_text(&scanner)}
-    case builtin_read_file:
+    case .read_file:
         panic("TODO")
-    case builtin_write_file:
+    case .write_file:
         assert(len(args) == 2)
         file_name := args[0].(RuntimeString).value
         path: string = ---
@@ -870,27 +873,40 @@ default_builtin_handler_procedure :: proc(
             panic(fmt.aprintf("Failed to write file at `%s`: %v", path, err2))
         }
         return nil
-    case builtin_clear:
+    case .clear:
         assert(len(args) == 0)
         fmt.print(ansi_clear)
         return nil
-    case builtin_exit:
+    case .run_executable:
+        panic("TODO")
+    case .exit:
         assert(len(args) == 1)
         os.exit(int(args[0].(i64)))
-    case builtin_get_os_args:
+    case .get_os_args:
         panic("TODO")
-    case builtin_emit_js_code:
-        // TODO: Tree shake functions which the function being emitted (`arg`) does not use
-        assert(len(args) == 1)
-        function_id := args[0].(i64)
+    case .emit_js_code:
+        // TODO: Tree shake globals which are not used by the globals in `globals_map`
+        assert(len(args) == 2)
+        globals_map := args[0].(RuntimeStringOrderedHashMap)
+        glue := args[1].(RuntimeString)
         builder := emit_javascript(state.c)
+        for global_name in globals_map.order {
+            strings.write_string(&builder, "let ")
+            strings.write_string(&builder, global_name)
+            strings.write_string(&builder, "=")
+            emit_js_runtime_value(&builder, globals_map.hashmap[global_name])
+            strings.write_string(&builder, ";")
+        }
+        strings.write_string(&builder, glue.value)
         return RuntimeString{true, strings.to_string(builder)}
-    case builtin_string_repeat:
+    case .string_repeat:
         assert(len(args) == 2)
         return RuntimeString {
             true,
             strings.repeat(args[0].(RuntimeString).value, int(args[1].(i64))),
         }
+    case .invalid_builtin:
+        panic("Unreachable")
     case:
         panic(fmt.aprintf("Unreachable (index is %d)", index))
     }

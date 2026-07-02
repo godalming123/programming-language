@@ -1,4 +1,4 @@
-UI[State] : <
+UI[State] = <
     Button {children: []UI[State], onclick: (State) -> State},
     List {header: String, children: []UI[State]},
     Text {text: String},
@@ -18,13 +18,12 @@ text_picker = |s: String| -> []UI[String] {
     )
 }
 
-UIRenderingState[State] : {
+UIRenderingState[State] = {
     button_index: I64,
     focussed_button_onclick: (State) -> State,
 }
 
-// TODO: Be able to implement `render_ui` with a generic State type rather than String
-render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: UIRenderingState[String]| -> UIRenderingState[String] {
+render_ui[T] = |ui: []UI[T], focussed_button_index: I64, nesting: I64, state: UIRenderingState[T]| -> UIRenderingState[T] {
     mut s = state
     for elem in ui {
         for _ in 0..<nesting {
@@ -41,12 +40,12 @@ render_ui = |ui: []UI[String], focussed_button_index: I64, nesting: I64, state: 
                     println("Button")
                 }
                 // ~s.button_index += 1
-                ~s = UIRenderingState[String](s.button_index + 1, s.focussed_button_onclick)
-                ~s = render_ui(button.children, focussed_button_index, nesting + 1, s)
+                ~s = UIRenderingState[T](s.button_index + 1, s.focussed_button_onclick)
+                ~s = render_ui[T](button.children, focussed_button_index, nesting + 1, s)
             }
             list: .List {
                 println(list.header)
-                ~s = render_ui(list.children, focussed_button_index, nesting + 1, s)
+                ~s = render_ui[T](list.children, focussed_button_index, nesting + 1, s)
             }
             text: .Text {
                 println(text.text)
@@ -62,7 +61,7 @@ main = || -> I64 {
     while true {
         ui = text_picker(state)
         clear()
-        rendering_state = render_ui(ui, focussed_button_index, 0, UIRenderingState[String](0, nothing))
+        rendering_state = render_ui[String](ui, focussed_button_index, 0, UIRenderingState[String](0, nothing))
         max_button_index = rendering_state.button_index - 1
 
         input = readline("Enter either `next`, `prev`, `click`, or `quit`: ")

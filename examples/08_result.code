@@ -1,10 +1,10 @@
 // TODO: Implement the result type in standard library
-Result[Ok, Err] : <
+Result[Ok, Err] = <
   Ok{value: Ok},
   Err{value: Err},
 >
 
-Animal : <
+Animal = <
   Cat,
   Dog,
   Horse,

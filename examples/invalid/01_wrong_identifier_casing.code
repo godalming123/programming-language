@@ -1,0 +1,19 @@
+// Literally all of the identifiers in the code have the wrong case, except `println` and `main`
+// TODO: Report errors for the following identifiers which have the wrong case:
+// - `result`
+// - `Hello`
+// - There may be more, IDK ¯\_(ツ)_/¯
+
+result[ok, err] = <
+  ok{Value: ok},
+  err{Value: err},
+>
+
+Hello = || {
+	println("Hello world")
+}
+
+main = || -> I64 {
+	Hello()
+	return 0
+}

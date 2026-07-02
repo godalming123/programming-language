@@ -1,25 +1,23 @@
 html = import "html.code"
 
-CounterState : {
+CounterState = {
     count: I64,
 }
 
-// TODO: Be able to use the `CounterState` struct as the type rather than `I64`
-counter_initial_state = 1
+counter_initial_state = CounterState(1)
 
-increment_counter = |s: I64| -> I64 {
-	return s + 1
+increment_counter = |s: CounterState| -> CounterState {
+	return CounterState(s.count + 1)
 }
 
-counter = |s: I64| -> html.UI[I64] {
-    contents = []html.Elem[I64](
-        .Button([]html.Elem[I64](.Text("The count is " & s.to_str)), increment_counter),
+counter = |s: CounterState| -> html.UI[CounterState] {
+    contents = []html.Elem[CounterState](
+        .Button([]html.Elem[CounterState](.Text("The count is " & s.count.to_str)), increment_counter),
     )
-    return html.UI[I64]("Counter", contents)
+    return html.UI[CounterState]("Counter", contents)
 }
 
 build = #comptime || -> I64 {
-    initial_state_js = "1" // TODO: Actually use `counter_initial_state` rather than inlining the 1
-    write_file("counter.html", html.reactive_page(counter.function_id, initial_state_js))
+    write_file("counter.html", html.reactive_page[CounterState](counter, counter_initial_state))
     return 0
 }

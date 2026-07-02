@@ -1,0 +1,20 @@
+Result[Ok, Err] = <
+  Ok{value: Ok},
+  Err{value: Err},
+>
+
+debug[T] = |arg: T| -> T {
+	println(arg.to_str)
+	return arg
+}
+
+main = || -> I64 {
+  // TODO: Cleanup syntax
+  result = debug[I64](debug[I64](42) * debug[I64](64))
+
+  message = debug("The result is " & result.to_str)
+
+  // TODO: There is a bad error message because the compiler cannot generate a to_str function for the Result[I64, String] type
+  result2 = debug[Result[I64, String]](.Ok(result))
+}
+

@@ -12,6 +12,7 @@ debug_checker :: false
 debug_emitter :: false
 debug_ordered_hash_sets :: false
 debug_interpreter :: false
+debug_diagnostics :: false
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
@@ -49,13 +50,13 @@ done_command :: "done"
 
 // - The `string` returned is the path to the executable
 // - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
+build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -> (string, bool) {
     build_start := time.now()
     defer {
         fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
     }
 
-    parsed, ok := parse_project(file_name)
+    parsed, ok := parse_project(file_name, stderr)
     if !ok {
         return "", false
     }
@@ -73,7 +74,7 @@ build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
     }
 
     fmt.printfln("Checking...")
-    checker_output := check(parsed)
+    checker_output := check(parsed, stderr)
 
     errors, warnings: string = ---, ---
 
@@ -175,8 +176,8 @@ build :: proc(file_name: string, interpret_file := false) -> (string, bool) {
             checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
         )
 
-        executable_path, ok := write_and_compile_c(c, file_name)
-        if !ok {
+        executable_path, ok2 := write_and_compile_c(c, file_name)
+        if !ok2 {
             return "", false
         }
         return executable_path, true

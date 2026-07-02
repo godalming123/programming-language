@@ -82,6 +82,53 @@ emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
+emit_c_comptime_value :: proc(s: ^CEmitterState, value: CompileTimeValue) {
+    switch comptime in value {
+    case CompileTimeStructInitialisation:
+        strings.write_string(&s.b, "init_Type")
+        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_string(&s.b, "(")
+        first_arg := true
+        for arg in comptime.args {
+            if first_arg == false {
+                strings.write_byte(&s.b, ',')
+            }
+            emit_c_comptime_value(s, arg)
+            first_arg = false
+        }
+        strings.write_string(&s.b, ")")
+    case CheckedFuncRef:
+        strings.write_string(&s.b, "func")
+        strings.write_uint(&s.b, comptime.index)
+    case NumberValue:
+        if comptime.value.is_negated {
+            strings.write_byte(&s.b, '-')
+        }
+        strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
+    case StringLiteralValue:
+        strings.write_byte(&s.b, '"')
+        for char in comptime {
+            switch char {
+            case '\n':
+                strings.write_string(&s.b, "\\n")
+            case '"':
+                strings.write_string(&s.b, "\\\"")
+            case '\\':
+                strings.write_string(&s.b, "\\\\")
+            case:
+                strings.write_rune(&s.b, char)
+            }
+        }
+        strings.write_byte(&s.b, '"')
+    case BoolValue:
+        strings.write_string(&s.b, comptime ? "true" : "false")
+    case Type:
+        panic("Unreachable")
+    case GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
+        panic("Unreachable")
+    }
+}
+
 emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     switch value in v {
     case OrderedHashMapInitFunc:
@@ -91,34 +138,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
          KeysOfOrderedHashMapWithI64Key:
         panic("TODO")
     case CompileTimeValue:
-        switch comptime in value {
-        case NumberValue:
-            if comptime.value.is_negated {
-                strings.write_byte(&s.b, '-')
-            }
-            strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
-        case StringLiteralValue:
-            strings.write_byte(&s.b, '"')
-            for char in comptime {
-                switch char {
-                case '\n':
-                    strings.write_string(&s.b, "\\n")
-                case '"':
-                    strings.write_string(&s.b, "\\\"")
-                case '\\':
-                    strings.write_string(&s.b, "\\\\")
-                case:
-                    strings.write_rune(&s.b, char)
-                }
-            }
-            strings.write_byte(&s.b, '"')
-        case BoolValue:
-            strings.write_string(&s.b, comptime ? "true" : "false")
-        case Type:
-            panic("Unreachable")
-        case GlobalTypeWithGenericRef, UninitialisedOrderedHashMapType:
-            panic("Unreachable")
-        }
+        emit_c_comptime_value(s, value)
     case ToString:
         strings.write_string(&s.b, "asprintf_value(")
         switch value.from_type {
@@ -146,7 +166,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
         strings.write_string(&s.b, ")")
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(value.index))
+        strings.write_uint(&s.b, uint(value))
     case CheckedFieldAccess:
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
@@ -260,9 +280,6 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     //    strings.write_string(&s.b, "readline(")
     //    emit_c_value(s, value.prompt^)
     //    strings.write_byte(&s.b, ')')
-    case FuncDefinitionRef:
-        strings.write_string(&s.b, "func")
-        strings.write_uint(&s.b, value.index)
     }
 }
 
@@ -429,6 +446,14 @@ emit_c_block :: proc(
     emit_c_block_body(s, nesting_level, body)
 }
 
+emit_forward_struct_definition :: proc(s: ^CEmitterState, name: string) {
+    strings.write_string(&s.forward_struct_definitions, "typedef struct ")
+    strings.write_string(&s.forward_struct_definitions, name)
+    strings.write_string(&s.forward_struct_definitions, "Struct ")
+    strings.write_string(&s.forward_struct_definitions, name)
+    strings.write_byte(&s.forward_struct_definitions, ';')
+}
+
 emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_c_global_type")
@@ -451,15 +476,27 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             emit_type(&s.other_type_definitions, "", type.item_type)
             strings.write_string(&s.other_type_definitions, "* elems;};")
         }
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
     case OrderedHashMapTypeWithStringKey:
-        panic("TODO")
+        emit_forward_struct_definition(s, name)
+        strings.write_string(&s.other_type_definitions, "typedef struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(
+            &s.other_type_definitions,
+            "Struct {/* TODO: Ordered hash map with String key */}",
+        )
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_byte(&s.other_type_definitions, ';')
     case OrderedHashMapTypeWithI64Key:
-        panic("TODO")
+        emit_forward_struct_definition(s, name)
+        strings.write_string(&s.other_type_definitions, "typedef struct ")
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_string(
+            &s.other_type_definitions,
+            "Struct {/* TODO: Ordered hash map with I64 key */}",
+        )
+        strings.write_string(&s.other_type_definitions, name)
+        strings.write_byte(&s.other_type_definitions, ';')
     case FuncType:
         strings.write_string(&s.other_type_definitions, "typedef ")
         switch len(type.return_types) {
@@ -478,9 +515,9 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             if !is_first_arg {
                 strings.write_byte(&s.other_type_definitions, ',')
             }
-            name := fmt.aprintf("arg%d", i)
-            defer delete(name)
-            emit_type(&s.other_type_definitions, name, arg)
+            arg_name := fmt.aprintf("arg%d", i)
+            defer delete(arg_name)
+            emit_type(&s.other_type_definitions, arg_name, arg)
             is_first_arg = false
         }
         strings.write_string(&s.other_type_definitions, ");")
@@ -503,11 +540,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.sum_type_definitions, "} payload;};")
 
         // Type def
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
 
         // Variant funcs
         for variant, i in type.variants {
@@ -555,11 +588,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         }
     case Struct(Type, Type):
         // Type def
-        strings.write_string(&s.forward_struct_definitions, "typedef struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_string(&s.forward_struct_definitions, "Struct ")
-        strings.write_string(&s.forward_struct_definitions, name)
-        strings.write_byte(&s.forward_struct_definitions, ';')
+        emit_forward_struct_definition(s, name)
 
         // Struct def
         strings.write_string(&s.other_type_definitions, "struct ")
@@ -625,7 +654,7 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c :: proc(c: Checked, main_func_ref: FuncDefinitionRef, main_extra_code: string) -> []byte {
+emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: string) -> []byte {
     s := CEmitterState {
         strings.builder_make(),
         strings.builder_make(),

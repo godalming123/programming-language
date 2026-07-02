@@ -17,22 +17,33 @@ bool_type :: Type{max(u32) - 9}
 invalid_type :: Type{max(u32) - 10}
 unknown_type :: Type{max(u32) - 11}
 type_type :: Type{max(u32) - 12}
-max_index :: max(u32) - 13
+any_type :: Type{max(u32) - 13}
+imported_file_type :: Type{max(u32) - 14}
+max_index :: max(u32) - 15
 
 dynamic_array_of_strings :: Type{0} // []String
 string_to_nil_type :: Type{1} // (String)
 string_string_to_nil_type :: Type{2} // (String, String)
 string_to_string_type :: Type{3} // (String) -> String
-comptime_u64_to_string_type :: Type{4} // #comptime ((U64) -> String)
+string_any_ordered_hashmap_type :: Type{4} // OrderedHashMap[String, Any]
 no_args_to_nil_type :: Type{5} // ()
 array_of_strings_to_nil_type :: Type{6} // ([]String)
 i64_to_nil_type :: Type{7} // (I64)
 string_i64_to_string_type :: Type{8} // (String, I64) -> String
+comptime_string_any_ordered_hashmap_and_string_to_string_type :: Type{9} // #comptime ((OrderedHashMap[String, Any], String) -> String)
 
 GenericTypeValue :: struct {
-    generic_type_index: u32, // an index into CheckerState.global_types_with_generics
-    generic_args:       []Type,
-    initialised_type:   Type, // Set to `unknown_type` when not initialised yet
+    global:           GlobalValueWithGenericRef,
+    generic_args:     []Type,
+    initialised_type: Type, // Set to `unknown_type` when not initialised yet
+}
+
+get_hash_of_array_of_types :: proc(arr: []Type) -> u32 {
+    result: u32 = 0
+    for value in arr {
+        result ~= value.index
+    }
+    return result
 }
 
 TypeValue :: union {
@@ -107,11 +118,7 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     case FuncType:
         return hash_func_type(v)
     case GenericTypeValue:
-        result := v.generic_type_index
-        for arg in v.generic_args {
-            result ~= arg.index
-        }
-        return result
+        return v.global.index ~ get_hash_of_array_of_types(v.generic_args)
     }
     panic("Unreachable")
 }
@@ -215,7 +222,7 @@ merge_type_value :: proc(
         if !ok {
             return false, nil
         }
-        if va.generic_type_index != vb.generic_type_index {
+        if va.global.index != vb.global.index {
             return false, nil
         }
         if len(va.generic_args) != len(vb.generic_args) {

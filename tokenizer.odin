@@ -31,7 +31,7 @@ ArrowToken :: struct {} // ->
 AssignToken :: struct {} // =
 SymbolsToken :: distinct string
 DigitsToken :: distinct string
-IdentToken :: #soa[]IdentAndPos // A list of the segments in the identifier, where each segment is separated by `.`
+IdentToken :: #soa[]IdentAndIndex // A list of the segments in the identifier, where each segment is separated by `.`
 MarkerToken :: distinct string
 TrueToken :: struct {} // true
 FalseToken :: struct {} // false
@@ -300,8 +300,11 @@ skip :: proc(
     return skip_ignore_first(s, f, should_continue)
 }
 
-get_location :: proc(text: string, position: uint) -> (line := 1, column := 1) {
-    for char in text[:position] {
+get_location :: proc(files: []CompilerFile, position: Pos) -> string {
+    file := files[position.file.index]
+    line := 1
+    column := 1
+    for char in file.code[:position.index] {
         if char == '\n' {
             line += 1
             column = 1
@@ -309,12 +312,11 @@ get_location :: proc(text: string, position: uint) -> (line := 1, column := 1) {
             column += 1
         }
     }
-    return
+    return fmt.aprintf("`%s` (%d:%d)", file.file_path, line, column)
 }
 
-tokenizer_wrong_token_err :: proc(
-    state: ^TokenizerState,
-    file: CompilerFile,
+wrong_token_err :: proc(
+    state: ^ParserState,
     expected_possibilities: []string,
     infos: ..string,
     loc := #caller_location,
@@ -352,8 +354,9 @@ tokenizer_wrong_token_err :: proc(
         i += 1
     }
     diagnostic(
-        file,
-        state.last_token_pos,
+        state.stderr,
+        state.files.file[:len(state.files)],
+        Pos{state.last_token_pos, state.file_ref},
         "%sExpected%s\nGot %s",
         string(info_bytes),
         string(expected_bytes),
@@ -363,27 +366,18 @@ tokenizer_wrong_token_err :: proc(
 }
 
 tokenize_segmented_identifier :: proc(s: ^TokenizerState, f: CompilerFile, first_ident: string) {
-    segments := make(#soa[dynamic]IdentAndPos, 1)
-    segments[0] = IdentAndPos{first_ident, s.last_token_pos}
+    segments := make(#soa[dynamic]IdentAndIndex, 1)
+    segments[0] = IdentAndIndex{first_ident, s.last_token_pos}
     for s.index < len(f.code) && f.code[s.index] == '.' {
         s.index += 1
         segment_start := s.index
         skipper_result := skip(s, f, is_alphanumeric_char)
         if skipper_result.skipped_atleast_one_char {
-            append_soa_elem(&segments, IdentAndPos{f.code[segment_start:s.index], segment_start})
+            append_soa_elem(&segments, IdentAndIndex{f.code[segment_start:s.index], segment_start})
         } else {
-            if skipper_result.reached_end_of_file {
-                s.last_token = Error(
-                    "While tokenizing segmented identifier\nExpected an alphanumeric\nGot the end of the file",
-                )
-            } else {
-                s.last_token = Error(
-                    fmt.aprintf(
-                        "While tokenizing segmented identifier\nExpected an alphanumeric\nGot `%c`",
-                        f.code[s.index],
-                    ),
-                )
-            }
+            s.last_token = Error(
+                skipper_result.reached_end_of_file ? "While tokenizing segmented identifier\nExpected an alphanumeric\nGot the end of the file" : fmt.aprintf("While tokenizing segmented identifier\nExpected an alphanumeric\nGot `%c`", f.code[s.index]),
+            )
             return
         }
     }

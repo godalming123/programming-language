@@ -150,7 +150,7 @@ char *builtin12(char *string, int64_t repetitions) {
     exit(1);
   }
   size_t size = strlen(string) * repetitions + 1;
-  char *out = malloc(size);
+  char *out = allocate(size);
 
   out[0] = '\0';
   while (repetitions > 0) {

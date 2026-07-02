@@ -15,50 +15,119 @@ emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
     strings.write_byte(&s.b, ')')
 }
 
+emit_js_comptime_value :: proc(s: ^GeneralEmitterState, v: CompileTimeValue) {
+    switch comptime in v {
+    case CompileTimeStructInitialisation:
+        strings.write_string(&s.b, "init_Type")
+        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_byte(&s.b, '(')
+        first_arg := true
+        for arg in comptime.args {
+            if first_arg == false {
+                strings.write_byte(&s.b, ',')
+            }
+            emit_js_comptime_value(s, arg)
+        }
+        strings.write_byte(&s.b, ')')
+
+    case CheckedFuncRef:
+        strings.write_string(&s.b, "func")
+        strings.write_uint(&s.b, comptime.index)
+    case Type, UninitialisedOrderedHashMapType:
+        panic("Unreachable")
+    case GlobalValueWithGenericRef, Import:
+        panic("Unreachable")
+    case StringLiteralValue:
+        strings.write_byte(&s.b, '"')
+        for char in comptime {
+            switch char {
+            case '\n':
+                strings.write_string(&s.b, "\\n")
+            case '"':
+                strings.write_string(&s.b, "\\\"")
+            case '\\':
+                strings.write_string(&s.b, "\\\\")
+            case:
+                strings.write_rune(&s.b, char)
+            }
+        }
+        strings.write_byte(&s.b, '"')
+    case BoolValue:
+        strings.write_string(&s.b, comptime ? "true" : "false")
+    case NumberValue:
+        if comptime.value.is_negated {
+            strings.write_byte(&s.b, '-')
+        }
+        strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
+    }
+
+}
+
+// TODO: Deduplicate code between `emit_js_runtime_value` and `emit_js_value` / `emit_js_comptime_value`
+
+emit_js_runtime_value :: proc(b: ^strings.Builder, value: RuntimeValue) {
+    #partial switch v in value {
+    case CheckedFuncRef:
+        strings.write_string(b, "func")
+        strings.write_uint(b, v.index)
+    case RuntimeStruct:
+        strings.write_byte(b, '{')
+        for field, i in v.field_values {
+            strings.write_string(b, "field")
+            strings.write_int(b, i)
+            strings.write_byte(b, ':')
+            emit_js_runtime_value(b, field)
+            strings.write_byte(b, ',')
+        }
+        strings.write_byte(b, '}')
+    case RuntimeArray:
+        strings.write_byte(b, '[')
+        for elem in v.elems {
+            emit_js_runtime_value(b, elem)
+            strings.write_byte(b, ',')
+        }
+        strings.write_byte(b, ']')
+    case i64:
+        strings.write_i64(b, v)
+    case bool:
+        strings.write_string(b, v ? "true" : "false")
+    case:
+        strings.write_string(
+            b,
+            "undefined /* TODO: Be able to emit more kinds of RuntimeValue as javascript */",
+        )
+    }
+}
+
+emit_js_map_keys_func :: proc(s: ^GeneralEmitterState, hash_map: CheckedValue) {
+    strings.write_string(&s.b, "Map.prototype.keys.call(")
+    emit_js_value(s, hash_map)
+    strings.write_byte(&s.b, ')')
+}
+
 emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     switch v in value {
     case OrderedHashMapInitFunc:
-        panic("TODO")
-    case CheckedOrderedHashMapAccess,
-         KeysOfOrderedHashMapWithStringKey,
-         KeysOfOrderedHashMapWithI64Key:
-        panic("TODO")
+        strings.write_string(&s.b, "new Map")
+    case KeysOfOrderedHashMapWithStringKey:
+        emit_js_map_keys_func(s, v.hash_map^)
+    case KeysOfOrderedHashMapWithI64Key:
+        emit_js_map_keys_func(s, v.hash_map^)
+    case CheckedOrderedHashMapAccess:
+        strings.write_string(&s.b, "Map.prototype.get(")
+        emit_js_value(s, v.hash_map^)
+        strings.write_byte(&s.b, ',')
+        emit_js_value(s, v.key^)
+        strings.write_byte(&s.b, ')')
     case CompileTimeValue:
-        switch comptime in v {
-        case Type, UninitialisedOrderedHashMapType:
-            panic("Unreachable")
-        case GlobalTypeWithGenericRef:
-            panic("Unreachable")
-        case StringLiteralValue:
-            strings.write_byte(&s.b, '"')
-            for char in comptime {
-                switch char {
-                case '\n':
-                    strings.write_string(&s.b, "\\n")
-                case '"':
-                    strings.write_string(&s.b, "\\\"")
-                case '\\':
-                    strings.write_string(&s.b, "\\\\")
-                case:
-                    strings.write_rune(&s.b, char)
-                }
-            }
-            strings.write_byte(&s.b, '"')
-        case BoolValue:
-            strings.write_string(&s.b, comptime ? "true" : "false")
-        case NumberValue:
-            if comptime.value.is_negated {
-                strings.write_byte(&s.b, '-')
-            }
-            strings.write_string(&s.b, big_uint_to_string(comptime.value.absolute_value))
-        }
+        emit_js_comptime_value(s, v)
     case ToString:
         strings.write_string(&s.b, "String(")
         emit_js_value(s, v.value^)
         strings.write_byte(&s.b, ')')
     case BuiltinFunction:
         strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(v.index))
+        strings.write_uint(&s.b, uint(v))
     case CheckedFieldAccess:
         emit_js_value(s, v.value^)
         strings.write_string(&s.b, ".field")
@@ -141,9 +210,6 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         strings.write_byte(&s.b, ')')
     case VariableRef:
         emit_variable(&s.b, v)
-    case FuncDefinitionRef:
-        strings.write_string(&s.b, "func")
-        strings.write_uint(&s.b, v.index)
     }
 }
 

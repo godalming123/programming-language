@@ -1,5 +1,6 @@
 package main
 
+/*
 import "core:fmt"
 import "core:strings"
 
@@ -22,4 +23,5 @@ list_item :: proc(state: ^TreePrinterState, format: string, args: ..any) {
 reduce_depth :: proc(state: ^TreePrinterState, _: string, _: ..any) {
     state.depth -= 1
 }
+*/
 
