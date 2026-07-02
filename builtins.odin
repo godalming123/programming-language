@@ -159,6 +159,8 @@ is_builtin :: proc(name: string) -> bool {
     case "compiler",
          "print",
          "println",
+         "eprint",
+         "eprintln",
          "readline",
          "read_file",
          "write_file",

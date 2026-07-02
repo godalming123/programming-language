@@ -243,6 +243,7 @@ diagnostic :: proc(
     }
     message := fmt.aprintf(message_fmt, ..message_args)
     defer delete(message)
+    // TODO: use bold text for header
     if position == unknown_pos {
         fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, message)
     } else {

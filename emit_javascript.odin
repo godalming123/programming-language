@@ -27,6 +27,7 @@ emit_js_comptime_value :: proc(s: ^GeneralEmitterState, v: CompileTimeValue) {
                 strings.write_byte(&s.b, ',')
             }
             emit_js_comptime_value(s, arg)
+            first_arg = false
         }
         strings.write_byte(&s.b, ')')
 
@@ -114,7 +115,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case KeysOfOrderedHashMapWithI64Key:
         emit_js_map_keys_func(s, v.hash_map^)
     case CheckedOrderedHashMapAccess:
-        strings.write_string(&s.b, "Map.prototype.get(")
+        strings.write_string(&s.b, "Map.prototype.get.call(")
         emit_js_value(s, v.hash_map^)
         strings.write_byte(&s.b, ',')
         emit_js_value(s, v.key^)

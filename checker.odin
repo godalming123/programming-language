@@ -2303,7 +2303,7 @@ check_array_initialisation :: proc(
     when debug_checker {
         print_call(loc, "check_array_initialisation")
     }
-    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, no_generic_args)
+    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, a.generic_args)
     if !ok {
         return nil
     }

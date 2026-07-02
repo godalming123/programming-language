@@ -62,7 +62,7 @@ A new language for the web, because it's time to stop working around javascript.
 - Use `len(x)` rather than `x.len`, where `typeof(len) == ([]Any) -> I64`
 - Use `to_str[T](x)` rather than `x.to_str`, where `typeof(to_str[T]) == (T) -> String`
 - Use `append[T](a, b)` rather than `a :: b`, where `typeof(append[T]) = ([]T, []T) -> []T`
-- Add a `delete` function for ordered hash maps, where `typeof(delete[K, V]) = (OrderedHashSet[K, V], K) -> OrderedHashSet[K, V]`
+- Add a `delete` function for ordered hash maps, where `typeof(delete[K, V]) = (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory

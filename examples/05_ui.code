@@ -35,7 +35,7 @@ render_ui[T] = |ui: []UI[T], focussed_button_index: I64, nesting: I64, state: UI
                 if focussed_button_index == s.button_index {
                     println("Focused button")
                     // ~s.focussed_button_onclick = button.onclick
-                    ~s = UIRenderingState[String](s.button_index, button.onclick)
+                    ~s = UIRenderingState[T](s.button_index, button.onclick)
                 } else {
                     println("Button")
                 }

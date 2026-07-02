@@ -36,7 +36,6 @@ run_normal_example :: proc(
     absolute_path: string,
     stdin_to_send: string,
 ) -> RanNormalExample {
-
     compiler_stderr_writer, compiler_stderr_builder := file_mock()
     executable, ok := build(absolute_path, compiler_stderr_writer)
     compiler_stderr := strings.to_string(compiler_stderr_builder^)
@@ -48,15 +47,19 @@ run_normal_example :: proc(
         return nil
     }
 
-    // TODO: Check for memory leaks when the process runs
     stdin_reader, stdin_writer, err := os.pipe()
     if err != nil {
         testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err))
     }
+    defer os.close(stdin_reader)
+    defer os.close(stdin_writer)
+
     _, err2 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
     if err2 != nil {
         testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err2))
     }
+
+    // TODO: Check for memory leaks when the process runs
     state, stdout, stderr, err3 := os.process_exec(
         os.Process_Desc{command = []string{executable}, stdin = stdin_reader},
         context.allocator,
