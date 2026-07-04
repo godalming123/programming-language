@@ -8,26 +8,51 @@
 //                 |--|
 // Implemented in the programming language 
 
-Elem[State] = <
-    Button {children: []Elem[State], onclick: (State) -> State},
-    Div {style: String, children: []Elem[State]},
-    Text {text: String},
+SvgElem = <
+    Line {
+        // TODO: Use U64 instead of I64
+        x1: I64,
+        y1: I64,
+        x2: I64,
+        y2: I64,
+
+        stroke_width: I64, // TODO: Use F64 instead of I64
+        stroke_color: String,
+    },
 >
+
+
+HtmlElem[State] = <
+    Button {children: []HtmlElem[State], onclick: (State) -> State},
+    Div {style: String, children: []HtmlElem[State]},
+    Text {text: String},
+    Svg {style: String, width: I64, height: I64, contents: []SvgElem}, // TODO: Be able to use `U64` instead of `I64`
+>
+
+Key = {
+    key: String,
+}
 
 UI[State] = {
     page_title: String,
-    ui_contents: []Elem[State],
+    ui_contents: []HtmlElem[State],
+}
+
+ignore_keypress[T] = |old_state: T, _: Key| -> T {
+    return old_state
 }
 
 reactive_page[T] = #comptime |
 	reactivity_function: (T) -> UI[T],
 	initial_state: T,
+    on_key_down: (T, Key) -> T,
 | -> String {
     glue = #load "./html.js"
     // TODO: Be able to define the map like `{"state_to_ui": reactivity_function, "state": initial_state}`
     mut map = OrderedHashMap[String, Any]()
     ~map["state_to_ui"] = reactivity_function
     ~map["state"] = initial_state
+    ~map["on_key_down"] = on_key_down
     // Maybe there could be an argument with the type `<.Minify{}, .LeaveNames{}>` in the future
     js = compiler.emit_js_code(map, glue)
     // The close tags are split up so that the browser interprets them as JS strings rather than HTML close tags

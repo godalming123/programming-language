@@ -248,7 +248,11 @@ is_nothing_char :: proc(c: byte) -> bool {
     return c == ' ' || c == '\t'
 }
 
+// TODO: Dry
 is_alphanumeric_char :: proc(c: byte) -> bool {
+    return c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
+}
+is_alphanumeric_char_rune :: proc(c: rune) -> bool {
     return c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
 }
 

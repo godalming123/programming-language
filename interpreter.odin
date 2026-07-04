@@ -818,6 +818,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
 
 DefaultBuiltinHandlerData :: struct {
     working_dir: string,
+    pipe:        Pipe(^os.File),
 }
 
 default_builtin_handler_procedure :: proc(
@@ -831,19 +832,19 @@ default_builtin_handler_procedure :: proc(
     switch index {
     case .print:
         assert(len(args) == 1)
-        fmt.print(args[0].(RuntimeString).value)
+        fmt.fprint(data.pipe.stdout, args[0].(RuntimeString).value)
         return nil
     case .println:
         assert(len(args) == 1)
-        fmt.println(args[0].(RuntimeString).value)
+        fmt.fprintln(data.pipe.stdout, args[0].(RuntimeString).value)
         return nil
     case .eprint:
         assert(len(args) == 1)
-        fmt.eprint(args[0].(RuntimeString).value)
+        fmt.fprint(data.pipe.stderr, args[0].(RuntimeString).value)
         return nil
     case .eprintln:
         assert(len(args) == 1)
-        fmt.eprintln(args[0].(RuntimeString).value)
+        fmt.fprintln(data.pipe.stderr, args[0].(RuntimeString).value)
         return nil
     case .readline:
         assert(len(args) == 1)

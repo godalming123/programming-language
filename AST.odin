@@ -66,7 +66,7 @@ FuncDefinitionRef :: struct {
 
 CheckedFuncRef :: struct {
     // An index into:
-    // - `CheckerOutput.checked_funcs`
+    // - `Checked.checked_funcs`
     // - `CheckerState.checked_functions`
     index: uint,
 }

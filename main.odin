@@ -46,19 +46,19 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     return output_executable_path, true
 }
 
-done_command :: "done"
-
-// - The `string` returned is the path to the executable
-// - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -> (string, bool) {
-    build_start := time.now()
+compile :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (Checked, CheckedFuncRef, bool) {
+    compile_start := time.now()
     defer {
-        fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
+        fmt.fprintfln(
+            pipe.stdout,
+            "Done compiling in %f ms!",
+            time.duration_milliseconds(time.since(compile_start)),
+        )
     }
 
-    parsed, ok := parse_project(file_name, stderr)
+    parsed, ok := parse_project(func.file_name, pipe.stderr)
     if !ok {
-        return "", false
+        return Checked{}, CheckedFuncRef{}, false
     }
 
     when debug_parser_output {
@@ -73,8 +73,8 @@ build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -
         debug_nesting -= 1
     }
 
-    fmt.printfln("Checking...")
-    checker_output := check(parsed, stderr)
+    fmt.fprintfln(pipe.stdout, "Checking...")
+    checker_output := check(parsed, func.func_name, pipe.stderr)
 
     errors, warnings: string = ---, ---
 
@@ -93,24 +93,32 @@ build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -
     defer delete_string(warnings)
 
     if checker_output.diagnostics_info.number_of_errors > 0 {
-        fmt.eprintfln("Erroneously checked with %s and %s", errors, warnings)
-        return "", false
-    } else {
-        fmt.printfln("Successfully checked with %s and %s", errors, warnings)
+        fmt.fprintfln(pipe.stderr, "Erroneously checked with %s and %s", errors, warnings)
+        return Checked{}, CheckedFuncRef{}, false
     }
 
-    absolute_file_name, err := filepath.abs(file_name, context.allocator)
-    if err != nil {
-        fmt.eprintfln("Failed make path absolute: %#v", err)
+    fmt.fprintfln(pipe.stdout, "Successfully checked with %s and %s", errors, warnings)
+    return checker_output.checked, checker_output.func_ref, true
+}
+
+// The `string` returned is the path to the executable
+// Returns `"", false` on failure
+build_c :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (string, bool) {
+    checked, func_ref, ok := compile(func, pipe)
+    if !ok {
         return "", false
     }
-    defer delete(absolute_file_name)
-    absolute_file_dir := filepath.dir(absolute_file_name)
-    builtin_handler := BuiltinHandler {
-        &DefaultBuiltinHandlerData{absolute_file_dir},
-        default_builtin_handler_procedure,
-    }
 
+    fmt.printfln("Emitting C code...")
+    c := emit_c(checked, func_ref)
+
+    executable_path, ok2 := write_and_compile_c(c, func.file_name)
+    if !ok2 {
+        return "", false
+    }
+    return executable_path, true
+
+    /*
     if checker_output.entry_func_type == .BuildFunc {
         if interpret_file {
             fmt.eprintln("Cannot use `interpret` with files that use a custom `build` func")
@@ -169,19 +177,29 @@ build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -
         result := interpret(checker_output.checked, builtin_handler, checker_output.entry_func_ref)
         return "", result.(i64) == 0 ? true : false
     } else {
-        fmt.printfln("Emitting C code...")
-        c := emit_c(
-            checker_output.checked,
-            checker_output.entry_func_ref,
-            checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
-        )
-
-        executable_path, ok2 := write_and_compile_c(c, file_name)
-        if !ok2 {
-            return "", false
-        }
-        return executable_path, true
     }
+    */
+}
+
+run :: proc(func: FunctionRef, compiler: Pipe(^os.File), program: Pipe(^os.File)) -> i64 {
+    checked, func_ref, ok := compile(func, compiler)
+    if !ok {
+        return 1
+    }
+    absolute_file_name, err := filepath.abs(func.file_name, context.allocator)
+    if err != nil {
+        fmt.fprintfln(compiler.stderr, "Failed make path absolute: %#v", err)
+        return 1
+    }
+    defer delete(absolute_file_name)
+
+    absolute_file_dir := filepath.dir(absolute_file_name)
+    builtin_handler := BuiltinHandler {
+        &DefaultBuiltinHandlerData{absolute_file_dir, program},
+        default_builtin_handler_procedure,
+    }
+    result := interpret(checked, builtin_handler, func_ref)
+    return result.(i64)
 }
 
 /*
@@ -264,16 +282,61 @@ run_metaprogram :: proc(
 }
 */
 
+default_file_name :: "./main.code" // TODO: Choose proper file extension
+default_func_name :: "main"
+
 print_help :: proc(exit_code: int) -> ! {
-    fmt.println("- `build file_name` build a file")
     fmt.println(
-        "- `interpret file_name` interpret a file (only works for files that don't use a custom `build` func)",
+        "- `build_c file_name func_name` transpile a file into C and then build the C code into an executable",
+    )
+    fmt.println(
+        "- `run file_name func_name` compile a file and interpret a function within that file",
     )
     fmt.println("- `help` show this help message")
+    fmt.println("- For commands that take the arguments `file_name func_name`:")
+    fmt.println(
+        "  - If only one argument is specified, and the argument contains only alphanumerics and underscores, the compiler assumes it is the `func_name`",
+    )
+    fmt.println("  - Otherwise, the compiler assumes that the first argument is the `file_name`")
+    fmt.println(
+        "  - If the `file_name` is not specified, it defaults to `" + default_file_name + "`",
+    )
+    fmt.println(
+        "  - If the `func_name` is not specified, it defaults to `" + default_func_name + "`",
+    )
     os.exit(exit_code)
 }
 
+FunctionRef :: struct {
+    file_name: string,
+    func_name: string,
+}
+
+get_function_ref :: proc(args_after_command: []string) -> FunctionRef {
+    switch len(args_after_command) {
+    case 0:
+        return FunctionRef{default_file_name, default_func_name}
+    case 1:
+        for char in args_after_command[0] {
+            if !is_alphanumeric_char_rune(char) {
+                return FunctionRef{args_after_command[0], default_func_name}
+            }
+        }
+        return FunctionRef{default_file_name, args_after_command[0]}
+    case 2:
+        return FunctionRef{args_after_command[0], args_after_command[1]}
+    case:
+        fmt.eprintln(
+            "Expected at most 2 arguments after the name of the command to specify the file name and the func name, got %d arguments",
+            len(args_after_command),
+        )
+        print_help(1)
+    }
+}
+
 main :: proc() {
+    std_pipe := Pipe(^os.File){os.stdout, os.stderr}
+
     when ODIN_DEBUG {
         track: mem.Tracking_Allocator
         mem.tracking_allocator_init(&track, context.allocator)
@@ -295,30 +358,15 @@ main :: proc() {
         print_help(1)
     }
     switch os.args[1] {
-    case "build":
-        if len(os.args) != 3 {
-            fmt.eprintfln(
-                "Expected 3 arguments for the `build` command, but got %d arguments",
-                len(os.args),
-            )
-            print_help(1)
-        }
-        _, ok := build(os.args[2])
+    case "build_c":
+        ref := get_function_ref(os.args[2:])
+        _, ok := build_c(ref, std_pipe)
         if !ok {
             os.exit(1)
         }
-    case "interpret":
-        if len(os.args) != 3 {
-            fmt.eprintfln(
-                "Expected 3 arguments for the `interpret` command, but got %d arguments",
-                len(os.args),
-            )
-            print_help(1)
-        }
-        _, ok := build(os.args[2], interpret_file = true)
-        if !ok {
-            os.exit(1)
-        }
+    case "run":
+        ref := get_function_ref(os.args[2:])
+        os.exit(int(run(ref, std_pipe, std_pipe)))
     case "help":
         print_help(0)
     case:

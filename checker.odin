@@ -3267,8 +3267,7 @@ DiagnosticsInfo :: struct {
 CheckerOutput :: struct {
     checked:          Checked,
     diagnostics_info: DiagnosticsInfo,
-    entry_func_ref:   CheckedFuncRef,
-    entry_func_type:  EntryFuncType,
+    func_ref:         CheckedFuncRef,
 }
 
 Checked :: struct {
@@ -3276,7 +3275,7 @@ Checked :: struct {
     types:         Types,
 }
 
-check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
+check :: proc(parsed: ParsedProject, func_name: string, stderr: ^os.File) -> CheckerOutput {
     state := CheckerState {
         stderr                        = stderr,
         files                         = parsed.files,
@@ -3423,7 +3422,21 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         return CheckerOutput{diagnostics_info = state.diagnostics_info}
     }
 
-    // TODO: Check the arguments and return types of the `build` or `main` functions
+    func_ref, _, func_ok := get_global_function(
+        &state,
+        unknown_pos,
+        FileRef{0},
+        func_name,
+        "TODO: Write hint",
+    )
+    if !func_ok {
+        return CheckerOutput{diagnostics_info = state.diagnostics_info}
+    }
+    checked := Checked{state.checked_functions[:], state.types}
+    // TODO: Check the arguments and return types of the func
+    return CheckerOutput{checked, state.diagnostics_info, func_ref}
+
+    /*
     hint ::
         "\n\nHint: If you define a `build` function, the compiler will run that " +
         "function at compile time to build the program, for example:\n\n" +
@@ -3500,5 +3513,6 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
     }
     checked := Checked{state.checked_functions[:], state.types}
     return CheckerOutput{checked, state.diagnostics_info, entry_func_ref, entry_func_type}
+    */
 }
 

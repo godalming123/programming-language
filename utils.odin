@@ -33,6 +33,18 @@ file_mock :: proc() -> (^os.File, ^strings.Builder) {
     return new_clone(os.File{nil, os.File_Stream{stream_proc, builder}}), builder
 }
 
+pipe_mock :: proc() -> (Pipe(^os.File), Pipe(^strings.Builder)) {
+    stdout_writer, stdout_builder := file_mock()
+    stderr_writer, stderr_builder := file_mock()
+    writers := Pipe(^os.File){stdout_writer, stderr_writer}
+    builders := Pipe(^strings.Builder){stdout_builder, stderr_builder}
+    return writers, builders
+}
+
+get_output :: proc(p: Pipe(^strings.Builder)) -> Pipe(string) {
+    return Pipe(string){strings.to_string(p.stdout^), strings.to_string(p.stderr^)}
+}
+
 random_string :: proc(max_length: int, gen := context.random_generator) -> string {
     context.random_generator = gen
     length := rand.int_max(max_length / 4)

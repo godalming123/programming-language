@@ -1,4 +1,4 @@
-html = import "html.code"
+h = import "html.code"
 
 game_width = 15
 game_height = 15
@@ -42,13 +42,13 @@ run_tick = |s: [game_size]Bool| -> [game_size]Bool {
     return new_state
 }
 
-game_of_life = |s: [game_size]Bool| -> html.UI[[game_size]Bool] {
-    mut grid_pixels = []html.Elem[[game_size]Bool]()
+game_of_life = |s: [game_size]Bool| -> h.UI[[game_size]Bool] {
+    mut grid_pixels = []h.HtmlElem[[game_size]Bool]()
     for pixel in s {
         if pixel {
-	        ~grid_pixels = grid_pixels :: .Div("background: #FFFFFF;", []html.Elem[[game_size]Bool]())
+	        ~grid_pixels = grid_pixels :: .Div("background: #FFFFFF;", []h.HtmlElem[[game_size]Bool]())
         } else {
-	        ~grid_pixels = grid_pixels :: .Div("background: #000000;", []html.Elem[[game_size]Bool]())
+	        ~grid_pixels = grid_pixels :: .Div("background: #000000;", []h.HtmlElem[[game_size]Bool]())
         }
     }
 	grid_style =
@@ -56,11 +56,11 @@ game_of_life = |s: [game_size]Bool| -> html.UI[[game_size]Bool] {
         "grid-template-columns: repeat(" & game_width.to_str & ", 1fr);"
         "grid-template-columns: repeat(" & game_height.to_str & ", 1fr);"
         "aspect-ratio: 1 / 1;"
-	ui_contents = []html.Elem[[game_size]Bool](
-        .Button([]html.Elem[[game_size]Bool](.Text("Run tick")), run_tick),
+	ui_contents = []h.HtmlElem[[game_size]Bool](
+        .Button([]h.HtmlElem[[game_size]Bool](.Text("Run tick")), run_tick),
         .Div(grid_style, grid_pixels),
     )
-	return html.UI[[game_size]Bool](main_title, ui_contents)
+	return h.UI[[game_size]Bool](main_title, ui_contents)
 }
 
 build = #comptime || -> I64 {
@@ -81,6 +81,11 @@ build = #comptime || -> I64 {
         false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
     )
-    write_file("conways_game_of_life.html", html.reactive_page[[game_size]Bool](game_of_life, pulsar_initial_state))
+	html = h.reactive_page[[game_size]Bool](
+		game_of_life,
+		pulsar_initial_state,
+		h.ignore_keypress[[game_size]Bool],
+	)
+    write_file("conways_game_of_life.html", html)
     return 0
 }

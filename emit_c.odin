@@ -654,7 +654,7 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: string) -> []byte {
+emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef) -> []byte {
     s := CEmitterState {
         strings.builder_make(),
         strings.builder_make(),
@@ -682,7 +682,6 @@ emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: strin
     strings.write_string(&s.b, "int main() {int ret = func")
     strings.write_uint(&s.b, main_func_ref.index)
     strings.write_string(&s.b, "();")
-    strings.write_string(&s.b, main_extra_code)
     strings.write_string(&s.b, "return ret;}")
 
     out := strings.builder_make()
