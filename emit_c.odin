@@ -4,9 +4,9 @@ import "core:fmt"
 import "core:strings"
 
 GeneralEmitterState :: struct {
-    b:     strings.Builder,
-    types: Types,
-    c:     Checked,
+    b:             strings.Builder,
+    types:         Types,
+    checked_funcs: []CheckedFunction,
 }
 
 CEmitterState :: struct {
@@ -654,25 +654,29 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef) -> []byte {
+emit_c :: proc(
+    types: Types,
+    checked_funcs: []CheckedFunction,
+    main_func_ref: CheckedFuncRef,
+) -> []byte {
     s := CEmitterState {
         strings.builder_make(),
         strings.builder_make(),
         strings.builder_make(),
         strings.builder_make(),
-        GeneralEmitterState{strings.builder_make(), c.types, c},
+        GeneralEmitterState{strings.builder_make(), types, checked_funcs},
     }
 
-    for _, i in c.types.values {
+    for _, i in types.values {
         emit_c_global_type(&s, i)
     }
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_funcs {
         emit_function_head(&s, index, func.type)
         strings.write_byte(&s.b, ';')
     }
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_funcs {
         emit_function_head(&s, index, func.type)
         strings.write_byte(&s.b, '{')
         emit_c_block(&s, 1, func.variables, func.body)

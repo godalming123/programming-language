@@ -304,7 +304,7 @@ skip :: proc(
     return skip_ignore_first(s, f, should_continue)
 }
 
-get_location :: proc(files: []CompilerFile, position: Pos) -> string {
+get_location :: proc(files: [^]CompilerFile, position: Pos) -> string {
     file := files[position.file.index]
     line := 1
     column := 1
@@ -358,8 +358,7 @@ wrong_token_err :: proc(
         i += 1
     }
     diagnostic(
-        state.stderr,
-        state.files.file[:len(state.files)],
+        &state.r,
         Pos{state.last_token_pos, state.file_ref},
         "%sExpected%s\nGot %s",
         string(info_bytes),

@@ -17,8 +17,9 @@ counter = |s: CounterState| -> h.UI[CounterState] {
     return h.UI[CounterState]("Counter", contents)
 }
 
-build = #comptime || -> I64 {
+build = |c: Compiler| -> I64 {
     html = h.reactive_page[CounterState](
+        c,
         counter,
         counter_initial_state,
         h.ignore_keypress[CounterState],

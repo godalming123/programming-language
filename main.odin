@@ -46,19 +46,32 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     return output_executable_path, true
 }
 
-compile :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (Checked, CheckedFuncRef, bool) {
-    compile_start := time.now()
+BuildC :: struct {
+    executable_path_store: ^string,
+}
+
+Run :: struct {
+    program_io: Pipe(^os.File),
+}
+
+Command :: union #no_nil {
+    BuildC,
+    Run,
+}
+
+compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -> int {
+    start := time.now()
     defer {
         fmt.fprintfln(
-            pipe.stdout,
-            "Done compiling in %f ms!",
-            time.duration_milliseconds(time.since(compile_start)),
+            compiler.stdout,
+            "Done in %f ms!",
+            time.duration_milliseconds(time.since(start)),
         )
     }
 
-    parsed, ok := parse_project(func.file_name, pipe.stderr)
+    parsed, ok := parse_project(func.file_name, compiler)
     if !ok {
-        return Checked{}, CheckedFuncRef{}, false
+        return 1
     }
 
     when debug_parser_output {
@@ -73,52 +86,131 @@ compile :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (Checked, CheckedFun
         debug_nesting -= 1
     }
 
-    fmt.fprintfln(pipe.stdout, "Checking...")
-    checker_output := check(parsed, func.func_name, pipe.stderr)
+    fmt.fprintfln(compiler.stdout, "Checking...")
+    checker_output := check(parsed, func.func_name, compiler)
+    function_type := unknown_type
+    if checker_output.func_ref.index < len(checker_output.checked_funcs) {
+        function_type = checker_output.checked_funcs[checker_output.func_ref.index].type
+        if function_type != unknown_type {
+            // TODO: Include position in error message
+            switch c in command {
+            case BuildC:
+                if function_type != no_args_to_i64_type {
+                    diagnostic(
+                        &checker_output.reporter,
+                        unknown_pos,
+                        "Got the type %s\nExpected the type `%s`",
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            function_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            no_args_to_i64_type,
+                        ),
+                    )
+                }
+            case Run:
+                if function_type != no_args_to_i64_type && function_type != compiler_to_i64_type {
+                    diagnostic(
+                        &checker_output.reporter,
+                        unknown_pos,
+                        "Got the type %s\nExpected the type `%s` or `%s`",
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            function_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            no_args_to_i64_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            compiler_to_i64_type,
+                        ),
+                    )
+                }
+            case:
+                panic("Unreachable")
+            }
+        }
+    }
 
     errors, warnings: string = ---, ---
 
-    if checker_output.diagnostics_info.number_of_errors == 1 {
+    if checker_output.reporter.number_of[.Error] == 1 {
         errors = fmt.aprint("1 error")
     } else {
-        errors = fmt.aprintf("%d errors", checker_output.diagnostics_info.number_of_errors)
+        errors = fmt.aprintf("%d errors", checker_output.reporter.number_of[.Error])
     }
     defer delete_string(errors)
 
-    if checker_output.diagnostics_info.number_of_warnings == 1 {
+    if checker_output.reporter.number_of[.Warning] == 1 {
         warnings = fmt.aprint("1 warning")
     } else {
-        warnings = fmt.aprintf("%d warnings", checker_output.diagnostics_info.number_of_warnings)
+        warnings = fmt.aprintf("%d warnings", checker_output.reporter.number_of[.Warning])
     }
     defer delete_string(warnings)
 
-    if checker_output.diagnostics_info.number_of_errors > 0 {
-        fmt.fprintfln(pipe.stderr, "Erroneously checked with %s and %s", errors, warnings)
-        return Checked{}, CheckedFuncRef{}, false
+    if checker_output.reporter.number_of[.Error] > 0 {
+        fmt.fprintfln(compiler.stderr, "Erroneously checked with %s and %s", errors, warnings)
+        return 1
     }
 
-    fmt.fprintfln(pipe.stdout, "Successfully checked with %s and %s", errors, warnings)
-    return checker_output.checked, checker_output.func_ref, true
+    fmt.fprintfln(compiler.stdout, "Successfully checked with %s and %s", errors, warnings)
+
+    if build_c, is_build_c := command.(BuildC); is_build_c {
+        fmt.printfln("Emitting C code...")
+        c := emit_c(checker_output.types, checker_output.checked_funcs, checker_output.func_ref)
+        executable_path, ok2 := write_and_compile_c(c, func.file_name)
+        if !ok2 {
+            return 1
+        }
+        if build_c.executable_path_store != nil {
+            build_c.executable_path_store^ = executable_path
+        }
+        return 0
+    }
+    run := command.(Run)
+
+    absolute_file_name, err := filepath.abs(func.file_name, context.allocator)
+    if err != nil {
+        fmt.fprintfln(compiler.stderr, "Failed make path absolute: %#v", err)
+        return 1
+    }
+    defer delete(absolute_file_name)
+
+    fmt.fprintfln(compiler.stdout, "Interpreting `%s`...", func.func_name)
+
+    absolute_file_dir := filepath.dir(absolute_file_name)
+    state := InterpState {
+        types           = checker_output.types,
+        checked_funcs   = checker_output.checked_funcs,
+        builtin_handler = BuiltinHandler {
+            &DefaultBuiltinHandlerData{absolute_file_dir, run.program_io},
+            default_builtin_handler_procedure,
+        },
+    }
+    args: []RuntimeValue
+    if function_type == compiler_to_i64_type {
+        compiler_struct_fields := make([]RuntimeValue, 1)
+        compiler_struct_fields[0] = BuiltinFunction.emit_js_code
+
+        args = make([]RuntimeValue, 1)
+        args[0] = RuntimeStruct{true, compiler_struct_fields}
+    }
+    result := interp_execute_function2(&state, checker_output.func_ref, args) // TODO: Do not use nil if function has `Compiler` arg
+    return int(result.(i64))
 }
 
+/*
 // The `string` returned is the path to the executable
 // Returns `"", false` on failure
-build_c :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (string, bool) {
-    checked, func_ref, ok := compile(func, pipe)
-    if !ok {
-        return "", false
-    }
-
-    fmt.printfln("Emitting C code...")
-    c := emit_c(checked, func_ref)
-
-    executable_path, ok2 := write_and_compile_c(c, func.file_name)
-    if !ok2 {
-        return "", false
-    }
-    return executable_path, true
-
-    /*
     if checker_output.entry_func_type == .BuildFunc {
         if interpret_file {
             fmt.eprintln("Cannot use `interpret` with files that use a custom `build` func")
@@ -179,28 +271,6 @@ build_c :: proc(func: FunctionRef, pipe: Pipe(^os.File)) -> (string, bool) {
     } else {
     }
     */
-}
-
-run :: proc(func: FunctionRef, compiler: Pipe(^os.File), program: Pipe(^os.File)) -> i64 {
-    checked, func_ref, ok := compile(func, compiler)
-    if !ok {
-        return 1
-    }
-    absolute_file_name, err := filepath.abs(func.file_name, context.allocator)
-    if err != nil {
-        fmt.fprintfln(compiler.stderr, "Failed make path absolute: %#v", err)
-        return 1
-    }
-    defer delete(absolute_file_name)
-
-    absolute_file_dir := filepath.dir(absolute_file_name)
-    builtin_handler := BuiltinHandler {
-        &DefaultBuiltinHandlerData{absolute_file_dir, program},
-        default_builtin_handler_procedure,
-    }
-    result := interpret(checked, builtin_handler, func_ref)
-    return result.(i64)
-}
 
 /*
 // OLD(METAPROGRAM_IN_C)
@@ -312,6 +382,7 @@ FunctionRef :: struct {
     func_name: string,
 }
 
+// Terminates the program on failure
 get_function_ref :: proc(args_after_command: []string) -> FunctionRef {
     switch len(args_after_command) {
     case 0:
@@ -335,8 +406,6 @@ get_function_ref :: proc(args_after_command: []string) -> FunctionRef {
 }
 
 main :: proc() {
-    std_pipe := Pipe(^os.File){os.stdout, os.stderr}
-
     when ODIN_DEBUG {
         track: mem.Tracking_Allocator
         mem.tracking_allocator_init(&track, context.allocator)
@@ -353,6 +422,8 @@ main :: proc() {
         }
     }
 
+    std_pipe := Pipe(^os.File){os.stdout, os.stderr}
+
     if len(os.args) < 2 {
         fmt.eprintfln("Expected at least one argument for the command to run")
         print_help(1)
@@ -360,13 +431,12 @@ main :: proc() {
     switch os.args[1] {
     case "build_c":
         ref := get_function_ref(os.args[2:])
-        _, ok := build_c(ref, std_pipe)
-        if !ok {
-            os.exit(1)
-        }
+        ret := compile(ref, std_pipe, BuildC{})
+        os.exit(ret)
     case "run":
         ref := get_function_ref(os.args[2:])
-        os.exit(int(run(ref, std_pipe, std_pipe)))
+        ret := compile(ref, std_pipe, Run{std_pipe})
+        os.exit(ret)
     case "help":
         print_help(0)
     case:

@@ -89,13 +89,15 @@ ControlFlowOperation :: union {
 }
 
 InterpState :: struct {
-    c:               Checked,
+    types:           Types,
+    checked_funcs:   []CheckedFunction,
     builtin_handler: BuiltinHandler,
     frames:          [dynamic]Frame,
     current_loop:    uint,
     control_flow_op: ControlFlowOperation,
 }
 
+/*
 interpret :: proc(
     c: Checked,
     builtin_handler: BuiltinHandler,
@@ -107,11 +109,12 @@ interpret :: proc(
         builtin_handler = builtin_handler,
     }
 
-    result := interp_execute_function2(&state, entry_func_ref.index, nil)
+    result := interp_execute_function2(&state, entry_func_ref, nil)
     assert(len(state.frames) == 0)
     delete(state.frames)
     return result
 }
+*/
 
 interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> RuntimeValue {
     fn_val := interp_eval_value(s, c.function^)
@@ -135,7 +138,7 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
     case BuiltinFunction:
         return s.builtin_handler.procedure(s, val, args)
     case CheckedFuncRef:
-        return interp_execute_function2(s, val.index, args)
+        return interp_execute_function2(s, val, args)
     case RuntimeI64OrderedHashMapInitFunc:
         assert(len(args) == 0)
         return RuntimeI64OrderedHashMap{}
@@ -151,13 +154,13 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
 
 interp_execute_function2 :: proc(
     state: ^InterpState,
-    func_index: uint,
+    func_ref: CheckedFuncRef,
     args: []RuntimeValue,
 ) -> RuntimeValue {
-    checked_func := state.c.checked_funcs[func_index]
+    checked_func := state.checked_funcs[func_ref.index]
 
     frame := Frame {
-        func_index = func_index,
+        func_index = func_ref.index,
         scopes     = make([dynamic][]RuntimeValue),
     }
     append_elem(&frame.scopes, args)
@@ -601,7 +604,7 @@ interp_eval_comptime_value :: proc(s: ^InterpState, value: CompileTimeValue) -> 
 interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
     switch value in v {
     case OrderedHashMapInitFunc:
-        #partial switch type in get_type(s.c.types, value.type) {
+        #partial switch type in get_type(s.types, value.type) {
         case OrderedHashMapTypeWithStringKey:
             return RuntimeStringOrderedHashMapInitFunc{}
         case OrderedHashMapTypeWithI64Key:
@@ -680,9 +683,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
 
     case BooleanNotValue:
         inner := interp_eval_value(s, value^)
-        inner_bool, inner_ok := inner.(bool)
-        if !inner_ok {panic("Expected bool for not")}
-        return !inner_bool
+        return !inner.(bool)
 
     case CheckedJoinedValues:
         lhs := interp_eval_value(s, value.val0^)
@@ -890,7 +891,7 @@ default_builtin_handler_procedure :: proc(
         assert(len(args) == 2)
         globals_map := args[0].(RuntimeStringOrderedHashMap)
         glue := args[1].(RuntimeString)
-        builder := emit_javascript(state.c)
+        builder := emit_javascript(state.types, state.checked_funcs)
         for global_name in globals_map.order {
             strings.write_string(&builder, "let ")
             strings.write_string(&builder, global_name)

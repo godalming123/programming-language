@@ -17,6 +17,7 @@ Pipe :: struct(T: typeid) {
 
 CompilationFailed :: struct {
     compiler: Pipe(string),
+    status:   int,
 }
 
 CompilationSuccessful :: struct {
@@ -32,7 +33,7 @@ RanExampleViaC :: union {
 InterpretedExample :: struct {
     compiler:  Pipe(string),
     program:   Pipe(string),
-    exit_code: i64,
+    exit_code: int,
 }
 
 run_example_via_c :: proc(
@@ -41,10 +42,11 @@ run_example_via_c :: proc(
     stdin_to_send: string,
 ) -> RanExampleViaC {
     compiler_writer, compiler_builder := pipe_mock()
-    executable, ok := build_c(FunctionRef{absolute_path, "main"}, compiler_writer)
+    executable: string
+    status := compile(FunctionRef{absolute_path, "main"}, compiler_writer, BuildC{&executable})
     compiler := get_output(compiler_builder)
-    if !ok {
-        return CompilationFailed{compiler}
+    if status != 0 {
+        return CompilationFailed{compiler, status}
     }
     if executable == "" {
         testing.fail(t)
@@ -89,7 +91,7 @@ run_example_via_c :: proc(
 interpret_example :: proc(t: ^testing.T, func: FunctionRef) -> InterpretedExample {
     compiler_pipe, compiler_builder := pipe_mock()
     program_pipe, program_builder := pipe_mock()
-    status := run(func, compiler_pipe, program_pipe)
+    status := compile(func, compiler_pipe, Run{program_pipe})
     return InterpretedExample{get_output(compiler_builder), get_output(program_builder), status}
 }
 
@@ -237,11 +239,8 @@ example_03_fibonacci :: proc(t: ^testing.T) {
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
-    ran := interpret_example(
-        t,
-        FunctionRef{#directory + "examples/03_comptime_fibonacci.code", "main"},
-    )
-    testing.expect(t, ran.exit_code != 0)
+    ran := interpret_example(t, FunctionRef{#directory + "examples/03_fibonacci.code", "main"})
+    testing.expect(t, ran.exit_code == 0)
     // testing.expect(ran.compiler_stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
 
     data, err2 := os.read_entire_file(file, context.allocator)
@@ -378,7 +377,7 @@ basic_fuzz_test :: proc(t: ^testing.T) {
         }
 
         pipe, _ := pipe_mock()
-        build_c(FunctionRef{tmp_file, "main"}, pipe)
+        compile(FunctionRef{tmp_file, "main"}, pipe, BuildC{})
     }
 }
 
@@ -511,7 +510,10 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     out := ran.(CompilationSuccessful)
     testing.expect(t, out.program.stderr == "")
     testing.expect(t, out.program.stdout == "Hello world\n")
-    e := TestingTextExpecter{0, out.compiler.stderr, t}
+    testing.expect(t, out.compiler.stderr == "")
+    e := TestingTextExpecter{0, out.compiler.stdout, t}
+    fmt.println(out.compiler.stdout)
+    expect_string(&e, "Checking...\n")
     expect_string(&e, "\n")
     expect_string(&e, "Warning compiling `" + #directory)
     expect_string(&e, "examples/invalid/01_wrong_identifier_casing.code` (7:8)\n")
@@ -525,6 +527,35 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     expect_string(&e, "First character in a camel case identifier must be an uppercase letter\n")
     expect_string(&e, "Got 'e'\n")
     expect_string(&e, "\n")
+    expect_string(&e, "Successfully checked with 0 errors and 2 warnings\n")
+    expect_done_message(&e)
+    expect_finished(&e)
+}
+
+@(test)
+invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
+    ran := run_example_via_c(
+        t,
+        #directory + "examples/invalid/02_wrong_main_function_type.code",
+        "",
+    )
+    if ran == nil {return}
+    out := ran.(CompilationFailed)
+
+    testing.expect(t, out.status == 1)
+
+    e := TestingTextExpecter{0, out.compiler.stdout, t}
+    expect_string(&e, "Checking...\n")
+    expect_done_message(&e)
+    expect_finished(&e)
+
+    e = TestingTextExpecter{0, out.compiler.stderr, t}
+    expect_string(&e, "\n")
+    expect_string(&e, "Error compiling\n")
+    expect_string(&e, "Got the type (String, I64) -> I64\n")
+    expect_string(&e, "Expected the type `() -> I64`\n")
+    expect_string(&e, "\n")
+    expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")
     expect_finished(&e)
 }
 

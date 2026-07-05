@@ -30,7 +30,10 @@ no_args_to_nil_type :: Type{5} // ()
 array_of_strings_to_nil_type :: Type{6} // ([]String)
 i64_to_nil_type :: Type{7} // (I64)
 string_i64_to_string_type :: Type{8} // (String, I64) -> String
-comptime_string_any_ordered_hashmap_and_string_to_string_type :: Type{9} // #comptime ((OrderedHashMap[String, Any], String) -> String)
+string_any_ordered_hashmap_and_string_to_string_type :: Type{9} // (OrderedHashMap[String, Any], String) -> String
+compiler_type :: Type{10} // {emit_js_code: (OrderedHashMap[String, Any], String) -> String}
+no_args_to_i64_type :: Type{11} // () -> I64
+compiler_to_i64_type :: Type{12} // (Compiler) -> I64
 
 GenericTypeValue :: struct {
     global:           GlobalValueWithGenericRef,
@@ -56,6 +59,114 @@ TypeValue :: union {
 
     // The extra data is the initialisation function
     Struct(Type, Type),
+}
+
+init_struct_type :: proc(
+    types: ^Types,
+    type: Type,
+    fields: #soa[]StructField(Type),
+    fields_map: map[string]uint,
+) {
+    // created := create_type(types, Struct(Type, Type){unknown_type, fields_map, fields})
+    // if created.type_value.(Struct(Type, Type)).extra_data != unknown_type {
+    // return created.type
+    // }
+
+    return_types := make([]Type, 1)
+    return_types[0] = type
+
+    created := create_type(
+        types,
+        Struct(Type, Type) {
+            create_type(types, FuncType{fields.type[:len(fields)], return_types}).type,
+            fields_map,
+            fields,
+        },
+    )
+    assert(created.type == type)
+    // return created.type
+}
+
+create_types :: proc() -> Types {
+    out: Types
+
+    array_with_string_type := make([]Type, 1)
+    array_with_string_type[0] = string_type
+
+    array_with_2string_types := make([]Type, 2)
+    array_with_2string_types[0] = string_type
+    array_with_2string_types[1] = string_type
+
+    array_with_i64_type := make([]Type, 1)
+    array_with_i64_type[0] = i64_type
+
+    array_with_u64_type := make([]Type, 1)
+    array_with_u64_type[0] = u64_type
+
+    array_with_string_any_ordered_hash_map_and_string := make([]Type, 2)
+    array_with_string_any_ordered_hash_map_and_string[0] = string_any_ordered_hashmap_type
+    array_with_string_any_ordered_hash_map_and_string[1] = string_type
+
+    array_with_dynamic_array_of_strings := make([]Type, 1)
+    array_with_dynamic_array_of_strings[0] = dynamic_array_of_strings
+
+    array_with_string_i64_types := make([]Type, 2)
+    array_with_string_i64_types[0] = string_type
+    array_with_string_i64_types[1] = i64_type
+
+    array_with_compiler_type := make([]Type, 1)
+    array_with_compiler_type[0] = compiler_type
+
+    assert(dynamic_array_of_strings == create_type(&out, ArrayType{0, string_type}).type)
+    assert(string_to_nil_type == create_type(&out, FuncType{array_with_string_type, nil}).type)
+    assert(
+        string_string_to_nil_type ==
+        create_type(&out, FuncType{array_with_2string_types, nil}).type,
+    )
+    assert(
+        string_to_string_type ==
+        create_type(&out, FuncType{array_with_string_type, array_with_string_type}).type,
+    )
+    assert(
+        string_any_ordered_hashmap_type ==
+        create_type(&out, OrderedHashMapTypeWithStringKey{any_type}).type,
+    )
+    assert(no_args_to_nil_type == create_type(&out, FuncType{nil, nil}).type)
+    assert(
+        array_of_strings_to_nil_type ==
+        create_type(&out, FuncType{array_with_dynamic_array_of_strings, nil}).type,
+    )
+    assert(i64_to_nil_type == create_type(&out, FuncType{array_with_i64_type, nil}).type)
+    assert(
+        string_i64_to_string_type ==
+        create_type(&out, FuncType{array_with_string_i64_types, array_with_string_type}).type,
+    )
+    assert(
+        string_any_ordered_hashmap_and_string_to_string_type ==
+        create_type(&out, FuncType{array_with_string_any_ordered_hash_map_and_string, array_with_string_type}).type,
+    )
+
+    compiler_fields := make(#soa[]StructField(Type), 1)
+    compiler_fields[0] = StructField(Type) {
+        IdentAndPos{"emit_js_code", unknown_pos},
+        string_any_ordered_hashmap_and_string_to_string_type,
+    }
+    compiler_fields_map: map[string]uint
+    compiler_fields_map["emit_js_code"] = 0
+    assert(
+        compiler_type ==
+        create_type(&out, Struct(Type, Type){unknown_type, compiler_fields_map, compiler_fields}).type,
+    )
+
+    assert(no_args_to_i64_type == create_type(&out, FuncType{nil, array_with_i64_type}).type)
+    assert(
+        compiler_to_i64_type ==
+        create_type(&out, FuncType{array_with_compiler_type, array_with_i64_type}).type,
+    )
+
+    init_struct_type(&out, compiler_type, compiler_fields, compiler_fields_map)
+
+    return out
 }
 
 TypeSlot :: struct {
@@ -153,7 +264,7 @@ hash_func_type :: proc(value: FuncType) -> u32 {
     for ret in value.return_types {
         result ~= ret.index
     }
-    return result ~ u32(value.type)
+    return result
 }
 
 merge_type_slot :: proc(
@@ -313,6 +424,6 @@ func_types_are_equal :: proc(a: FuncType, b: FuncType) -> bool {
             return false
         }
     }
-    return a.type == b.type
+    return true
 }
 

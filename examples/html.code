@@ -42,7 +42,8 @@ ignore_keypress[T] = |old_state: T, _: Key| -> T {
     return old_state
 }
 
-reactive_page[T] = #comptime |
+reactive_page[T] = |
+    c: Compiler,
 	reactivity_function: (T) -> UI[T],
 	initial_state: T,
     on_key_down: (T, Key) -> T,
@@ -54,7 +55,7 @@ reactive_page[T] = #comptime |
     ~map["state"] = initial_state
     ~map["on_key_down"] = on_key_down
     // Maybe there could be an argument with the type `<.Minify{}, .LeaveNames{}>` in the future
-    js = compiler.emit_js_code(map, glue)
+    js = c.emit_js_code(map, glue)
     // The close tags are split up so that the browser interprets them as JS strings rather than HTML close tags
 	// TODO: JS should be tree-shaked so the `reactive_page` function shouldn't even be included in the emitted JS code
     return

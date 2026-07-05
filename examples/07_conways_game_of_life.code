@@ -63,7 +63,7 @@ game_of_life = |s: [game_size]Bool| -> h.UI[[game_size]Bool] {
 	return h.UI[[game_size]Bool](main_title, ui_contents)
 }
 
-build = #comptime || -> I64 {
+build = |c: Compiler| -> I64 {
     pulsar_initial_state = [game_size]Bool(
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
         false, false, false, true,  true,  true,  false, false, false, true,  true,  true,  false, false, false,
@@ -82,6 +82,7 @@ build = #comptime || -> I64 {
         false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
     )
 	html = h.reactive_page[[game_size]Bool](
+	    c,
 		game_of_life,
 		pulsar_initial_state,
 		h.ignore_keypress[[game_size]Bool],

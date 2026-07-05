@@ -400,11 +400,11 @@ emit_js_block :: proc(
     emit_js_block_body(s, nesting_level, body)
 }
 
-emit_javascript :: proc(c: Checked) -> strings.Builder {
-    s := GeneralEmitterState{strings.builder_make(), c.types, c}
+emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> strings.Builder {
+    s := GeneralEmitterState{strings.builder_make(), types, checked_functions}
     strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
-    for _, index in c.types.values {
+    for _, index in types.values {
         emit_js_global_type(&s, index)
     }
 
@@ -425,14 +425,14 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
     }
     */
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_functions {
         when debug_emitter {
             debug("emitting function index %d", index)
         }
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info := get_type(c.types, func.type).(FuncType)
+        info := get_type(types, func.type).(FuncType)
         first_arg := true
         for _, i in info.args {
             if first_arg {
