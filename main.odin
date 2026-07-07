@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -198,13 +199,21 @@ compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -
     }
     args: []RuntimeValue
     if function_type == compiler_to_i64_type {
-        compiler_struct_fields := make([]RuntimeValue, 1)
+        compiler_cache_struct_fields := make([]RuntimeValue, 3)
+        compiler_cache_struct_fields[0] = BuiltinFunction.cache_contains
+        compiler_cache_struct_fields[1] = BuiltinFunction.cache_set
+        compiler_cache_struct_fields[2] = BuiltinFunction.cache_get
+
+        compiler_struct_fields := make([]RuntimeValue, 2)
         compiler_struct_fields[0] = BuiltinFunction.emit_js_code
+        compiler_struct_fields[1] = RuntimeStruct{true, compiler_cache_struct_fields}
 
         args = make([]RuntimeValue, 1)
         args[0] = RuntimeStruct{true, compiler_struct_fields}
     }
-    result := interp_execute_function2(&state, checker_output.func_ref, args) // TODO: Do not use nil if function has `Compiler` arg
+    // TODO: Output logs to run.program_io
+    context.logger = log.create_console_logger(.Info) // Used by the http server
+    result := interp_execute_function2(&state, checker_output.func_ref, args)
     return int(result.(i64))
 }
 

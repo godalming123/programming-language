@@ -6,10 +6,12 @@ package main
 import "base:runtime"
 import "core:bufio"
 import "core:fmt"
+import "core:net"
 import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
+import "webserver"
 
 RuntimeValue :: union {
     i64,
@@ -30,9 +32,23 @@ RuntimeValue :: union {
     RuntimeStruct,
     RuntimeStructTypeInitFunc,
     RuntimeSumType,
-    SumTypeInitFunc,
+    RuntimeSumTypeInitFunc,
     CheckedFuncRef,
     BuiltinFunction,
+    SetHttpServerHandler,
+    HttpServerListenAndServe,
+}
+
+RuntimeSumTypeInitFunc :: struct {
+    variant_index: uint,
+}
+
+SetHttpServerHandler :: struct {
+    server: uint,
+}
+
+HttpServerListenAndServe :: struct {
+    server: uint,
 }
 
 RuntimeString :: struct {
@@ -64,7 +80,7 @@ RuntimeStruct :: struct {
 RuntimeStructTypeInitFunc :: struct {}
 RuntimeSumType :: struct {
     needs_freeing: bool,
-    variant_index: u32,
+    variant_index: uint,
     payload:       []RuntimeValue,
 }
 
@@ -88,6 +104,11 @@ ControlFlowOperation :: union {
     ReturnFromFunction,
 }
 
+HttpServer :: struct {
+    socket:  net.TCP_Socket,
+    handler: CheckedFuncRef,
+}
+
 InterpState :: struct {
     types:           Types,
     checked_funcs:   []CheckedFunction,
@@ -95,6 +116,7 @@ InterpState :: struct {
     frames:          [dynamic]Frame,
     current_loop:    uint,
     control_flow_op: ControlFlowOperation,
+    http_servers:    [dynamic]HttpServer,
 }
 
 /*
@@ -127,6 +149,10 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         return RuntimeStruct{true, args}
     }
 
+    if init_func, is_sum_type_init_func := fn_val.(RuntimeSumTypeInitFunc); is_sum_type_init_func {
+        return RuntimeSumType{true, init_func.variant_index, args}
+    }
+
     defer {
         for &arg in args {
             interp_destroy_value(&arg)
@@ -145,8 +171,66 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
     case RuntimeStringOrderedHashMapInitFunc:
         assert(len(args) == 0)
         return RuntimeStringOrderedHashMap{}
-    case SumTypeInitFunc:
-        panic("TODO")
+    case SetHttpServerHandler:
+        assert(len(args) == 1)
+        s.http_servers[val.server].handler = args[0].(CheckedFuncRef)
+        return nil
+    case HttpServerListenAndServe:
+        assert(len(args) == 0)
+        server := s.http_servers[val.server]
+        if server.handler.index == max(uint) {
+            panic("`listen_and_serve` called when handler has not been set")
+        }
+        buf: [65536]byte
+        for {
+            client, _, accept_err := net.accept_tcp(server.socket)
+            if accept_err != nil {
+                // TODO: Better error handling
+                panic(fmt.aprintf("Accept error: %v", accept_err))
+            }
+            defer net.close(client)
+
+            n, receive_err := net.recv_tcp(client, buf[:])
+            if receive_err != nil {
+                // TODO: Better error handling
+                panic(fmt.aprintf("Receive error: %v", receive_err))
+            }
+
+            data := buf[:n]
+
+            if webserver.is_websocket_upgrade_request(data) {
+                panic("TODO")
+            } else {
+                request, ok := webserver.parse_http_request(data)
+                if !ok {
+                    webserver.send_error(client, 400, "Bad Request")
+                    continue
+                }
+                defer delete(request.headers)
+
+                req_fields := make([]RuntimeValue, 2)
+                req_fields[0] = RuntimeString{false, request.path}
+                req_fields[1] = RuntimeString{false, request.method}
+
+                handler_args := make([]RuntimeValue, 1)
+                handler_args[0] = RuntimeStruct{true, req_fields}
+
+                response := interp_execute_function2(
+                    s,
+                    server.handler,
+                    handler_args,
+                ).(RuntimeSumType)
+
+                webserver.send_response(
+                    client,
+                    200,
+                    "OK",
+                    response_type_variant_index_to_content_type(response.variant_index),
+                    transmute([]byte)(response.payload[0].(RuntimeString).value),
+                )
+            }
+        }
+        return nil
     case:
         panic("Unreachable")
     }
@@ -393,9 +477,11 @@ interp_clone_value :: proc(val: RuntimeValue, loc := #caller_location) -> Runtim
          CheckedFuncRef,
          BuiltinFunction,
          RuntimeStructTypeInitFunc,
-         SumTypeInitFunc,
+         RuntimeSumTypeInitFunc,
          RuntimeStringOrderedHashMapInitFunc,
-         RuntimeI64OrderedHashMapInitFunc:
+         RuntimeI64OrderedHashMapInitFunc,
+         HttpServerListenAndServe,
+         SetHttpServerHandler:
         return val
     }
     return RuntimeValue{}
@@ -672,9 +758,11 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
              RuntimeStringOrderedHashMap,
              RuntimeI64OrderedHashMap,
              RuntimeStructTypeInitFunc,
-             SumTypeInitFunc,
+             RuntimeSumTypeInitFunc,
              RuntimeStringOrderedHashMapInitFunc,
-             RuntimeI64OrderedHashMapInitFunc:
+             RuntimeI64OrderedHashMapInitFunc,
+             HttpServerListenAndServe,
+             SetHttpServerHandler:
             panic("Unreachable")
         }
 
@@ -772,11 +860,7 @@ interp_eval_value :: proc(s: ^InterpState, v: CheckedValue) -> RuntimeValue {
         return RuntimeStructTypeInitFunc{}
 
     case SumTypeInitFunc:
-        // sum_type := get_type(state.checked.types, value.sum_type).(SumType(Type))
-        // payload_type := sum_type.variants[value.variant_index].payload
-        // payload := interp_default_value(state, payload_type)
-        // return RuntimeSumType{u32(value.variant_index), new_clone(payload)}
-        return value
+        return RuntimeSumTypeInitFunc{value.variant_index}
 
     case CheckedArrayAccess:
         arr_val := interp_eval_value(s, value.array^)
@@ -901,6 +985,38 @@ default_builtin_handler_procedure :: proc(
         }
         strings.write_string(&builder, glue.value)
         return RuntimeString{true, strings.to_string(builder)}
+    case .cache_contains:
+        panic("TODO")
+    case .cache_set:
+        panic("TODO")
+    case .cache_get:
+        panic("TODO")
+    case .init_http_server:
+        assert(len(args) == 0)
+
+        server_index: uint = len(state.http_servers)
+
+        funcs := make([]RuntimeValue, 3)
+        funcs[0] = SetHttpServerHandler{server_index}
+        funcs[1] = HttpServerListenAndServe{server_index}
+
+        endpoint := net.Endpoint{net.IP4_Address{0, 0, 0, 0}, 8080}
+        // TODO: Implement upper limit on number of ports to try
+        for {
+            // TODO: Log that the port is being tried
+            socket, err := net.listen_tcp(endpoint)
+            if err == nil {
+                funcs[2] = i64(endpoint.port)
+                append(&state.http_servers, HttpServer{socket, CheckedFuncRef{max(uint)}})
+                return RuntimeStruct{true, funcs}
+            }
+            if err != net.Bind_Error.Address_In_Use {
+                // TODO: Better error reporting
+                panic(fmt.aprintf("Failed create TCP socket and start listening: %v", err))
+            }
+            // TODO: Log that the port is already in use
+            endpoint.port += 1
+        }
     case .string_repeat:
         assert(len(args) == 2)
         return RuntimeString {

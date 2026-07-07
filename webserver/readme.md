@@ -1,0 +1,11 @@
+- An AI generated http/1.1 server and websocket server
+- I may spin this out into a separate git repository if it proves to be reliable/good enough
+- Or, I might just inline the code into `interpreter.odin` because it seems like not that much code
+- Other options for http and websocket servers in odin:
+  - Odin implementations:
+    - https://github.com/laytan/odin-http (does not implement a websocket server)
+  - C implementations:
+    - https://libwebsockets.org/
+    - https://github.com/cesanta/mongoose
+    - https://github.com/civetweb/civetweb
+    - https://github.com/h2o/h2o

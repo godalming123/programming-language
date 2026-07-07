@@ -1,0 +1,23 @@
+handler = |req: HttpRequest| -> HttpResponse{
+    if req.method == "GET" {
+		return .Html("<p>Hello world</p><p>Url is " & req.url & "</p>")
+	} else if req.method == "POST" {
+	    return .Plain("TODO: Handle post")
+	} else {
+	    return .Plain("TODO: Handle method `" & req.method & "`")
+	}
+}
+
+main = || -> I64 {
+    // This is a simpler API for the HTTP server, I'm just not sure if the code
+    // in the programming language will be able to save the right data in the
+	// cache to hot reload when the source code changes
+    // This API is also missing a way to get the port of the web server
+    // http_listen_and_serve(handler)
+
+	server = init_http_server()
+	server.set_handler(handler)
+    println("Listening and serving on port " & server.port.to_str & "...")
+	server.listen_and_serve()
+	return 0
+}

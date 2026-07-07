@@ -31,6 +31,10 @@ BuiltinFunction :: enum u8 {
     get_os_args, // TODO
     emit_js_code,
     string_repeat,
+    cache_contains,
+    cache_set,
+    cache_get,
+    init_http_server,
     invalid_builtin = max(u8),
 }
 
@@ -58,6 +62,8 @@ get_builtin_func_from_name :: proc(name: string) -> (BuiltinFunction, Type) {
         return .exit, i64_to_nil_type
     case "string_repeat":
         return .string_repeat, string_i64_to_string_type
+    case "init_http_server":
+        return .init_http_server, no_args_to_http_server_type
     case:
         return .invalid_builtin, invalid_type
     }
@@ -93,6 +99,10 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
         return any_type
     case "Compiler":
         return compiler_type
+    case "HttpRequest":
+        return http_request_type
+    case "HttpResponse":
+        return http_response_type
     case:
         return unknown_type
     }
@@ -183,6 +193,9 @@ is_builtin :: proc(name: string) -> bool {
          "OrderedHashMap",
          "Any",
          "to_str",
+         "HttpRequest",
+         "HttpResponse",
+         "init_http_server",
          "string_repeat":
         return true
     case:

@@ -2,6 +2,8 @@ package main
 
 import "base:runtime"
 
+content_types :: []string{}
+
 Type :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
@@ -26,14 +28,88 @@ string_to_nil_type :: Type{1} // (String)
 string_string_to_nil_type :: Type{2} // (String, String)
 string_to_string_type :: Type{3} // (String) -> String
 string_any_ordered_hashmap_type :: Type{4} // OrderedHashMap[String, Any]
-no_args_to_nil_type :: Type{5} // ()
+no_args_to_nil_type :: Type{5} // () -> ()
 array_of_strings_to_nil_type :: Type{6} // ([]String)
 i64_to_nil_type :: Type{7} // (I64)
 string_i64_to_string_type :: Type{8} // (String, I64) -> String
 string_any_ordered_hashmap_and_string_to_string_type :: Type{9} // (OrderedHashMap[String, Any], String) -> String
-compiler_type :: Type{10} // {emit_js_code: (OrderedHashMap[String, Any], String) -> String}
+string_to_bool_type :: Type{10} // (String) -> Bool
 no_args_to_i64_type :: Type{11} // () -> I64
-compiler_to_i64_type :: Type{12} // (Compiler) -> I64
+string_any_to_nil_type :: Type{12} // (String, Any) -> ()
+string_to_any_type :: Type{13} // (String) -> Any
+
+// {
+//   contains: (String) -> Bool,
+//   set: (String, Any) -> (),
+//   get: (String) -> Any
+// }
+compiler_cache_type :: Type{14}
+
+// {
+//   emit_js_code: string_any_ordered_hashmap_and_string_to_string_type,
+//   cache: compiler_cache_type,
+// }
+compiler_type :: Type{15}
+
+compiler_to_i64_type :: Type{16} // (Compiler) -> I64
+
+// {
+//   url: String,
+//   method: String,
+// }
+http_request_type :: Type{17}
+
+// {body: String}
+http_response_body_type :: Type{18}
+
+// TODO: Add more response types:
+// - Ico
+// - Gif
+// - Jpeg
+// - Js
+// - Json
+// - Png
+// - Svg
+// - Url_Encoded
+// - Xml
+// - Zip
+// - Wasm
+//
+// <
+//   .Plain{body: String},
+//   .Css{body: String},
+//   .Html{body: String},
+// >
+http_response_type :: Type{19}
+
+response_type_variant_index_to_content_type :: proc(variant_index: uint) -> string {
+    switch variant_index {
+    case 0:
+        return "application/octet-stream"
+    case 1:
+        return "text/css"
+    case 2:
+        return "text/html"
+    case:
+        panic("Unreachable")
+    }
+}
+
+// (HttpRequest) -> HttpResponse
+http_request_handler_type :: Type{20}
+
+// (HttpRequestHandler) -> ()
+http_request_handler_to_nil_type :: Type{21}
+
+// {
+//   set_handler: (HttpRequestHandler) -> ()
+//   listen_and_serve: () -> (),
+//   port: I64,
+// }
+http_server_type :: Type{22}
+
+// () -> HttpServer
+no_args_to_http_server_type :: Type{23}
 
 GenericTypeValue :: struct {
     global:           GlobalValueWithGenericRef,
@@ -117,6 +193,28 @@ create_types :: proc() -> Types {
     array_with_compiler_type := make([]Type, 1)
     array_with_compiler_type[0] = compiler_type
 
+    array_with_string_any_type := make([]Type, 2)
+    array_with_string_any_type[0] = string_type
+    array_with_string_any_type[1] = any_type
+
+    array_with_bool_type := make([]Type, 1)
+    array_with_bool_type[0] = bool_type
+
+    array_with_any_type := make([]Type, 1)
+    array_with_any_type[0] = any_type
+
+    array_with_http_request := make([]Type, 1)
+    array_with_http_request[0] = http_request_type
+
+    array_with_http_response := make([]Type, 1)
+    array_with_http_response[0] = http_response_type
+
+    array_with_http_request_handler := make([]Type, 1)
+    array_with_http_request_handler[0] = http_request_handler_type
+
+    array_with_http_server := make([]Type, 1)
+    array_with_http_server[0] = http_server_type
+
     assert(dynamic_array_of_strings == create_type(&out, ArrayType{0, string_type}).type)
     assert(string_to_nil_type == create_type(&out, FuncType{array_with_string_type, nil}).type)
     assert(
@@ -145,6 +243,41 @@ create_types :: proc() -> Types {
         string_any_ordered_hashmap_and_string_to_string_type ==
         create_type(&out, FuncType{array_with_string_any_ordered_hash_map_and_string, array_with_string_type}).type,
     )
+    assert(
+        string_to_bool_type ==
+        create_type(&out, FuncType{array_with_string_type, array_with_bool_type}).type,
+    )
+    assert(no_args_to_i64_type == create_type(&out, FuncType{nil, array_with_i64_type}).type)
+    assert(
+        string_any_to_nil_type ==
+        create_type(&out, FuncType{array_with_string_any_type, nil}).type,
+    )
+    assert(
+        string_to_any_type ==
+        create_type(&out, FuncType{array_with_string_type, array_with_any_type}).type,
+    )
+
+    compiler_cache_fields := make(#soa[]StructField(Type), 3)
+    compiler_cache_fields[0] = StructField(Type) {
+        IdentAndPos{"contains", unknown_pos},
+        string_to_bool_type,
+    }
+    compiler_cache_fields[1] = StructField(Type) {
+        IdentAndPos{"set", unknown_pos},
+        string_any_to_nil_type,
+    }
+    compiler_cache_fields[2] = StructField(Type) {
+        IdentAndPos{"get", unknown_pos},
+        string_to_any_type,
+    }
+    compiler_cache_fields_map: map[string]uint
+    compiler_cache_fields_map["contains"] = 0
+    compiler_cache_fields_map["set"] = 1
+    compiler_cache_fields_map["get"] = 2
+    assert(
+        compiler_cache_type ==
+        create_type(&out, Struct(Type, Type){unknown_type, compiler_cache_fields_map, compiler_cache_fields}).type,
+    )
 
     compiler_fields := make(#soa[]StructField(Type), 1)
     compiler_fields[0] = StructField(Type) {
@@ -158,13 +291,105 @@ create_types :: proc() -> Types {
         create_type(&out, Struct(Type, Type){unknown_type, compiler_fields_map, compiler_fields}).type,
     )
 
-    assert(no_args_to_i64_type == create_type(&out, FuncType{nil, array_with_i64_type}).type)
     assert(
         compiler_to_i64_type ==
         create_type(&out, FuncType{array_with_compiler_type, array_with_i64_type}).type,
     )
 
+    http_request_type_fields := make(#soa[]StructField(Type), 2)
+    http_request_type_fields[0] = StructField(Type){IdentAndPos{"url", unknown_pos}, string_type}
+    http_request_type_fields[1] = StructField(Type) {
+        IdentAndPos{"method", unknown_pos},
+        string_type,
+    }
+    http_request_type_fields_map: map[string]uint
+    http_request_type_fields_map["url"] = 0
+    http_request_type_fields_map["method"] = 1
+    assert(
+        http_request_type ==
+        create_type(&out, Struct(Type, Type){unknown_type, http_request_type_fields_map, http_request_type_fields}).type,
+    )
+
+    http_response_body_fields := make(#soa[]StructField(Type), 1)
+    http_response_body_fields[0] = StructField(Type){IdentAndPos{"body", unknown_pos}, string_type}
+    http_response_body_fields_map: map[string]uint
+    http_response_body_fields_map["body"] = 0
+    assert(
+        http_response_body_type ==
+        create_type(&out, Struct(Type, Type){unknown_type, http_response_body_fields_map, http_response_body_fields}).type,
+    )
+
+    http_response_type_variants := make(#soa[]SumTypeVariant(Type), 3)
+    http_response_type_variants[0] = SumTypeVariant(Type) {
+        IdentAndPos{"Plain", unknown_pos},
+        http_response_body_type,
+    }
+    http_response_type_variants[1] = SumTypeVariant(Type) {
+        IdentAndPos{"Css", unknown_pos},
+        http_response_body_type,
+    }
+    http_response_type_variants[2] = SumTypeVariant(Type) {
+        IdentAndPos{"Html", unknown_pos},
+        http_response_body_type,
+    }
+    http_response_type_variants_map: map[string]uint
+    http_response_type_variants_map["Plain"] = 0
+    http_response_type_variants_map["Css"] = 1
+    http_response_type_variants_map["Html"] = 2
+    assert(
+        http_response_type ==
+        create_type(&out, SumType(Type){http_response_type_variants_map, http_response_type_variants}).type,
+    )
+
+    assert(
+        http_request_handler_type ==
+        create_type(&out, FuncType{array_with_http_request, array_with_http_response}).type,
+    )
+
+    assert(
+        http_request_handler_to_nil_type ==
+        create_type(&out, FuncType{array_with_http_request_handler, nil}).type,
+    )
+
+    http_server_fields := make(#soa[]StructField(Type), 3)
+    http_server_fields[0] = StructField(Type) {
+        IdentAndPos{"set_handler", unknown_pos},
+        http_request_handler_to_nil_type,
+    }
+    http_server_fields[1] = StructField(Type) {
+        IdentAndPos{"listen_and_serve", unknown_pos},
+        no_args_to_nil_type,
+    }
+    http_server_fields[2] = StructField(Type){IdentAndPos{"port", unknown_pos}, i64_type}
+    http_server_fields_map: map[string]uint
+    http_server_fields_map["set_handler"] = 0
+    http_server_fields_map["listen_and_serve"] = 1
+    http_server_fields_map["port"] = 2
+    assert(
+        http_server_type ==
+        create_type(&out, Struct(Type, Type){unknown_type, http_server_fields_map, http_server_fields}).type,
+    )
+
+    assert(
+        no_args_to_http_server_type ==
+        create_type(&out, FuncType{nil, array_with_http_server}).type,
+    )
+
     init_struct_type(&out, compiler_type, compiler_fields, compiler_fields_map)
+    init_struct_type(&out, compiler_cache_type, compiler_cache_fields, compiler_cache_fields_map)
+    init_struct_type(
+        &out,
+        http_request_type,
+        http_request_type_fields,
+        http_request_type_fields_map,
+    )
+    init_struct_type(
+        &out,
+        http_response_body_type,
+        http_response_body_fields,
+        http_response_body_fields_map,
+    )
+    init_struct_type(&out, http_server_type, http_server_fields, http_server_fields_map)
 
     return out
 }

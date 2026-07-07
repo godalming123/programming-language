@@ -62,6 +62,8 @@ emit_type :: proc(b: ^strings.Builder, name: string, type: Type) {
         strings.write_string(b, "uint16_t")
     case u8_type:
         strings.write_string(b, "uint8_t")
+    case any_type:
+        strings.write_string(b, "void*")
     case:
         strings.write_string(b, "Type")
         strings.write_uint(b, uint(type.index))
