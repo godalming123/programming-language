@@ -837,7 +837,6 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 "`continue`",
                 "`unreachable`",
                 "`}`",
-                "`@` to create a label",
             )
             ok: bool = ---
             var: VariableDest = ---
