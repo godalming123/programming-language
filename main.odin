@@ -60,8 +60,80 @@ Command :: union #no_nil {
     Run,
 }
 
-compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -> int {
+source_code_changed :: proc(early_exit_value: ^ExitEarlyAwaitingSourceCodeChange) -> bool {
+    // TODO: Make this code quicker so caching is not necersarry
+    if time.since(early_exit_value.last_checked) < 10 * time.Millisecond {
+        return false
+    }
+    defer early_exit_value.last_checked = time.now()
+    for file in early_exit_value.files {
+        info, err := os.stat(file.file_path, context.allocator)
+        if err == os.General_Error.Not_Exist {
+            continue
+        }
+        if err != nil {
+            panic(fmt.aprintf("Failed to stat file: %v", err))
+        }
+        defer os.file_info_delete(info, context.allocator)
+        if info.modification_time._nsec > early_exit_value.compilation_start._nsec {
+            return true
+        }
+    }
+    return false
+}
+
+should_exit_early :: proc(early_exit_info: EarlyExitInfo) -> bool {
+    switch early_exit in early_exit_info {
+    case NeverExitEarly:
+        return false
+    case ^ExitEarly:
+        switch &early_exit_value in early_exit {
+        case ExitEarlyAfterSourceCodeChanged:
+            return true
+        case ExitEarlyAwaitingSourceCodeChange:
+            if !source_code_changed(&early_exit_value) {
+                return false
+            }
+            early_exit^ = ExitEarlyAfterSourceCodeChanged{}
+            return true
+        case:
+            panic("Unreachable")
+        }
+    case:
+        panic("Unreachable")
+    }
+}
+
+NeverExitEarly :: struct {}
+
+ExitEarlyAwaitingSourceCodeChange :: struct {
+    compilation_start: time.Time,
+    files:             []CompilerFile,
+    last_checked:      time.Time,
+}
+
+ExitEarlyAfterSourceCodeChanged :: struct {}
+
+ExitEarly :: union #no_nil {
+    ExitEarlyAwaitingSourceCodeChange,
+    ExitEarlyAfterSourceCodeChanged,
+}
+
+EarlyExitInfo :: union #no_nil {
+    NeverExitEarly,
+    ^ExitEarly, // A pointer so that the variant can be changed
+}
+
+compile :: proc(
+    func: FunctionRef,
+    compiler: Pipe(^os.File),
+    command: Command,
+    exit_early: EarlyExitInfo,
+) -> int {
     start := time.now()
+    if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
+        exit_early_info^ = ExitEarlyAwaitingSourceCodeChange{start, nil, time.Time{}}
+    }
     defer {
         fmt.fprintfln(
             compiler.stdout,
@@ -70,7 +142,7 @@ compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -
         )
     }
 
-    parsed, ok := parse_project(func.file_name, compiler)
+    parsed, ok := parse_project(func.file_name, compiler, exit_early)
     if !ok {
         return 1
     }
@@ -196,6 +268,7 @@ compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -
             &DefaultBuiltinHandlerData{absolute_file_dir, run.program_io},
             default_builtin_handler_procedure,
         },
+        exit_early      = exit_early,
     }
     args: []RuntimeValue
     if function_type == compiler_to_i64_type {
@@ -214,7 +287,11 @@ compile :: proc(func: FunctionRef, compiler: Pipe(^os.File), command: Command) -
     // TODO: Output logs to run.program_io
     context.logger = log.create_console_logger(.Info) // Used by the http server
     result := interp_execute_function2(&state, checker_output.func_ref, args)
-    return int(result.(i64))
+    if should_exit_early(exit_early) {
+        return 1
+    } else {
+        return int(result.(i64))
+    }
 }
 
 /*
@@ -392,22 +469,30 @@ FunctionRef :: struct {
 }
 
 // Terminates the program on failure
-get_function_ref :: proc(args_after_command: []string) -> FunctionRef {
-    switch len(args_after_command) {
+// The bool returned is whether the `--watch` flag was used
+parse_args_after_command :: proc(args_after_command: []string) -> (FunctionRef, bool) {
+    watch := false
+    func_ref_args := args_after_command
+    if len(args_after_command) >= 1 &&
+       args_after_command[len(args_after_command) - 1] == "-watch" {
+        watch = true
+        func_ref_args = args_after_command[:len(args_after_command) - 1]
+    }
+    switch len(func_ref_args) {
     case 0:
-        return FunctionRef{default_file_name, default_func_name}
+        return FunctionRef{default_file_name, default_func_name}, watch
     case 1:
-        for char in args_after_command[0] {
+        for char in func_ref_args[0] {
             if !is_alphanumeric_char_rune(char) {
-                return FunctionRef{args_after_command[0], default_func_name}
+                return FunctionRef{func_ref_args[0], default_func_name}, watch
             }
         }
-        return FunctionRef{default_file_name, args_after_command[0]}
+        return FunctionRef{default_file_name, func_ref_args[0]}, watch
     case 2:
-        return FunctionRef{args_after_command[0], args_after_command[1]}
+        return FunctionRef{func_ref_args[0], func_ref_args[1]}, watch
     case:
         fmt.eprintln(
-            "Expected at most 2 arguments after the name of the command to specify the file name and the func name, got %d arguments",
+            "Expected at most 3 arguments after the name of the command: the file name, the func name, and the `-watch` flag\nGot %d arguments",
             len(args_after_command),
         )
         print_help(1)
@@ -437,20 +522,45 @@ main :: proc() {
         fmt.eprintfln("Expected at least one argument for the command to run")
         print_help(1)
     }
+
+    command: Command
     switch os.args[1] {
     case "build_c":
-        ref := get_function_ref(os.args[2:])
-        ret := compile(ref, std_pipe, BuildC{})
-        os.exit(ret)
+        command = BuildC{}
     case "run":
-        ref := get_function_ref(os.args[2:])
-        ret := compile(ref, std_pipe, Run{std_pipe})
-        os.exit(ret)
+        command = Run{std_pipe}
     case "help":
         print_help(0)
     case:
         fmt.eprintfln("Unexpected command `%s`", os.args[1])
         print_help(1)
+    }
+
+    ref, watch := parse_args_after_command(os.args[2:])
+    early_exit_info: EarlyExitInfo = watch ? new(ExitEarly) : NeverExitEarly{}
+    for {
+        ret := compile(ref, std_pipe, command, early_exit_info)
+        switch exit_early in early_exit_info {
+        case NeverExitEarly:
+            os.exit(ret)
+        case ^ExitEarly:
+            switch &exit_early_value in exit_early {
+            case ExitEarlyAwaitingSourceCodeChange:
+                if len(exit_early_value.files) == 0 {
+                    assert(ret != 0)
+                    fmt.eprintln(
+                        "`-watch` flag error: Compilation failed too serverly to know when to reattempt compilation",
+                    )
+                    os.exit(ret)
+                }
+                fmt.println("Awaiting source code change...")
+                for !source_code_changed(&exit_early_value) {
+                    time.sleep(10 * time.Millisecond)
+                }
+            case ExitEarlyAfterSourceCodeChanged:
+            }
+        }
+        fmt.println(ansi_clear + "Recompiling after source code change...")
     }
 }
 

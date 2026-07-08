@@ -1443,10 +1443,13 @@ ParsedProject :: struct {
 parse_project :: proc(
     first_file_relative_path: string,
     io: Pipe(^os.File),
+    exit_early: EarlyExitInfo,
 ) -> (
     ParsedProject,
     bool,
 ) {
+    // TODO: There are some return paths where `exit_early` is not updated and
+    // therefore the `-watch` flag does not auto reload
     first_file_absolute_path, err := filepath.abs(first_file_relative_path, context.allocator)
     if err != nil {
         fmt.eprintfln("Failed to make filepath `%s` absolute: %v", first_file_relative_path, err)
@@ -1484,6 +1487,14 @@ parse_project :: proc(
             ok = false
         }
         state.file_ref.index += 1
+    }
+    if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
+        #partial switch &exit_early_info_value in exit_early_info {
+        case ExitEarlyAwaitingSourceCodeChange:
+            exit_early_info_value.files = state.files[:len(state.parsed_files)]
+        case:
+            panic("Unreachable")
+        }
     }
     if !ok {
         return ParsedProject{}, false

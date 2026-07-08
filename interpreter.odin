@@ -117,6 +117,7 @@ InterpState :: struct {
     current_loop:    uint,
     control_flow_op: ControlFlowOperation,
     http_servers:    [dynamic]HttpServer,
+    exit_early:      EarlyExitInfo,
 }
 
 /*
@@ -183,6 +184,8 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
         }
         buf: [65536]byte
         for {
+            // TODO: Set timeout on accept_tcp so it does not block the
+            // automatic recompilation of the `-watch` flag
             client, _, accept_err := net.accept_tcp(server.socket)
             if accept_err != nil {
                 // TODO: Better error handling
@@ -215,11 +218,11 @@ interp_execute_function :: proc(s: ^InterpState, c: CheckedFunctionCall) -> Runt
                 handler_args := make([]RuntimeValue, 1)
                 handler_args[0] = RuntimeStruct{true, req_fields}
 
-                response := interp_execute_function2(
-                    s,
-                    server.handler,
-                    handler_args,
-                ).(RuntimeSumType)
+                response_raw := interp_execute_function2(s, server.handler, handler_args)
+                if should_exit_early(s.exit_early) {
+                    return nil
+                }
+                response := response_raw.(RuntimeSumType)
 
                 webserver.send_response(
                     client,
@@ -327,6 +330,9 @@ interp_default_value :: proc(state: ^InterpState, t: Type) -> RuntimeValue {
 interp_exec_block :: proc(state: ^InterpState, body: []CheckedStatement) {
     for stmt in body {
         if state.control_flow_op != nil {
+            return
+        }
+        if should_exit_early(state.exit_early) {
             return
         }
         interp_exec_statement(state, stmt)

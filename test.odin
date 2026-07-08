@@ -43,7 +43,12 @@ run_example_via_c :: proc(
 ) -> RanExampleViaC {
     compiler_writer, compiler_builder := pipe_mock()
     executable: string
-    status := compile(FunctionRef{absolute_path, "main"}, compiler_writer, BuildC{&executable})
+    status := compile(
+        FunctionRef{absolute_path, "main"},
+        compiler_writer,
+        BuildC{&executable},
+        NeverExitEarly{},
+    )
     compiler := get_output(compiler_builder)
     if status != 0 {
         return CompilationFailed{compiler, status}
@@ -91,7 +96,7 @@ run_example_via_c :: proc(
 interpret_example :: proc(t: ^testing.T, func: FunctionRef) -> InterpretedExample {
     compiler_pipe, compiler_builder := pipe_mock()
     program_pipe, program_builder := pipe_mock()
-    status := compile(func, compiler_pipe, Run{program_pipe})
+    status := compile(func, compiler_pipe, Run{program_pipe}, NeverExitEarly{})
     return InterpretedExample{get_output(compiler_builder), get_output(program_builder), status}
 }
 
@@ -377,7 +382,7 @@ basic_fuzz_test :: proc(t: ^testing.T) {
         }
 
         pipe, _ := pipe_mock()
-        compile(FunctionRef{tmp_file, "main"}, pipe, BuildC{})
+        compile(FunctionRef{tmp_file, "main"}, pipe, BuildC{}, NeverExitEarly{})
     }
 }
 
