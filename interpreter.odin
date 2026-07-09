@@ -30,7 +30,7 @@ RuntimeValue :: union {
     RuntimeI64OrderedHashMap,
     RuntimeI64OrderedHashMapInitFunc,
     RuntimeStruct,
-    RuntimeStructTypeInitFunc,
+    StructTypeInitFunc,
     RuntimeSumType,
     SumTypeInitFunc,
     CheckedFuncRef,
@@ -78,7 +78,7 @@ get_value_type :: proc(s: InterpState, value: RuntimeValue) -> Type {
         return create_type(&s.types, FuncType{nil, return_types}).type
     case RuntimeStruct:
         return v.type
-    case RuntimeStructTypeInitFunc:
+    case StructTypeInitFunc:
         return_types := make([]Type, 1)
         return_types[0] = v.return_type
         return create_type(&s.types, FuncType{nil, return_types}).type
@@ -142,9 +142,6 @@ RuntimeStruct :: struct {
     needs_freeing: bool,
     field_values:  []RuntimeValue,
     type:          Type,
-}
-RuntimeStructTypeInitFunc :: struct {
-    return_type: Type,
 }
 RuntimeSumType :: struct {
     type:          Type,
@@ -228,7 +225,7 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
     }
 
     #partial switch val in fn_val {
-    case RuntimeStructTypeInitFunc:
+    case StructTypeInitFunc:
         return RuntimeStruct{true, args, val.return_type}
     case SumTypeInitFunc:
         return RuntimeSumType{val.sum_type, true, val.variant_index, args}
@@ -244,8 +241,9 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
                 ),
             )
         }
+        out := args[0]
         delete(args)
-        return args[0]
+        return out
     }
 
     defer {
@@ -262,10 +260,10 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
         return interp_execute_function2(s, val, args)
     case RuntimeI64OrderedHashMapInitFunc:
         assert(len(args) == 0)
-        return RuntimeI64OrderedHashMap{}
+        return RuntimeI64OrderedHashMap{val.return_type, false, nil, nil}
     case RuntimeStringOrderedHashMapInitFunc:
         assert(len(args) == 0)
-        return RuntimeStringOrderedHashMap{}
+        return RuntimeStringOrderedHashMap{val.return_type, false, nil, nil}
     case SetHttpServerHandler:
         assert(len(args) == 1)
         s.l.http_servers[val.server].handler = args[0].(CheckedFuncRef)
@@ -296,7 +294,7 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
             data := buf[:n]
 
             if webserver.is_websocket_upgrade_request(data) {
-                panic("TODO")
+                panic("TODO: Add support for websockets")
             } else {
                 request, ok := webserver.parse_http_request(data)
                 if !ok {
@@ -516,7 +514,7 @@ interp_destroy_value :: proc(val: ^RuntimeValue, loc := #caller_location) {
          bool,
          FuncDefinitionRef,
          BuiltinFunction,
-         RuntimeStructTypeInitFunc,
+         StructTypeInitFunc,
          SumTypeInitFunc,
          RuntimeStringOrderedHashMapInitFunc,
          RuntimeI64OrderedHashMapInitFunc:
@@ -576,7 +574,7 @@ interp_clone_value :: proc(val: RuntimeValue, loc := #caller_location) -> Runtim
          bool,
          CheckedFuncRef,
          BuiltinFunction,
-         RuntimeStructTypeInitFunc,
+         StructTypeInitFunc,
          SumTypeInitFunc,
          RuntimeStringOrderedHashMapInitFunc,
          RuntimeI64OrderedHashMapInitFunc,
@@ -856,7 +854,7 @@ interp_eval_value :: proc(s: InterpState, v: CheckedValue) -> RuntimeValue {
              BuiltinFunction,
              RuntimeStringOrderedHashMap,
              RuntimeI64OrderedHashMap,
-             RuntimeStructTypeInitFunc,
+             StructTypeInitFunc,
              SumTypeInitFunc,
              RuntimeStringOrderedHashMapInitFunc,
              RuntimeI64OrderedHashMapInitFunc,
@@ -957,7 +955,7 @@ interp_eval_value :: proc(s: InterpState, v: CheckedValue) -> RuntimeValue {
         // fields[i] = interp_default_value(state, field_type.type)
         // }
         // return RuntimeStruct{fields}
-        return RuntimeStructTypeInitFunc{}
+        return value
 
     case SumTypeInitFunc:
         return value
@@ -1030,7 +1028,7 @@ default_builtin_handler_procedure :: proc(
         return nil
     case .readline:
         assert(len(args) == 1)
-        fmt.print(args[0].(RuntimeString).value)
+        fmt.fprint(data.pipe.stdout, args[0].(RuntimeString).value)
         scanner: bufio.Scanner
         bufio.scanner_init(&scanner, os.to_reader(os.stdin))
         assert(bufio.scan(&scanner))
@@ -1058,7 +1056,7 @@ default_builtin_handler_procedure :: proc(
         return nil
     case .clear:
         assert(len(args) == 0)
-        fmt.print(ansi_clear)
+        fmt.fprint(data.pipe.stdout, ansi_clear)
         return nil
     case .run_executable:
         panic("TODO")

@@ -54,7 +54,6 @@ game_of_life = |s: [game_size]Bool| -> h.UI[[game_size]Bool] {
 	grid_style =
         "display: grid;"
         "grid-template-columns: repeat(" & game_width.to_str & ", 1fr);"
-        "grid-template-columns: repeat(" & game_height.to_str & ", 1fr);"
         "aspect-ratio: 1 / 1;"
 	ui_contents = []h.HtmlElem[[game_size]Bool](
         .Button([]h.HtmlElem[[game_size]Bool](.Text("Run tick")), run_tick),

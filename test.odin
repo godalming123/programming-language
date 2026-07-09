@@ -63,12 +63,14 @@ run_example_via_c :: proc(
         testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err))
     }
     defer os.close(stdin_reader)
-    defer os.close(stdin_writer)
 
     _, err2 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
     if err2 != nil {
+        os.close(stdin_writer)
         testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err2))
     }
+
+    os.close(stdin_writer)
 
     // TODO: Check for memory leaks when the process runs
     state, stdout, stderr, err3 := os.process_exec(
@@ -505,17 +507,18 @@ invalid_example_00_uninitialised_global_value_with_generics :: proc(t: ^testing.
     )
     expect_string(&e, "Hint: Try initialising the global value with something like `debug[T]`\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")
+    expect_string(&e, "Erroneously checked with 1 error and 0 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
     expect_finished(&e)
 }
 
 @(test)
 invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
-    ran := run_example_via_c(
-        t,
-        #directory + "examples/invalid/01_wrong_identifier_casing.code",
-        "",
-    )
+    file :: #directory + "examples/invalid/01_wrong_identifier_casing.code"
+    ran := run_example_via_c(t, file, "")
     if ran == nil {return}
     out := ran.(CompilationSuccessful)
     testing.expect(t, out.program.stderr == "")
@@ -523,6 +526,7 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     testing.expect(t, out.compiler.stderr == "")
     e := TestingTextExpecter{0, out.compiler.stdout, t}
     fmt.println(out.compiler.stdout)
+    expect_string(&e, "Reading `" + file + "`...\n")
     expect_string(&e, "Checking...\n")
     expect_string(&e, "\n")
     expect_string(&e, "Warning compiling `" + #directory)
@@ -537,24 +541,27 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     expect_string(&e, "First character in a camel case identifier must be an uppercase letter\n")
     expect_string(&e, "Got 'e'\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Successfully checked with 0 errors and 2 warnings\n")
+    expect_string(&e, "Successfully checked with 0 errors and 2 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
+    expect_string(&e, "Emitting C code...\n")
     expect_done_message(&e)
     expect_finished(&e)
 }
 
 @(test)
 invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
-    ran := run_example_via_c(
-        t,
-        #directory + "examples/invalid/02_wrong_main_function_type.code",
-        "",
-    )
+    file :: #directory + "examples/invalid/02_wrong_main_function_type.code"
+    ran := run_example_via_c(t, file, "")
     if ran == nil {return}
     out := ran.(CompilationFailed)
 
     testing.expect(t, out.status == 1)
 
     e := TestingTextExpecter{0, out.compiler.stdout, t}
+    expect_string(&e, "Reading `" + file + "`...\n")
     expect_string(&e, "Checking...\n")
     expect_done_message(&e)
     expect_finished(&e)
@@ -565,7 +572,11 @@ invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
     expect_string(&e, "Got the type `(String, I64) -> I64`\n")
     expect_string(&e, "Expected the type `() -> I64`\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")
+    expect_string(&e, "Erroneously checked with 1 error and 0 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
     expect_finished(&e)
 }
 

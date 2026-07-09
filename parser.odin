@@ -184,13 +184,15 @@ parse_initial_unit :: proc(
                 )
                 return Unit{}, nil, false
             }
-            out.value = Import{FileRef{len(s.parsed_files)}}
+            ref := FileRef{len(s.parsed_files)}
+            out.value = Import{ref}
             append2(
                 &s.parsed_files,
                 &s.files,
                 nil,
                 CompilerFile{string(data), joined, filepath.dir(joined)},
             )
+            s.files_map[joined] = ref
         }
 
     case OpenBracketToken:
@@ -1451,14 +1453,19 @@ parse_project :: proc(
     // therefore the `-watch` flag does not auto reload
     first_file_absolute_path, err := filepath.abs(first_file_relative_path, context.allocator)
     if err != nil {
-        fmt.eprintfln("Failed to make filepath `%s` absolute: %v", first_file_relative_path, err)
+        fmt.fprintfln(
+            io.stderr,
+            "Failed to make filepath `%s` absolute: %v",
+            first_file_relative_path,
+            err,
+        )
         return ParsedProject{}, false
     }
 
-    fmt.printfln("Reading `%s`...", first_file_absolute_path)
+    fmt.fprintfln(io.stdout, "Reading `%s`...", first_file_absolute_path)
     data, data_err := os.read_entire_file(first_file_absolute_path, context.allocator)
     if data_err != nil {
-        fmt.eprintfln("Failed to read `%s`: %#v", first_file_absolute_path, data_err)
+        fmt.fprintfln(io.stderr, "Failed to read `%s`: %#v", first_file_absolute_path, data_err)
         return ParsedProject{}, false
     }
 
@@ -1475,6 +1482,7 @@ parse_project :: proc(
             filepath.dir(first_file_absolute_path),
         },
     )
+    state.files_map[first_file_absolute_path] = FileRef{0}
 
     ok := true
     for state.file_ref.index < len(state.parsed_files) {

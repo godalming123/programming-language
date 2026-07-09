@@ -2,8 +2,6 @@ package main
 
 import "base:runtime"
 
-content_types :: []string{}
-
 Type :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
@@ -85,7 +83,7 @@ http_response_type :: Type{19}
 response_type_variant_index_to_content_type :: proc(variant_index: uint) -> string {
     switch variant_index {
     case 0:
-        return "application/octet-stream"
+        return "text/plain"
     case 1:
         return "text/css"
     case 2:

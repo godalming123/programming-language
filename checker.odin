@@ -334,8 +334,8 @@ expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 s,
                 Pos{ident.pos.index + uint(i) + 1, ident.pos.file},
                 "Expected %s to be `CamelCase`, got `%s`\nCannot have `_` in a camel case identifier",
-                ident.ident,
                 expected,
+                ident.ident,
                 type = .Warning,
             )
             return
@@ -345,7 +345,7 @@ expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 s,
                 Pos{ident.pos.index + uint(i) + 1, ident.pos.file},
                 "Unexpected character '%c' in identifier `%s`",
-                ident.ident[i],
+                c,
                 ident.ident,
                 type = .Warning,
             )
@@ -2019,7 +2019,7 @@ check_namespaced_var_ref :: proc(
             GlobalValueWithoutGenericRef{uint(parsed_global.index)},
         )
         if global_value.type == invalid_type {
-            assert(global_value.value != nil)
+            assert(global_value.value == nil)
             return nil, invalid_type, 0
         }
         // if global_value.type == imported_file_type && index + 1 < len(ref.segments) {

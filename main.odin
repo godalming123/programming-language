@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:log"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -70,7 +69,7 @@ source_code_changed :: proc(early_exit_value: ^ExitEarlyAwaitingSourceCodeChange
     for file in early_exit_value.files {
         info, err := os.stat(file.file_path, context.allocator)
         if err == os.General_Error.Not_Exist {
-            continue
+            return true
         }
         if err != nil {
             panic(fmt.aprintf("Failed to stat file: %v", err))
@@ -231,15 +230,29 @@ compile :: proc(
     }
     defer delete_string(warnings)
 
+    elapsed_ms := time.duration_milliseconds(time.since(start))
+
     if checker_output.reporter.number_of[.Error] > 0 {
-        fmt.fprintfln(compiler.stderr, "Erroneously checked with %s and %s", errors, warnings)
+        fmt.fprintfln(
+            compiler.stderr,
+            "Erroneously checked with %s and %s in %f ms",
+            errors,
+            warnings,
+            elapsed_ms,
+        )
         return 1
     }
 
-    fmt.fprintfln(compiler.stdout, "Successfully checked with %s and %s", errors, warnings)
+    fmt.fprintfln(
+        compiler.stdout,
+        "Successfully checked with %s and %s in %f ms",
+        errors,
+        warnings,
+        elapsed_ms,
+    )
 
     if build_c, is_build_c := command.(BuildC); is_build_c {
-        fmt.printfln("Emitting C code...")
+        fmt.fprintfln(compiler.stdout, "Emitting C code...")
         c := emit_c(checker_output.types, checker_output.checked_funcs, checker_output.func_ref)
         executable_path, ok2 := write_and_compile_c(c, func.file_name)
         if !ok2 {
@@ -290,8 +303,6 @@ compile :: proc(
         args = make([]RuntimeValue, 1)
         args[0] = RuntimeStruct{true, compiler_struct_fields, compiler_type}
     }
-    // TODO: Output logs to run.program_io
-    context.logger = log.create_console_logger(.Info) // Used by the http server
     result := interp_execute_function2(
         InterpState{&state, run.long_lived_interp_state},
         checker_output.func_ref,

@@ -63,6 +63,7 @@ handle_http :: proc(client: net.TCP_Socket, data: []byte) {
 
 */
 
+// Returned `Http_Request` contains slices into the `data` argument, so `data` must outlive the returned `Http_Request`
 parse_http_request :: proc(data: []byte) -> (Http_Request, bool) {
     request: Http_Request
     header_end := bytes.index(data, []byte{'\r', '\n', '\r', '\n'})
@@ -101,7 +102,7 @@ parse_http_request :: proc(data: []byte) -> (Http_Request, bool) {
         if colon_pos == -1 {
             continue
         }
-        key := strings.trim_space(line[:colon_pos])
+        key := strings.to_lower(strings.trim_space(line[:colon_pos]))
         value := strings.trim_space(line[colon_pos + 1:])
         request.headers[key] = value
     }
@@ -157,7 +158,7 @@ send_response :: proc(
     text: string,
     content_type: string,
     body: []byte,
-) {
+) -> net.TCP_Send_Error {
     sb := strings.builder_make()
     defer strings.builder_destroy(&sb)
 
@@ -169,10 +170,17 @@ send_response :: proc(
     fmt.sbprintf(&sb, "\r\n")
 
     header_str := strings.to_string(sb)
-    net.send_tcp(client, transmute([]byte)header_str)
-    if len(body) > 0 {
-        net.send_tcp(client, body)
+    _, err := net.send_tcp(client, transmute([]byte)header_str)
+    if err != nil {
+        return err
     }
+    if len(body) > 0 {
+        _, err2 := net.send_tcp(client, body)
+        if err2 != nil {
+            return err2
+        }
+    }
+    return nil
 }
 
 
