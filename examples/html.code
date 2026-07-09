@@ -42,6 +42,7 @@ ignore_keypress[T] = |old_state: T, _: Key| -> T {
     return old_state
 }
 
+// TODO: Implement state-preserving hot-reload using the `-watch` flag and compiler cache
 reactive_page[T] = |
     c: Compiler,
 	reactivity_function: (T) -> UI[T],

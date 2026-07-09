@@ -86,9 +86,14 @@ emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
 
 emit_c_comptime_value :: proc(s: ^CEmitterState, value: CompileTimeValue) {
     switch comptime in value {
+    case CastFunction:
+        panic("TODO")
+    case BuiltinFunction:
+        strings.write_string(&s.b, "builtin")
+        strings.write_uint(&s.b, uint(comptime))
     case CompileTimeStructInitialisation:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_uint(&s.b, uint(comptime.func.return_type.index))
         strings.write_string(&s.b, "(")
         first_arg := true
         for arg in comptime.args {
@@ -166,9 +171,6 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
         strings.write_byte(&s.b, ',')
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ")")
-    case BuiltinFunction:
-        strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(value))
     case CheckedFieldAccess:
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
@@ -205,7 +207,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     //    strings.write_byte(&s.b, '}')
     case StructTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(value.type.index))
+        strings.write_uint(&s.b, uint(value.return_type.index))
     case SumTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(value.sum_type.index))

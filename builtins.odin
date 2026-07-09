@@ -35,6 +35,7 @@ BuiltinFunction :: enum u8 {
     cache_set,
     cache_get,
     init_http_server,
+    cast_func,
     invalid_builtin = max(u8),
 }
 
@@ -64,6 +65,8 @@ get_builtin_func_from_name :: proc(name: string) -> (BuiltinFunction, Type) {
         return .string_repeat, string_i64_to_string_type
     case "init_http_server":
         return .init_http_server, no_args_to_http_server_type
+    case "cast":
+        return .cast_func, unknown_type
     case:
         return .invalid_builtin, invalid_type
     }
@@ -99,10 +102,14 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
         return any_type
     case "Compiler":
         return compiler_type
+    case "CompilerCache":
+        return compiler_cache_type
     case "HttpRequest":
         return http_request_type
     case "HttpResponse":
         return http_response_type
+    case "HttpServer":
+        return http_server_type
     case:
         return unknown_type
     }
@@ -168,6 +175,8 @@ to_str :: proc(s: ^CheckerState, pos: Pos, val: CheckedValue, type: Type) -> Che
 is_builtin :: proc(name: string) -> bool {
     switch name {
     case "Compiler",
+         "CompilerCache",
+         "cast",
          "print",
          "println",
          "eprint",
@@ -195,6 +204,7 @@ is_builtin :: proc(name: string) -> bool {
          "to_str",
          "HttpRequest",
          "HttpResponse",
+         "HttpServer",
          "init_http_server",
          "string_repeat":
         return true

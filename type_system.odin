@@ -17,10 +17,10 @@ u16_type :: Type{max(u32) - 7}
 u8_type :: Type{max(u32) - 8}
 bool_type :: Type{max(u32) - 9}
 invalid_type :: Type{max(u32) - 10}
-unknown_type :: Type{max(u32) - 11}
+unknown_type :: Type{max(u32) - 11} // TODO: Ideally `unknown_type` would not be necersarry
 type_type :: Type{max(u32) - 12}
 any_type :: Type{max(u32) - 13}
-imported_file_type :: Type{max(u32) - 14}
+imported_file_type :: Type{max(u32) - 14} // TODO: Create a struct type for the type of imported files rather than using `imported_file_type`
 max_index :: max(u32) - 15
 
 dynamic_array_of_strings :: Type{0} // []String
@@ -102,7 +102,7 @@ http_request_handler_type :: Type{20}
 http_request_handler_to_nil_type :: Type{21}
 
 // {
-//   set_handler: (HttpRequestHandler) -> ()
+//   set_handler: (HttpRequestHandler) -> (),
 //   listen_and_serve: () -> (),
 //   port: I64,
 // }
@@ -279,13 +279,15 @@ create_types :: proc() -> Types {
         create_type(&out, Struct(Type, Type){unknown_type, compiler_cache_fields_map, compiler_cache_fields}).type,
     )
 
-    compiler_fields := make(#soa[]StructField(Type), 1)
+    compiler_fields := make(#soa[]StructField(Type), 2)
     compiler_fields[0] = StructField(Type) {
         IdentAndPos{"emit_js_code", unknown_pos},
         string_any_ordered_hashmap_and_string_to_string_type,
     }
+    compiler_fields[1] = StructField(Type){IdentAndPos{"cache", unknown_pos}, compiler_cache_type}
     compiler_fields_map: map[string]uint
     compiler_fields_map["emit_js_code"] = 0
+    compiler_fields_map["cache"] = 1
     assert(
         compiler_type ==
         create_type(&out, Struct(Type, Type){unknown_type, compiler_fields_map, compiler_fields}).type,

@@ -129,7 +129,7 @@ CheckedFunctionCall :: struct {
     args:     []CheckedValue,
 }
 StructTypeInitFunc :: struct {
-    type: Type,
+    return_type: Type,
 }
 OrderedHashMapInitFunc :: struct {
     type: Type,
@@ -186,6 +186,9 @@ CompileTimeStructInitialisation :: struct {
     func: StructTypeInitFunc,
     args: []CompileTimeValue,
 }
+CastFunction :: struct {
+    type: Type,
+}
 CompileTimeValue :: union {
     StringLiteralValue,
     NumberValue,
@@ -196,6 +199,8 @@ CompileTimeValue :: union {
     Import,
     CheckedFuncRef,
     CompileTimeStructInitialisation,
+    BuiltinFunction,
+    CastFunction,
 }
 CheckedValue :: union {
     CompileTimeValue,
@@ -206,7 +211,6 @@ CheckedValue :: union {
     CheckedFunctionCall,
     StructTypeInitFunc,
     SumTypeInitFunc,
-    BuiltinFunction,
     CheckedArrayAccess,
     CheckedOrderedHashMapAccess,
     CheckedFieldAccess,
@@ -2100,7 +2104,7 @@ check_var_ref_start :: proc(
     }
     if builtin_func, builtin_func_type := get_builtin_func_from_name(ref.segments[0].ident);
        builtin_func != .invalid_builtin {
-        return builtin_func, builtin_func_type, 1
+        return CompileTimeValue(builtin_func), builtin_func_type, 1
     }
     if builtin_type := get_builtin_type_from_name(ref.segments[0].ident);
        builtin_type != unknown_type {
@@ -2916,6 +2920,24 @@ check_value :: proc(
                 }
                 out: CheckedValue = CompileTimeValue(create_type(&s.types, type_value).type)
                 return finish_checking_value(s, v.pos, a.type, out, type_type, "")
+            case BuiltinFunction:
+                assert(comptime_value == .cast_func)
+                if len(checked_args) != 1 {
+                    argument_count_mismatch(s, v.pos, len(checked_args), 1, "cast")
+                    return nil
+                }
+                args := make([]Type, 1)
+                args[0] = any_type
+                return_types := make([]Type, 1)
+                return_types[0] = checked_args[0]
+                return finish_checking_value(
+                    s,
+                    v.pos,
+                    a.type,
+                    CompileTimeValue(CastFunction{checked_args[0]}),
+                    create_type(&s.types, FuncType{args, return_types}).type,
+                    "",
+                )
             }
             panic("Unreachable")
         }

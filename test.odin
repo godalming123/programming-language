@@ -96,7 +96,12 @@ run_example_via_c :: proc(
 interpret_example :: proc(t: ^testing.T, func: FunctionRef) -> InterpretedExample {
     compiler_pipe, compiler_builder := pipe_mock()
     program_pipe, program_builder := pipe_mock()
-    status := compile(func, compiler_pipe, Run{program_pipe}, NeverExitEarly{})
+    status := compile(
+        func,
+        compiler_pipe,
+        Run{program_pipe, new(LongLivedInterpState)},
+        NeverExitEarly{},
+    )
     return InterpretedExample{get_output(compiler_builder), get_output(program_builder), status}
 }
 
@@ -557,7 +562,7 @@ invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
     e = TestingTextExpecter{0, out.compiler.stderr, t}
     expect_string(&e, "\n")
     expect_string(&e, "Error compiling\n")
-    expect_string(&e, "Got the type (String, I64) -> I64\n")
+    expect_string(&e, "Got the type `(String, I64) -> I64`\n")
     expect_string(&e, "Expected the type `() -> I64`\n")
     expect_string(&e, "\n")
     expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")

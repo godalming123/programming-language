@@ -49,6 +49,8 @@ A new language for the web, because it's time to stop working around javascript.
     - `HtmlElem = <Div{contents: []HtmlElem}, Component{func: ($T) -> []HtmlElem, arg: $T}>`
     - This is possible because the type of `$T` can be different for every `HtmlElem.Component` in a tree of `HtmlElem`s
 - Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
+  - Non-exhaustive list of builtins that should return a result rather than `panic`king:
+    - `cast`
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
 - Emit better JS code:

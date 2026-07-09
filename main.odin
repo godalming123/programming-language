@@ -52,7 +52,8 @@ BuildC :: struct {
 }
 
 Run :: struct {
-    program_io: Pipe(^os.File),
+    program_io:              Pipe(^os.File),
+    long_lived_interp_state: ^LongLivedInterpState,
 }
 
 Command :: union #no_nil {
@@ -172,7 +173,7 @@ compile :: proc(
                     diagnostic(
                         &checker_output.reporter,
                         unknown_pos,
-                        "Got the type %s\nExpected the type `%s`",
+                        "Got the type `%s`\nExpected the type `%s`",
                         type_to_string2(
                             checker_output.types,
                             checker_output.globals,
@@ -190,7 +191,7 @@ compile :: proc(
                     diagnostic(
                         &checker_output.reporter,
                         unknown_pos,
-                        "Got the type %s\nExpected the type `%s` or `%s`",
+                        "Got the type `%s`\nExpected the type `%s` or `%s`",
                         type_to_string2(
                             checker_output.types,
                             checker_output.globals,
@@ -261,8 +262,9 @@ compile :: proc(
     fmt.fprintfln(compiler.stdout, "Interpreting `%s`...", func.func_name)
 
     absolute_file_dir := filepath.dir(absolute_file_name)
-    state := InterpState {
+    state := ShortLivedInterpState {
         types           = checker_output.types,
+        globals         = checker_output.globals,
         checked_funcs   = checker_output.checked_funcs,
         builtin_handler = BuiltinHandler {
             &DefaultBuiltinHandlerData{absolute_file_dir, run.program_io},
@@ -279,14 +281,22 @@ compile :: proc(
 
         compiler_struct_fields := make([]RuntimeValue, 2)
         compiler_struct_fields[0] = BuiltinFunction.emit_js_code
-        compiler_struct_fields[1] = RuntimeStruct{true, compiler_cache_struct_fields}
+        compiler_struct_fields[1] = RuntimeStruct {
+            true,
+            compiler_cache_struct_fields,
+            compiler_cache_type,
+        }
 
         args = make([]RuntimeValue, 1)
-        args[0] = RuntimeStruct{true, compiler_struct_fields}
+        args[0] = RuntimeStruct{true, compiler_struct_fields, compiler_type}
     }
     // TODO: Output logs to run.program_io
     context.logger = log.create_console_logger(.Info) // Used by the http server
-    result := interp_execute_function2(&state, checker_output.func_ref, args)
+    result := interp_execute_function2(
+        InterpState{&state, run.long_lived_interp_state},
+        checker_output.func_ref,
+        args,
+    )
     if should_exit_early(exit_early) {
         return 1
     } else {
@@ -442,23 +452,27 @@ default_file_name :: "./main.code" // TODO: Choose proper file extension
 default_func_name :: "main"
 
 print_help :: proc(exit_code: int) -> ! {
+    args :: "[file name] [func name] [-watch]"
     fmt.println(
-        "- `build_c file_name func_name` transpile a file into C and then build the C code into an executable",
+        "- `build_c " +
+        args +
+        "` transpile a file into C and then build the C code into an executable",
     )
-    fmt.println(
-        "- `run file_name func_name` compile a file and interpret a function within that file",
-    )
+    fmt.println("- `run " + args + "` compile a file and interpret a function within that file")
     fmt.println("- `help` show this help message")
-    fmt.println("- For commands that take the arguments `file_name func_name`:")
+    fmt.println("- For commands that take the arguments `" + args + "`:")
     fmt.println(
-        "  - If only one argument is specified, and the argument contains only alphanumerics and underscores, the compiler assumes it is the `func_name`",
-    )
-    fmt.println("  - Otherwise, the compiler assumes that the first argument is the `file_name`")
-    fmt.println(
-        "  - If the `file_name` is not specified, it defaults to `" + default_file_name + "`",
+        "  - If the last argument specified is `-watch`, then the compiler will automatically restart the compilation when the source code changes",
     )
     fmt.println(
-        "  - If the `func_name` is not specified, it defaults to `" + default_func_name + "`",
+        "  - Of the remaining arguments, if only one argument is specified, and the argument contains only alphanumerics and underscores, the compiler assumes it is the `func name`",
+    )
+    fmt.println("  - Otherwise, the compiler assumes that the first argument is the `file name`")
+    fmt.println(
+        "  - If the `file name` is not specified, it defaults to `" + default_file_name + "`",
+    )
+    fmt.println(
+        "  - If the `func name` is not specified, it defaults to `" + default_func_name + "`",
     )
     os.exit(exit_code)
 }
@@ -528,7 +542,7 @@ main :: proc() {
     case "build_c":
         command = BuildC{}
     case "run":
-        command = Run{std_pipe}
+        command = Run{std_pipe, new(LongLivedInterpState)}
     case "help":
         print_help(0)
     case:
