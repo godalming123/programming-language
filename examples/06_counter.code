@@ -1,4 +1,4 @@
-html = import "html.code"
+h = import "html.code"
 
 CounterState = {
     count: I64,
@@ -10,14 +10,20 @@ increment_counter = |s: CounterState| -> CounterState {
 	return CounterState(s.count + 1)
 }
 
-counter = |s: CounterState| -> html.UI[CounterState] {
-    contents = []html.Elem[CounterState](
-        .Button([]html.Elem[CounterState](.Text("The count is " & s.count.to_str)), increment_counter),
+counter = |s: CounterState| -> h.UI[CounterState] {
+    contents = []h.HtmlElem[CounterState](
+        .Button([]h.HtmlElem[CounterState](.Text("The count is " & s.count.to_str)), increment_counter),
     )
-    return html.UI[CounterState]("Counter", contents)
+    return h.UI[CounterState]("Counter", contents)
 }
 
-build = #comptime || -> I64 {
-    write_file("counter.html", html.reactive_page[CounterState](counter, counter_initial_state))
+build = |c: Compiler| -> I64 {
+    html = h.reactive_page[CounterState](
+        c,
+        counter,
+        counter_initial_state,
+        h.ignore_keypress[CounterState],
+    )
+    write_file("counter.html", html)
     return 0
 }

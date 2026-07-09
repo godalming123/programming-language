@@ -33,6 +33,18 @@ file_mock :: proc() -> (^os.File, ^strings.Builder) {
     return new_clone(os.File{nil, os.File_Stream{stream_proc, builder}}), builder
 }
 
+pipe_mock :: proc() -> (Pipe(^os.File), Pipe(^strings.Builder)) {
+    stdout_writer, stdout_builder := file_mock()
+    stderr_writer, stderr_builder := file_mock()
+    writers := Pipe(^os.File){stdout_writer, stderr_writer}
+    builders := Pipe(^strings.Builder){stdout_builder, stderr_builder}
+    return writers, builders
+}
+
+get_output :: proc(p: Pipe(^strings.Builder)) -> Pipe(string) {
+    return Pipe(string){strings.to_string(p.stdout^), strings.to_string(p.stderr^)}
+}
+
 random_string :: proc(max_length: int, gen := context.random_generator) -> string {
     context.random_generator = gen
     length := rand.int_max(max_length / 4)
@@ -94,32 +106,33 @@ TestingTextExpecter :: struct {
     t:        ^testing.T,
 }
 
+build_error_info :: proc(
+    first_location: runtime.Source_Code_Location,
+    other_locations: []runtime.Source_Code_Location,
+) -> strings.Builder {
+    add_code_location :: proc(b: ^strings.Builder, loc: runtime.Source_Code_Location) {
+        strings.write_string(b, "expect_string called from file ")
+        strings.write_string(b, loc.file_path)
+        strings.write_string(b, " at line ")
+        strings.write_int(b, int(loc.line))
+        strings.write_string(b, " column ")
+        strings.write_int(b, int(loc.column))
+        strings.write_byte(b, '\n')
+    }
+    builder := strings.builder_make()
+    add_code_location(&builder, first_location)
+    for other_location in other_locations {
+        add_code_location(&builder, other_location)
+    }
+    return builder
+}
+
 expect_string :: proc(
     comparer: ^TestingTextExpecter,
     expected: string,
     first_location := #caller_location,
     other_locations: ..runtime.Source_Code_Location,
 ) {
-    build_error_info :: proc(
-        first_location: runtime.Source_Code_Location,
-        other_locations: []runtime.Source_Code_Location,
-    ) -> strings.Builder {
-        add_code_location :: proc(b: ^strings.Builder, loc: runtime.Source_Code_Location) {
-            strings.write_string(b, "expect_string called from file ")
-            strings.write_string(b, loc.file_path)
-            strings.write_string(b, " at line ")
-            strings.write_int(b, int(loc.line))
-            strings.write_string(b, " column ")
-            strings.write_int(b, int(loc.column))
-            strings.write_byte(b, '\n')
-        }
-        builder := strings.builder_make()
-        add_code_location(&builder, first_location)
-        for other_location in other_locations {
-            add_code_location(&builder, other_location)
-        }
-        return builder
-    }
     start := comparer.index
     comparer.index += len(expected)
     if comparer.index > len(comparer.got_text) {
@@ -136,6 +149,42 @@ expect_string :: proc(
         strings.write_quoted_string(&builder, expected)
         testing.fail_now(comparer.t, strings.to_string(builder))
     }
+}
+
+expect_digits :: proc(
+    e: ^TestingTextExpecter,
+    first_location := #caller_location,
+    other_locations: ..runtime.Source_Code_Location,
+) {
+    if e.index >= len(e.got_text) {
+        builder := build_error_info(first_location, other_locations)
+        strings.write_string(&builder, "Expected text is longer than got text")
+        testing.fail_now(e.t, strings.to_string(builder))
+    }
+
+    if !is_digit_char(e.got_text[e.index]) {
+        builder := build_error_info(first_location, other_locations)
+        fmt.sbprintf(&builder, "Expected a digit, but got the character '%c'", e.got_text[e.index])
+        testing.fail_now(e.t, strings.to_string(builder))
+    }
+
+    e.index += 1
+
+    for e.index < len(e.got_text) && is_digit_char(e.got_text[e.index]) {
+        e.index += 1
+    }
+}
+
+expect_done_message :: proc(
+    e: ^TestingTextExpecter,
+    first_location := #caller_location,
+    other_locations: ..runtime.Source_Code_Location,
+) {
+    expect_string(e, "Done in ")
+    expect_digits(e)
+    expect_string(e, ".")
+    expect_digits(e)
+    expect_string(e, " ms!\n")
 }
 
 expect_finished :: proc(e: ^TestingTextExpecter) {
@@ -174,6 +223,56 @@ separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
     return
 }
 */
+
+append2 :: proc(
+    a_array: ^[dynamic]$A,
+    b_array: ^[^]$B,
+    a_elem: A,
+    b_elem: B,
+) -> runtime.Allocator_Error {
+    a_raw := (^runtime.Raw_Dynamic_Array)(a_array)
+
+    if a_raw.len + 1 > a_raw.cap {
+        if a_raw.allocator.procedure == nil {
+            a_raw.allocator = context.allocator
+            assert(a_raw.allocator.procedure != nil)
+        }
+
+        new_cap := 2 * a_raw.cap + runtime.DEFAULT_DYNAMIC_ARRAY_CAPACITY
+
+        a_raw_data, err := runtime.mem_resize(
+            a_raw.data,
+            a_raw.cap * size_of(A),
+            new_cap * size_of(A),
+            align_of(A),
+            a_raw.allocator,
+        )
+        if err != nil {
+            return err
+        }
+        a_raw.data = raw_data(a_raw_data)
+
+        b_raw_data, err2 := runtime.mem_resize(
+            b_array^,
+            a_raw.cap * size_of(B),
+            new_cap * size_of(B),
+            align_of(B),
+            a_raw.allocator,
+        )
+        if err2 != nil {
+            return err2
+        }
+        b_array^ = ([^]B)(raw_data(b_raw_data))
+
+        a_raw.cap = new_cap
+    }
+
+    ([^]A)(a_raw.data)[a_raw.len] = a_elem
+    b_array[a_raw.len] = b_elem
+    a_raw.len += 1
+
+    return nil
+}
 
 // Like a dynamic array, except can also be inserted into in average O(1) time
 Dynamic :: struct(T: typeid) {
@@ -223,37 +322,63 @@ join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     return dyn[:]
 }
 
+DiagnosticType :: enum {
+    Error,
+    Warning,
+}
+
+DiagnosticReporter :: struct {
+    files:     [^]CompilerFile,
+    io:        Pipe(^os.File),
+    number_of: [DiagnosticType]uint,
+}
+
 // Set the position to `unknown_pos` to not have a position for the error message
 diagnostic :: proc(
-    stderr: ^os.File,
-    files: []CompilerFile,
+    r: ^DiagnosticReporter,
     position: Pos,
     message_fmt: string,
     message_args: ..any,
-    type: string = "Error",
-    newline_before: bool = true,
-    newline_after: bool = false,
+    type: DiagnosticType = .Error,
     loc := #caller_location,
 ) {
     when debug_diagnostics {
         print_call(loc, "diagnostic")
     }
-    if newline_before {
-        fmt.fprintf(stderr, "\n")
+
+    message := strings.builder_make()
+    defer strings.builder_destroy(&message)
+
+    if r.number_of[.Error] + r.number_of[.Warning] == 0 {
+        strings.write_byte(&message, '\n')
     }
-    message := fmt.aprintf(message_fmt, ..message_args)
-    defer delete(message)
-    if position == unknown_pos {
-        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, message)
-    } else {
-        loc := get_location(files, position)
-        fmt.fprintf(stderr, "%s compiling %s\n%s\n", type, loc, message)
+
+    r.number_of[type] += 1
+
+    // TODO: use bold text for header
+    switch type {
+    case .Error:
+        strings.write_string(&message, "Error")
+    case .Warning:
+        strings.write_string(&message, "Warning")
+    case:
+        panic("Unreachable")
     }
-    if newline_after {
-        fmt.fprintf(stderr, "\n")
+    strings.write_string(&message, " compiling")
+    if position != unknown_pos {
+        loc := get_location(r.files, position)
+        strings.write_byte(&message, ' ')
+        strings.write_string(&message, loc)
     }
+    strings.write_byte(&message, '\n')
+
+    fmt.sbprintf(&message, message_fmt, ..message_args)
+    strings.write_string(&message, "\n\n")
+
+    fmt.fprint(type == .Error ? r.io.stderr : r.io.stdout, strings.to_string(message))
 }
 
+/*
 err :: proc(
     s: ^CheckerState,
     position: Pos,
@@ -270,7 +395,7 @@ err :: proc(
         position,
         message_fmt,
         ..message_args,
-        type = "Error",
+        type = .Error,
         newline_before = !diagnostic_before,
         newline_after = true,
         loc = loc,
@@ -299,6 +424,7 @@ warn :: proc(
         loc = loc,
     )
 }
+*/
 
 debug_nesting := 0
 

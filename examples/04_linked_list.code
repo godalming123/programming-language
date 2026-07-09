@@ -19,7 +19,7 @@ reverse[T] = |list: LinkedList[T], end: LinkedList[T]| -> LinkedList[T] {
 }
 
 to_array[T] = |list: LinkedList[T]| -> []T {
-    mut array = []I64()
+    mut array = []T()
     mut l = list
     while true {
         match l {

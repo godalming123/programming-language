@@ -7,7 +7,6 @@ import "core:fmt"
 import "core:strings"
 
 builtins_err :: "`%s` is a builtin\nCannot override builtins"
-function_err :: "Within unmarked function, cannot call `#comptime` function"
 
 // function_todo1 :: "TODO: Handle function calls where the function isn't a variable reference"
 // function_todo2 :: "TODO: Handle function calls where `len(function_name_segments) > 2`"
@@ -32,6 +31,11 @@ BuiltinFunction :: enum u8 {
     get_os_args, // TODO
     emit_js_code,
     string_repeat,
+    cache_contains,
+    cache_set,
+    cache_get,
+    init_http_server,
+    cast_func,
     invalid_builtin = max(u8),
 }
 
@@ -59,6 +63,10 @@ get_builtin_func_from_name :: proc(name: string) -> (BuiltinFunction, Type) {
         return .exit, i64_to_nil_type
     case "string_repeat":
         return .string_repeat, string_i64_to_string_type
+    case "init_http_server":
+        return .init_http_server, no_args_to_http_server_type
+    case "cast":
+        return .cast_func, unknown_type
     case:
         return .invalid_builtin, invalid_type
     }
@@ -92,6 +100,16 @@ get_builtin_type_from_name :: proc(name: string) -> Type {
         return imported_file_type
     case "Any":
         return any_type
+    case "Compiler":
+        return compiler_type
+    case "CompilerCache":
+        return compiler_cache_type
+    case "HttpRequest":
+        return http_request_type
+    case "HttpResponse":
+        return http_response_type
+    case "HttpServer":
+        return http_server_type
     case:
         return unknown_type
     }
@@ -113,7 +131,7 @@ argument_count_mismatch :: proc(
     defer delete_string(provided)
     expected := num_to_str(num_expected)
     defer delete_string(expected)
-    err(
+    diagnostic(
         s,
         pos,
         "Argument count mismatch\nFunction call provides %s\nThe `%s` function expects %s",
@@ -147,7 +165,7 @@ to_str :: proc(s: ^CheckerState, pos: Pos, val: CheckedValue, type: Type) -> Che
     case u8_type:
         from_type = .U8Type
     case:
-        err(s, pos, "Cannot convert the type `%s` to `String`", type_to_string(s, type))
+        diagnostic(s, pos, "Cannot convert the type `%s` to `String`", type_to_string(s, type))
         return nil
     }
     return ToString{from_type, new_clone(val)}
@@ -156,9 +174,13 @@ to_str :: proc(s: ^CheckerState, pos: Pos, val: CheckedValue, type: Type) -> Che
 // The boolean returned is whether the name is a builtin
 is_builtin :: proc(name: string) -> bool {
     switch name {
-    case "compiler",
+    case "Compiler",
+         "CompilerCache",
+         "cast",
          "print",
          "println",
+         "eprint",
+         "eprintln",
          "readline",
          "read_file",
          "write_file",
@@ -180,6 +202,10 @@ is_builtin :: proc(name: string) -> bool {
          "OrderedHashMap",
          "Any",
          "to_str",
+         "HttpRequest",
+         "HttpResponse",
+         "HttpServer",
+         "init_http_server",
          "string_repeat":
         return true
     case:
@@ -221,11 +247,11 @@ add_variable :: proc(
     // TODO: Add a warning for unused variables
     expect_snake_case(s, "variable names", variable)
     if is_builtin(variable.ident) {
-        err(s, variable.pos, builtins_err, variable.ident)
+        diagnostic(s, variable.pos, builtins_err, variable.ident)
         return VariableRef{}, false
     }
     if variable.ident in s.variables_map {
-        err(s, variable.pos, "Redeclaration of variable `%s`", variable.ident)
+        diagnostic(s, variable.pos, "Redeclaration of variable `%s`", variable.ident)
         return VariableRef{}, false
     }
     var_ref := add_unnamed_variable(s, variable_type, variable_is_mut)

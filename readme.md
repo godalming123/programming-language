@@ -49,6 +49,8 @@ A new language for the web, because it's time to stop working around javascript.
     - `HtmlElem = <Div{contents: []HtmlElem}, Component{func: ($T) -> []HtmlElem, arg: $T}>`
     - This is possible because the type of `$T` can be different for every `HtmlElem.Component` in a tree of `HtmlElem`s
 - Return a `Result` type from builtin functions which may fail rather than `panic`king on the error path
+  - Non-exhaustive list of builtins that should return a result rather than `panic`king:
+    - `cast`
 - Fix some issues in the JS emitter where it emits invalid JS code
   - I think that a good way to do this would be to take all of the existing tests and also run them via the JS backend and expect the same output
 - Emit better JS code:
@@ -62,7 +64,7 @@ A new language for the web, because it's time to stop working around javascript.
 - Use `len(x)` rather than `x.len`, where `typeof(len) == ([]Any) -> I64`
 - Use `to_str[T](x)` rather than `x.to_str`, where `typeof(to_str[T]) == (T) -> String`
 - Use `append[T](a, b)` rather than `a :: b`, where `typeof(append[T]) = ([]T, []T) -> []T`
-- Add a `delete` function for ordered hash maps, where `typeof(delete[K, V]) = (OrderedHashSet[K, V], K) -> OrderedHashSet[K, V]`
+- Add a `delete` function for ordered hash maps, where `typeof(delete[K, V]) = (OrderedHashMap[K, V], K) -> OrderedHashMap[K, V]`
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
@@ -258,6 +260,9 @@ A new language for the web, because it's time to stop working around javascript.
     - Most of the verbosity of explicit types can be taken away by always know the type of the value's destination, and using the type of the destination to infer things about the value
       - However this approach has disadvantages:
         - You would have to specify what the generic arg is when calling a generic function
+  - Make the compiler faster?
+    - Concurrency?
+      - Could use https://github.com/pmbanugo/tina
 - v0.3.0: Investigate [constraints](#what-i-mean-by-constraints)
 - v0.4.0: Mostly stabilize a lower level memory model (see [here](#programming-language-memory-model))
 - v0.5.0: Implement a backend that goes all the way to assembly code

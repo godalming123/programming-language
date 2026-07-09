@@ -1,4 +1,4 @@
-build = #comptime || -> I64 {
+main = || -> I64 {
     threshold = 1000
     mut fibonacci_numbers = []I64(1, 1)
     while fibonacci_numbers[fibonacci_numbers.len-1] < threshold {

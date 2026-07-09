@@ -66,7 +66,7 @@ FuncDefinitionRef :: struct {
 
 CheckedFuncRef :: struct {
     // An index into:
-    // - `CheckerOutput.checked_funcs`
+    // - `Checked.checked_funcs`
     // - `CheckerState.checked_functions`
     index: uint,
 }
@@ -338,15 +338,9 @@ FunctionArg :: struct {
 }
 
 FunctionDefinition :: struct {
-    inputs:  #soa[]FunctionArg,
-    output:  ^Unit, // if the function has no output, then `output` is `nil`
-    body:    []Statement,
-    markers: []IdentAndPos,
-}
-
-File :: struct {
-    globals: map[string]ParsedGlobal,
-    file:    CompilerFile,
+    inputs: #soa[]FunctionArg,
+    output: ^Unit, // if the function has no output, then `output` is `nil`
+    body:   []Statement,
 }
 
 //ComponentDefinition :: struct {

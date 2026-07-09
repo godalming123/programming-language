@@ -4,9 +4,9 @@ import "core:fmt"
 import "core:strings"
 
 GeneralEmitterState :: struct {
-    b:     strings.Builder,
-    types: Types,
-    c:     Checked,
+    b:             strings.Builder,
+    types:         Types,
+    checked_funcs: []CheckedFunction,
 }
 
 CEmitterState :: struct {
@@ -62,6 +62,8 @@ emit_type :: proc(b: ^strings.Builder, name: string, type: Type) {
         strings.write_string(b, "uint16_t")
     case u8_type:
         strings.write_string(b, "uint8_t")
+    case any_type:
+        strings.write_string(b, "void*")
     case:
         strings.write_string(b, "Type")
         strings.write_uint(b, uint(type.index))
@@ -84,9 +86,14 @@ emit_c_func_call :: proc(s: ^CEmitterState, c: CheckedFunctionCall) {
 
 emit_c_comptime_value :: proc(s: ^CEmitterState, value: CompileTimeValue) {
     switch comptime in value {
+    case CastFunction:
+        panic("TODO")
+    case BuiltinFunction:
+        strings.write_string(&s.b, "builtin")
+        strings.write_uint(&s.b, uint(comptime))
     case CompileTimeStructInitialisation:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_uint(&s.b, uint(comptime.func.return_type.index))
         strings.write_string(&s.b, "(")
         first_arg := true
         for arg in comptime.args {
@@ -164,9 +171,6 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
         strings.write_byte(&s.b, ',')
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ")")
-    case BuiltinFunction:
-        strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(value))
     case CheckedFieldAccess:
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
@@ -203,7 +207,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     //    strings.write_byte(&s.b, '}')
     case StructTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(value.type.index))
+        strings.write_uint(&s.b, uint(value.return_type.index))
     case SumTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(value.sum_type.index))
@@ -654,25 +658,29 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     strings.write_byte(&s.b, ')')
 }
 
-emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: string) -> []byte {
+emit_c :: proc(
+    types: Types,
+    checked_funcs: []CheckedFunction,
+    main_func_ref: CheckedFuncRef,
+) -> []byte {
     s := CEmitterState {
         strings.builder_make(),
         strings.builder_make(),
         strings.builder_make(),
         strings.builder_make(),
-        GeneralEmitterState{strings.builder_make(), c.types, c},
+        GeneralEmitterState{strings.builder_make(), types, checked_funcs},
     }
 
-    for _, i in c.types.values {
+    for _, i in types.values {
         emit_c_global_type(&s, i)
     }
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_funcs {
         emit_function_head(&s, index, func.type)
         strings.write_byte(&s.b, ';')
     }
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_funcs {
         emit_function_head(&s, index, func.type)
         strings.write_byte(&s.b, '{')
         emit_c_block(&s, 1, func.variables, func.body)
@@ -682,7 +690,6 @@ emit_c :: proc(c: Checked, main_func_ref: CheckedFuncRef, main_extra_code: strin
     strings.write_string(&s.b, "int main() {int ret = func")
     strings.write_uint(&s.b, main_func_ref.index)
     strings.write_string(&s.b, "();")
-    strings.write_string(&s.b, main_extra_code)
     strings.write_string(&s.b, "return ret;}")
 
     out := strings.builder_make()

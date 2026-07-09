@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -46,19 +47,105 @@ write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     return output_executable_path, true
 }
 
-done_command :: "done"
+BuildC :: struct {
+    executable_path_store: ^string,
+}
 
-// - The `string` returned is the path to the executable
-// - If the program is a metaprogram, it is set to ""
-build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -> (string, bool) {
-    build_start := time.now()
+Run :: struct {
+    program_io:              Pipe(^os.File),
+    long_lived_interp_state: ^LongLivedInterpState,
+}
+
+Command :: union #no_nil {
+    BuildC,
+    Run,
+}
+
+source_code_changed :: proc(early_exit_value: ^ExitEarlyAwaitingSourceCodeChange) -> bool {
+    // TODO: Make this code quicker so caching is not necersarry
+    if time.since(early_exit_value.last_checked) < 10 * time.Millisecond {
+        return false
+    }
+    defer early_exit_value.last_checked = time.now()
+    for file in early_exit_value.files {
+        info, err := os.stat(file.file_path, context.allocator)
+        if err == os.General_Error.Not_Exist {
+            continue
+        }
+        if err != nil {
+            panic(fmt.aprintf("Failed to stat file: %v", err))
+        }
+        defer os.file_info_delete(info, context.allocator)
+        if info.modification_time._nsec > early_exit_value.compilation_start._nsec {
+            return true
+        }
+    }
+    return false
+}
+
+should_exit_early :: proc(early_exit_info: EarlyExitInfo) -> bool {
+    switch early_exit in early_exit_info {
+    case NeverExitEarly:
+        return false
+    case ^ExitEarly:
+        switch &early_exit_value in early_exit {
+        case ExitEarlyAfterSourceCodeChanged:
+            return true
+        case ExitEarlyAwaitingSourceCodeChange:
+            if !source_code_changed(&early_exit_value) {
+                return false
+            }
+            early_exit^ = ExitEarlyAfterSourceCodeChanged{}
+            return true
+        case:
+            panic("Unreachable")
+        }
+    case:
+        panic("Unreachable")
+    }
+}
+
+NeverExitEarly :: struct {}
+
+ExitEarlyAwaitingSourceCodeChange :: struct {
+    compilation_start: time.Time,
+    files:             []CompilerFile,
+    last_checked:      time.Time,
+}
+
+ExitEarlyAfterSourceCodeChanged :: struct {}
+
+ExitEarly :: union #no_nil {
+    ExitEarlyAwaitingSourceCodeChange,
+    ExitEarlyAfterSourceCodeChanged,
+}
+
+EarlyExitInfo :: union #no_nil {
+    NeverExitEarly,
+    ^ExitEarly, // A pointer so that the variant can be changed
+}
+
+compile :: proc(
+    func: FunctionRef,
+    compiler: Pipe(^os.File),
+    command: Command,
+    exit_early: EarlyExitInfo,
+) -> int {
+    start := time.now()
+    if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
+        exit_early_info^ = ExitEarlyAwaitingSourceCodeChange{start, nil, time.Time{}}
+    }
     defer {
-        fmt.printfln("Done in %f ms!", time.duration_milliseconds(time.since(build_start)))
+        fmt.fprintfln(
+            compiler.stdout,
+            "Done in %f ms!",
+            time.duration_milliseconds(time.since(start)),
+        )
     }
 
-    parsed, ok := parse_project(file_name, stderr)
+    parsed, ok := parse_project(func.file_name, compiler, exit_early)
     if !ok {
-        return "", false
+        return 1
     }
 
     when debug_parser_output {
@@ -73,44 +160,153 @@ build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -
         debug_nesting -= 1
     }
 
-    fmt.printfln("Checking...")
-    checker_output := check(parsed, stderr)
+    fmt.fprintfln(compiler.stdout, "Checking...")
+    checker_output := check(parsed, func.func_name, compiler)
+    function_type := unknown_type
+    if checker_output.func_ref.index < len(checker_output.checked_funcs) {
+        function_type = checker_output.checked_funcs[checker_output.func_ref.index].type
+        if function_type != unknown_type {
+            // TODO: Include position in error message
+            switch c in command {
+            case BuildC:
+                if function_type != no_args_to_i64_type {
+                    diagnostic(
+                        &checker_output.reporter,
+                        unknown_pos,
+                        "Got the type `%s`\nExpected the type `%s`",
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            function_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            no_args_to_i64_type,
+                        ),
+                    )
+                }
+            case Run:
+                if function_type != no_args_to_i64_type && function_type != compiler_to_i64_type {
+                    diagnostic(
+                        &checker_output.reporter,
+                        unknown_pos,
+                        "Got the type `%s`\nExpected the type `%s` or `%s`",
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            function_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            no_args_to_i64_type,
+                        ),
+                        type_to_string2(
+                            checker_output.types,
+                            checker_output.globals,
+                            compiler_to_i64_type,
+                        ),
+                    )
+                }
+            case:
+                panic("Unreachable")
+            }
+        }
+    }
 
     errors, warnings: string = ---, ---
 
-    if checker_output.diagnostics_info.number_of_errors == 1 {
+    if checker_output.reporter.number_of[.Error] == 1 {
         errors = fmt.aprint("1 error")
     } else {
-        errors = fmt.aprintf("%d errors", checker_output.diagnostics_info.number_of_errors)
+        errors = fmt.aprintf("%d errors", checker_output.reporter.number_of[.Error])
     }
     defer delete_string(errors)
 
-    if checker_output.diagnostics_info.number_of_warnings == 1 {
+    if checker_output.reporter.number_of[.Warning] == 1 {
         warnings = fmt.aprint("1 warning")
     } else {
-        warnings = fmt.aprintf("%d warnings", checker_output.diagnostics_info.number_of_warnings)
+        warnings = fmt.aprintf("%d warnings", checker_output.reporter.number_of[.Warning])
     }
     defer delete_string(warnings)
 
-    if checker_output.diagnostics_info.number_of_errors > 0 {
-        fmt.eprintfln("Erroneously checked with %s and %s", errors, warnings)
-        return "", false
-    } else {
-        fmt.printfln("Successfully checked with %s and %s", errors, warnings)
+    if checker_output.reporter.number_of[.Error] > 0 {
+        fmt.fprintfln(compiler.stderr, "Erroneously checked with %s and %s", errors, warnings)
+        return 1
     }
 
-    absolute_file_name, err := filepath.abs(file_name, context.allocator)
+    fmt.fprintfln(compiler.stdout, "Successfully checked with %s and %s", errors, warnings)
+
+    if build_c, is_build_c := command.(BuildC); is_build_c {
+        fmt.printfln("Emitting C code...")
+        c := emit_c(checker_output.types, checker_output.checked_funcs, checker_output.func_ref)
+        executable_path, ok2 := write_and_compile_c(c, func.file_name)
+        if !ok2 {
+            return 1
+        }
+        if build_c.executable_path_store != nil {
+            build_c.executable_path_store^ = executable_path
+        }
+        return 0
+    }
+    run := command.(Run)
+
+    absolute_file_name, err := filepath.abs(func.file_name, context.allocator)
     if err != nil {
-        fmt.eprintfln("Failed make path absolute: %#v", err)
-        return "", false
+        fmt.fprintfln(compiler.stderr, "Failed make path absolute: %#v", err)
+        return 1
     }
     defer delete(absolute_file_name)
-    absolute_file_dir := filepath.dir(absolute_file_name)
-    builtin_handler := BuiltinHandler {
-        &DefaultBuiltinHandlerData{absolute_file_dir},
-        default_builtin_handler_procedure,
-    }
 
+    fmt.fprintfln(compiler.stdout, "Interpreting `%s`...", func.func_name)
+
+    absolute_file_dir := filepath.dir(absolute_file_name)
+    state := ShortLivedInterpState {
+        types           = checker_output.types,
+        globals         = checker_output.globals,
+        checked_funcs   = checker_output.checked_funcs,
+        builtin_handler = BuiltinHandler {
+            &DefaultBuiltinHandlerData{absolute_file_dir, run.program_io},
+            default_builtin_handler_procedure,
+        },
+        exit_early      = exit_early,
+    }
+    args: []RuntimeValue
+    if function_type == compiler_to_i64_type {
+        compiler_cache_struct_fields := make([]RuntimeValue, 3)
+        compiler_cache_struct_fields[0] = BuiltinFunction.cache_contains
+        compiler_cache_struct_fields[1] = BuiltinFunction.cache_set
+        compiler_cache_struct_fields[2] = BuiltinFunction.cache_get
+
+        compiler_struct_fields := make([]RuntimeValue, 2)
+        compiler_struct_fields[0] = BuiltinFunction.emit_js_code
+        compiler_struct_fields[1] = RuntimeStruct {
+            true,
+            compiler_cache_struct_fields,
+            compiler_cache_type,
+        }
+
+        args = make([]RuntimeValue, 1)
+        args[0] = RuntimeStruct{true, compiler_struct_fields, compiler_type}
+    }
+    // TODO: Output logs to run.program_io
+    context.logger = log.create_console_logger(.Info) // Used by the http server
+    result := interp_execute_function2(
+        InterpState{&state, run.long_lived_interp_state},
+        checker_output.func_ref,
+        args,
+    )
+    if should_exit_early(exit_early) {
+        return 1
+    } else {
+        return int(result.(i64))
+    }
+}
+
+/*
+// The `string` returned is the path to the executable
+// Returns `"", false` on failure
     if checker_output.entry_func_type == .BuildFunc {
         if interpret_file {
             fmt.eprintln("Cannot use `interpret` with files that use a custom `build` func")
@@ -169,20 +365,8 @@ build :: proc(file_name: string, stderr := os.stderr, interpret_file := false) -
         result := interpret(checker_output.checked, builtin_handler, checker_output.entry_func_ref)
         return "", result.(i64) == 0 ? true : false
     } else {
-        fmt.printfln("Emitting C code...")
-        c := emit_c(
-            checker_output.checked,
-            checker_output.entry_func_ref,
-            checker_output.entry_func_type == .BuildFunc ? "printf(\"" + done_command + "\" EOT_STR);" : "",
-        )
-
-        executable_path, ok2 := write_and_compile_c(c, file_name)
-        if !ok2 {
-            return "", false
-        }
-        return executable_path, true
     }
-}
+    */
 
 /*
 // OLD(METAPROGRAM_IN_C)
@@ -264,13 +448,69 @@ run_metaprogram :: proc(
 }
 */
 
+default_file_name :: "./main.code" // TODO: Choose proper file extension
+default_func_name :: "main"
+
 print_help :: proc(exit_code: int) -> ! {
-    fmt.println("- `build file_name` build a file")
+    args :: "[file name] [func name] [-watch]"
     fmt.println(
-        "- `interpret file_name` interpret a file (only works for files that don't use a custom `build` func)",
+        "- `build_c " +
+        args +
+        "` transpile a file into C and then build the C code into an executable",
     )
+    fmt.println("- `run " + args + "` compile a file and interpret a function within that file")
     fmt.println("- `help` show this help message")
+    fmt.println("- For commands that take the arguments `" + args + "`:")
+    fmt.println(
+        "  - If the last argument specified is `-watch`, then the compiler will automatically restart the compilation when the source code changes",
+    )
+    fmt.println(
+        "  - Of the remaining arguments, if only one argument is specified, and the argument contains only alphanumerics and underscores, the compiler assumes it is the `func name`",
+    )
+    fmt.println("  - Otherwise, the compiler assumes that the first argument is the `file name`")
+    fmt.println(
+        "  - If the `file name` is not specified, it defaults to `" + default_file_name + "`",
+    )
+    fmt.println(
+        "  - If the `func name` is not specified, it defaults to `" + default_func_name + "`",
+    )
     os.exit(exit_code)
+}
+
+FunctionRef :: struct {
+    file_name: string,
+    func_name: string,
+}
+
+// Terminates the program on failure
+// The bool returned is whether the `--watch` flag was used
+parse_args_after_command :: proc(args_after_command: []string) -> (FunctionRef, bool) {
+    watch := false
+    func_ref_args := args_after_command
+    if len(args_after_command) >= 1 &&
+       args_after_command[len(args_after_command) - 1] == "-watch" {
+        watch = true
+        func_ref_args = args_after_command[:len(args_after_command) - 1]
+    }
+    switch len(func_ref_args) {
+    case 0:
+        return FunctionRef{default_file_name, default_func_name}, watch
+    case 1:
+        for char in func_ref_args[0] {
+            if !is_alphanumeric_char_rune(char) {
+                return FunctionRef{func_ref_args[0], default_func_name}, watch
+            }
+        }
+        return FunctionRef{default_file_name, func_ref_args[0]}, watch
+    case 2:
+        return FunctionRef{func_ref_args[0], func_ref_args[1]}, watch
+    case:
+        fmt.eprintln(
+            "Expected at most 3 arguments after the name of the command: the file name, the func name, and the `-watch` flag\nGot %d arguments",
+            len(args_after_command),
+        )
+        print_help(1)
+    }
 }
 
 main :: proc() {
@@ -290,40 +530,51 @@ main :: proc() {
         }
     }
 
+    std_pipe := Pipe(^os.File){os.stdout, os.stderr}
+
     if len(os.args) < 2 {
         fmt.eprintfln("Expected at least one argument for the command to run")
         print_help(1)
     }
+
+    command: Command
     switch os.args[1] {
-    case "build":
-        if len(os.args) != 3 {
-            fmt.eprintfln(
-                "Expected 3 arguments for the `build` command, but got %d arguments",
-                len(os.args),
-            )
-            print_help(1)
-        }
-        _, ok := build(os.args[2])
-        if !ok {
-            os.exit(1)
-        }
-    case "interpret":
-        if len(os.args) != 3 {
-            fmt.eprintfln(
-                "Expected 3 arguments for the `interpret` command, but got %d arguments",
-                len(os.args),
-            )
-            print_help(1)
-        }
-        _, ok := build(os.args[2], interpret_file = true)
-        if !ok {
-            os.exit(1)
-        }
+    case "build_c":
+        command = BuildC{}
+    case "run":
+        command = Run{std_pipe, new(LongLivedInterpState)}
     case "help":
         print_help(0)
     case:
         fmt.eprintfln("Unexpected command `%s`", os.args[1])
         print_help(1)
+    }
+
+    ref, watch := parse_args_after_command(os.args[2:])
+    early_exit_info: EarlyExitInfo = watch ? new(ExitEarly) : NeverExitEarly{}
+    for {
+        ret := compile(ref, std_pipe, command, early_exit_info)
+        switch exit_early in early_exit_info {
+        case NeverExitEarly:
+            os.exit(ret)
+        case ^ExitEarly:
+            switch &exit_early_value in exit_early {
+            case ExitEarlyAwaitingSourceCodeChange:
+                if len(exit_early_value.files) == 0 {
+                    assert(ret != 0)
+                    fmt.eprintln(
+                        "`-watch` flag error: Compilation failed too serverly to know when to reattempt compilation",
+                    )
+                    os.exit(ret)
+                }
+                fmt.println("Awaiting source code change...")
+                for !source_code_changed(&exit_early_value) {
+                    time.sleep(10 * time.Millisecond)
+                }
+            case ExitEarlyAfterSourceCodeChanged:
+            }
+        }
+        fmt.println(ansi_clear + "Recompiling after source code change...")
     }
 }
 

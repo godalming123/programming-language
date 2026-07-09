@@ -1,0 +1,6 @@
+// The type of the main function must be `() -> I64` when compiling via C
+// The type of the main function can be `() -> I64` or `(Compiler) -> I64` when interpreting
+main = |a: String, b: I64| -> I64 {
+    println(a & b.to_str)
+	return 0
+}

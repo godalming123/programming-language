@@ -33,12 +33,6 @@ OrderedHashMapTypeWithI64Key :: struct {
     value_type: Type,
 }
 
-FunctionType :: enum {
-    Normal,
-    // JsFunc,
-    ComptimeFunc,
-}
-
 CheckerGlobalValueWithoutGeneric :: struct {
     ast_node: GlobalValueWithoutGeneric,
     v:        CheckedGlobalValue,
@@ -90,20 +84,18 @@ generic_initialisation_equal_merge_func :: proc(
 
 CheckerState :: struct {
     // The following fields do not change while checking
-    files:                         #soa[]File,
+    parsed_files:                  []map[string]ParsedGlobal, // len(parsed_files) == len(r.files)
     global_values_without_generic: #soa[]CheckerGlobalValueWithoutGeneric,
     global_values_with_generics:   []GlobalValueWithGeneric,
     func_defs:                     []FunctionDefinition,
-    stderr:                        ^os.File,
 
     // The following fields change while checking
+    using r:                       DiagnosticReporter,
     generic_initialisations:       OrderedHashSet(GenericInitialisation),
     checked_functions:             [dynamic]CheckedFunction,
     first_unchecked_function:      uint,
     types:                         Types,
-    diagnostics_info:              DiagnosticsInfo,
     // checked_funcs:                 OrderedHashSet(CheckedFunction),
-    func_type:                     FunctionType,
     return_types:                  []Type,
     loop_index:                    uint,
     parent_loop_index:             uint, // Set to max(uint) when there is no parent loop
@@ -137,7 +129,7 @@ CheckedFunctionCall :: struct {
     args:     []CheckedValue,
 }
 StructTypeInitFunc :: struct {
-    type: Type,
+    return_type: Type,
 }
 OrderedHashMapInitFunc :: struct {
     type: Type,
@@ -194,6 +186,9 @@ CompileTimeStructInitialisation :: struct {
     func: StructTypeInitFunc,
     args: []CompileTimeValue,
 }
+CastFunction :: struct {
+    type: Type,
+}
 CompileTimeValue :: union {
     StringLiteralValue,
     NumberValue,
@@ -204,6 +199,8 @@ CompileTimeValue :: union {
     Import,
     CheckedFuncRef,
     CompileTimeStructInitialisation,
+    BuiltinFunction,
+    CastFunction,
 }
 CheckedValue :: union {
     CompileTimeValue,
@@ -214,7 +211,6 @@ CheckedValue :: union {
     CheckedFunctionCall,
     StructTypeInitFunc,
     SumTypeInitFunc,
-    BuiltinFunction,
     CheckedArrayAccess,
     CheckedOrderedHashMapAccess,
     CheckedFieldAccess,
@@ -231,7 +227,6 @@ CheckedValue :: union {
 FuncType :: struct {
     args:         []Type,
     return_types: []Type,
-    type:         FunctionType,
 }
 
 CharGroup :: enum {
@@ -271,13 +266,14 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 state = .InLowercaseBlock
             case .InLowercaseBlock:
             case .InUppercaseBlock:
-                warn(
-                    s,
+                diagnostic(
+                    &s.r,
                     Pos{ident.pos.index + i, ident.pos.file},
                     "Expected %s to be `snake_case`, got `%s`\nUnexpected lowercase letter '%c' in an uppercase block of a snake case identifier\nExpected an underscore, a number, or an uppercase letter",
                     expected,
                     ident.ident,
                     ident.ident[i],
+                    type = .Warning,
                 )
                 return
             }
@@ -287,13 +283,14 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
                 state = .InUppercaseBlock
             case .InUppercaseBlock:
             case .InLowercaseBlock:
-                warn(
+                diagnostic(
                     s,
                     Pos{ident.pos.index + i, ident.pos.file},
                     "Expected %s to be `snake_case`, got `%s`\nUnexpected uppercase letter '%c' in a lowercase block of a snake case identifier\nExpected an underscore, a number, or a lowercase letter",
                     expected,
                     ident.ident,
                     ident.ident[i],
+                    type = .Warning,
                 )
                 return
             }
@@ -301,12 +298,13 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
         case .Underscore:
             state = .NotInBlock
         case .Unknown:
-            warn(
+            diagnostic(
                 s,
                 Pos{ident.pos.index + i, ident.pos.file},
                 "Unexpected character '%c' in identifier `%s`",
                 ident.ident[i],
                 ident.ident,
+                type = .Warning,
             )
             return
         }
@@ -318,35 +316,38 @@ expect_snake_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos
 // The boolean returned is whether the identifier is camel case
 expect_camel_case :: proc(s: ^CheckerState, expected: string, ident: IdentAndPos) {
     if get_character_group(ident.ident[0]) != .UpperCase {
-        warn(
+        diagnostic(
             s,
             ident.pos,
             "Expected %s to be `CamelCase`, got `%s`\nFirst character in a camel case identifier must be an uppercase letter\nGot '%c'",
             expected,
             ident.ident,
             ident.ident[0],
+            type = .Warning,
         )
         return
     }
     for c, i in ident.ident[1:] {
         switch get_character_group(u8(c)) {
         case .Underscore:
-            warn(
+            diagnostic(
                 s,
                 Pos{ident.pos.index + uint(i) + 1, ident.pos.file},
                 "Expected %s to be `CamelCase`, got `%s`\nCannot have `_` in a camel case identifier",
                 ident.ident,
                 expected,
+                type = .Warning,
             )
             return
         case .LowerCase, .UpperCase, .Digit:
         case .Unknown:
-            warn(
+            diagnostic(
                 s,
                 Pos{ident.pos.index + uint(i) + 1, ident.pos.file},
                 "Unexpected character '%c' in identifier `%s`",
                 ident.ident[i],
                 ident.ident,
+                type = .Warning,
             )
             return
         }
@@ -376,22 +377,9 @@ check_struct_type :: proc(
 
     fields: #soa[]StructField(Type) = soa_zip(type.fields.name[:len(type.fields)], field_types)
     created := create_type(&s.types, Struct(Type, Type){unknown_type, type.fields_map, fields})
-    if created.type_value.(Struct(Type, Type)).extra_data != unknown_type {
-        return created.type
+    if created.type_value.(Struct(Type, Type)).extra_data == unknown_type {
+        init_struct_type(&s.types, created.type, fields, type.fields_map)
     }
-
-    return_types := make([]Type, 1)
-    return_types[0] = created.type
-
-    created2 := create_type(
-        &s.types,
-        Struct(Type, Type) {
-            create_type(&s.types, FuncType{field_types, return_types, .Normal}).type,
-            type.fields_map,
-            fields,
-        },
-    )
-    assert(created.type == created2.type)
     return created.type
 }
 
@@ -400,7 +388,6 @@ check_function_type :: proc(
     s: ^CheckerState,
     inputs: []Unit,
     output: ^Unit, // if the function has no output, then `output` is `nil`
-    type: FunctionType,
     generic_args: map[string]Type,
 ) -> (
     FuncType,
@@ -437,7 +424,7 @@ check_function_type :: proc(
         return FuncType{}, false
     }
 
-    return FuncType{args, return_types, type}, true
+    return FuncType{args, return_types}, true
 }
 
 // Returns nil if there are errors in the type
@@ -461,18 +448,18 @@ check_array_type :: proc(
         }
         compile_time_value, ok := value.(CompileTimeValue)
         if !ok {
-            err(s, type.args[0].pos, "Expected a compile time value got a runtime value")
+            diagnostic(s, type.args[0].pos, "Expected a compile time value got a runtime value")
             return ArrayType{}, false
         }
         number := compile_time_value.(NumberValue)
         assert(len(body) == 0)
         length, ok = big_int_to_u32(number.value)
         if !ok || length == 0 {
-            err(s, type.args[0].pos, "Expected an integer, n, where 0 < n <= max(u32)")
+            diagnostic(s, type.args[0].pos, "Expected an integer, n, where 0 < n <= max(u32)")
             return ArrayType{}, false
         }
     } else {
-        err(s, pos, "Expected either 0 or 1 unit inside `[]`, got %d units", len(type.args))
+        diagnostic(s, pos, "Expected either 0 or 1 unit inside `[]`, got %d units", len(type.args))
         return ArrayType{}, false
     }
     item_type := check_type(s, type.unit_being_called^, generic_args)
@@ -517,7 +504,7 @@ check_runtime_value :: proc(
     if comptime_value, is_comptime_value := out.(CompileTimeValue); is_comptime_value {
         #partial switch _ in comptime_value {
         case Type, GlobalValueWithGenericRef, UninitialisedOrderedHashMapType, Import:
-            err(s, v.pos, "This value can only be used at compile time")
+            diagnostic(s, v.pos, "This value can only be used at compile time")
             return nil
         }
     }
@@ -709,7 +696,7 @@ check_comptime_func_call :: proc(
     }
     comptime_value, ok := checked_value.(CompileTimeValue)
     if !ok {
-        err(s, generic.value.pos, non_compiletime_global_err)
+        diagnostic(s, generic.value.pos, non_compiletime_global_err)
         return nil
     }
     assert(len(body) == 0)
@@ -820,7 +807,7 @@ initialise_global_type_without_generic :: proc(
         return type.v.value.(Type)
     }
     if type.v.type != unknown_type {
-        err(s, type.ast_node.unit.pos, "TODO: FIX") // TODO FIX
+        diagnostic(s, type.ast_node.unit.pos, "TODO: FIX") // TODO FIX
     }
     checked_type := check_type(s, type.ast_node.unit, no_generic_args)
     s.global_values_without_generic[i].v.value = CompileTimeValue(checked_type)
@@ -870,7 +857,7 @@ get_sum_type :: proc(
         return sum_type, simplified, true
     }
     if pos != unknown_pos {
-        err(s, pos, "Expected a sum type, but got the type `%s`", type_to_string(s, type))
+        diagnostic(s, pos, "Expected a sum type, but got the type `%s`", type_to_string(s, type))
     }
     return SumType(Type){}, unknown_type, false
 }
@@ -882,7 +869,8 @@ get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type,
         return struct_type, true
     }
     if pos != unknown_pos {
-        err(s, pos, "Expected a struct type, but got the type `%s`", type_to_string(s, type))
+        got := type_to_string(s, type)
+        diagnostic(s, pos, "Expected a struct type, but got the type `%s`", got)
     }
     return Struct(Type, Type){}, false
 }
@@ -903,14 +891,14 @@ get_func_type :: proc(s: ^CheckerState, pos: Pos, value: ^CheckedValue, type: Ty
             value^ = OrderedHashMapInitFunc{value_type}
             return_types := make([]Type, 1)
             return_types[0] = value_type_unsimplified
-            return create_type(&s.types, FuncType{nil, return_types, .Normal}).type
+            return create_type(&s.types, FuncType{nil, return_types}).type
         case OrderedHashMapTypeWithStringKey:
             value^ = OrderedHashMapInitFunc{value_type}
             return_types := make([]Type, 1)
             return_types[0] = value_type_unsimplified
-            return create_type(&s.types, FuncType{nil, return_types, .Normal}).type
+            return create_type(&s.types, FuncType{nil, return_types}).type
         }
-        err(
+        diagnostic(
             s,
             pos,
             "The type `%s` cannot be converted to a function type",
@@ -943,7 +931,7 @@ get_func_type :: proc(s: ^CheckerState, pos: Pos, value: ^CheckedValue, type: Ty
                     first_arg = false
                 }
                 strings.write_byte(&initialisation, ']')
-                err(
+                diagnostic(
                     s,
                     pos,
                     "Expected a func type, but got an uninitialised global value with generics\nHint: Try initialising the global value with something like `%s`",
@@ -952,7 +940,7 @@ get_func_type :: proc(s: ^CheckerState, pos: Pos, value: ^CheckedValue, type: Ty
                 return invalid_type
             }
         }
-        err(s, pos, "Expected a func type, but got the type `%s`", type_to_string(s, type))
+        diagnostic(s, pos, "Expected a func type, but got the type `%s`", type_to_string(s, type))
     }
     return invalid_type
 }
@@ -1022,7 +1010,7 @@ finish_checking_value :: proc(
         global_value^ = CheckedGlobalValue{got_type, nil}
         comptime_value, ok := got_value.(CompileTimeValue)
         if !ok {
-            err(s, pos, non_compiletime_global_err)
+            diagnostic(s, pos, non_compiletime_global_err)
             return nil
         }
         global_value^ = CheckedGlobalValue{got_type, comptime_value}
@@ -1068,7 +1056,7 @@ expect_value_of_type :: proc(
         }
         func_info := get_type(s.types, func_type).(FuncType)
         if len(func_info.return_types) != len(e.expected_return_types) {
-            err(
+            diagnostic(
                 s,
                 pos,
                 "Expected a function with %d return types but got one with %d return types",
@@ -1090,7 +1078,6 @@ expect_value_of_type :: proc(
             }
         }
         e.args_store^ = func_info.args
-        e.type_store^ = func_info.type
         return true
     }
     panic("unreachable")
@@ -1108,7 +1095,7 @@ expect_exact_type :: proc(
         print_call(loc, "expect_exact_type")
     }
     if !type_is_subset(s, got, expected) {
-        err(
+        diagnostic(
             s,
             pos,
             "Expected the type `%s` but got the type `%s`%s",
@@ -1133,15 +1120,29 @@ get_variable_type :: proc(
 }
 
 type_to_string :: proc(s: ^CheckerState, t: Type, loc := #caller_location) -> string {
+    return type_to_string2(s.types, s.global_values_with_generics, t, loc)
+}
+
+type_to_string2 :: proc(
+    types: Types,
+    globals: []GlobalValueWithGeneric,
+    t: Type,
+    loc := #caller_location,
+) -> string {
     when debug_checker {
-        print_call(loc, "type_to_string")
+        print_call(loc, "type_to_string2")
     }
     builder := strings.builder_make()
-    build_type_string(s, &builder, t)
+    build_type_string(types, globals, &builder, t)
     return strings.to_string(builder)
 }
 
-build_struct_string :: proc(s: ^CheckerState, b: ^strings.Builder, type: Struct(Type, Type)) {
+build_struct_string :: proc(
+    types: Types,
+    globals: []GlobalValueWithGeneric,
+    b: ^strings.Builder,
+    type: Struct(Type, Type),
+) {
     strings.write_byte(b, '{')
     first_field := true
     for field in type.fields {
@@ -1151,13 +1152,14 @@ build_struct_string :: proc(s: ^CheckerState, b: ^strings.Builder, type: Struct(
         first_field = false
         strings.write_string(b, field.name.ident)
         strings.write_string(b, ": ")
-        build_type_string(s, b, field.type)
+        build_type_string(types, globals, b, field.type)
     }
     strings.write_byte(b, '}')
 }
 
 build_type_string :: proc(
-    s: ^CheckerState,
+    types: Types,
+    globals: []GlobalValueWithGeneric,
     b: ^strings.Builder,
     t: Type,
     loc := #caller_location,
@@ -1198,9 +1200,9 @@ build_type_string :: proc(
     case any_type:
         strings.write_string(b, "Any")
     case:
-        switch tv in get_type(s.types, t) {
+        switch tv in get_type(types, t) {
         case Struct(Type, Type):
-            build_struct_string(s, b, tv)
+            build_struct_string(types, globals, b, tv)
         case SumType(Type):
             strings.write_byte(b, '<')
             first_variant := true
@@ -1208,42 +1210,36 @@ build_type_string :: proc(
                 if !first_variant {
                     strings.write_string(b, ", ")
                 }
-                first_variant = false
+                variant_type := get_type(types, variant.payload).(Struct(Type, Type))
                 strings.write_string(b, variant.name.ident)
-                build_struct_string(s, b, get_type(s.types, variant.payload).(Struct(Type, Type)))
+                build_struct_string(types, globals, b, variant_type)
+                first_variant = false
             }
             strings.write_byte(b, '>')
         case GenericTypeValue:
-            strings.write_string(b, s.global_values_with_generics[tv.global.index].name)
+            strings.write_string(b, globals[tv.global.index].name)
             strings.write_byte(b, '[')
             first_arg := true
             for arg in tv.generic_args {
                 if !first_arg {
                     strings.write_string(b, ", ")
                 }
-                build_type_string(s, b, arg)
+                build_type_string(types, globals, b, arg)
                 first_arg = false
             }
             strings.write_byte(b, ']')
         case FuncType:
-            switch tv.type {
-            case .Normal:
-            // case .JsFunc:
-            //     strings.write_string(b, "#js ")
-            case .ComptimeFunc:
-                strings.write_string(b, "#comptime ")
-            }
             strings.write_byte(b, '(')
             for arg, index in tv.args {
                 // TODO: Print the name and whether the arg is mutable
-                build_type_string(s, b, arg)
+                build_type_string(types, globals, b, arg)
                 if index + 1 != len(tv.args) {
                     strings.write_string(b, ", ")
                 }
             }
             strings.write_string(b, ") -> ")
             if len(tv.return_types) == 1 {
-                build_type_string(s, b, tv.return_types[0])
+                build_type_string(types, globals, b, tv.return_types[0])
             } else {
                 strings.write_byte(b, '(')
                 first_return_type := true
@@ -1251,18 +1247,18 @@ build_type_string :: proc(
                     if first_return_type == false {
                         strings.write_string(b, ", ")
                     }
-                    build_type_string(s, b, return_type)
+                    build_type_string(types, globals, b, return_type)
                     first_return_type = false
                 }
                 strings.write_byte(b, ')')
             }
         case OrderedHashMapTypeWithI64Key:
             strings.write_string(b, "OrderedHashMap[I64, ")
-            build_type_string(s, b, tv.value_type)
+            build_type_string(types, globals, b, tv.value_type)
             strings.write_string(b, "]")
         case OrderedHashMapTypeWithStringKey:
             strings.write_string(b, "OrderedHashMap[String, ")
-            build_type_string(s, b, tv.value_type)
+            build_type_string(types, globals, b, tv.value_type)
             strings.write_string(b, "]")
         case ArrayType:
             strings.write_byte(b, '[')
@@ -1270,7 +1266,7 @@ build_type_string :: proc(
                 strings.write_uint(b, uint(tv.length))
             }
             strings.write_byte(b, ']')
-            build_type_string(s, b, tv.item_type)
+            build_type_string(types, globals, b, tv.item_type)
         case nil:
             panic("Unreachable")
         }
@@ -1311,7 +1307,7 @@ get_array_type :: proc(
     if out, is_array := get_type(s.types, type).(ArrayType); is_array {
         return out, true
     }
-    err(
+    diagnostic(
         s,
         pos,
         "%s is of type `%s`\nExpected an array type",
@@ -1340,7 +1336,12 @@ check_mutation_destination :: proc(
     }
     #partial switch var_type_value in get_type(s.types, simplify_type(s, var_type)) {
     case ArrayType:
-        warn(s, key.pos, "This array access is not bounds checked\nTODO: Bounds checks")
+        diagnostic(
+            s,
+            key.pos,
+            "This array access is not bounds checked\nTODO: Bounds checks",
+            type = .Warning,
+        )
         index_value := check_runtime_value(s, key^, body, i64_type, generic_args)
         if index_value == nil {
             return var_type_value.item_type, nil
@@ -1362,7 +1363,7 @@ check_mutation_destination :: proc(
         return var_type_value.value_type, CheckedOrderedHashMapAccess{new_clone(CheckedValue(var_ref)), new_clone(key_variable)}
 
     }
-    err(s, key.pos, "Cannot use a key with the type `%s`", type_to_string(s, var_type))
+    diagnostic(s, key.pos, "Cannot use a key with the type `%s`", type_to_string(s, var_type))
     return invalid_type, nil
 }
 
@@ -1387,7 +1388,7 @@ check_mutation :: proc(
     case .Mutated:
         var_ref, ok := s.variables_map[destination.name.ident]
         if !ok {
-            err(
+            diagnostic(
                 s,
                 destination.name.pos,
                 "The variable `%s` is not defined",
@@ -1396,7 +1397,7 @@ check_mutation :: proc(
             return CheckedMutation{}, false
         }
         if s.scopes[var_ref.nesting_level].variables[var_ref.index].is_mutable == false {
-            err(
+            diagnostic(
                 s,
                 destination.name.pos,
                 "The variable `%s` is not mutable",
@@ -1423,7 +1424,7 @@ check_mutation :: proc(
         val := value
         if mutation_type != .SetTo {
             if !type_is_numeric(s, value_type) {
-                err(
+                diagnostic(
                     s,
                     value_pos,
                     "Cannot perform numeric mutation on non-numeric type `%s`",
@@ -1449,7 +1450,7 @@ check_mutation :: proc(
         return CheckedMutation{destination_value, val}, true
     case .Constant, .Mutable:
         if mutation_type != .SetTo {
-            err(s, destination.name.pos, "Expected variable assignment to be done with `=`")
+            diagnostic(s, destination.name.pos, "Expected variable assignment to be done with `=`")
             return CheckedMutation{}, false
         }
         variable_is_mutable := destination.type == .Mutable
@@ -1459,7 +1460,7 @@ check_mutation :: proc(
         }
         return CheckedMutation{variable, value}, true
     case .ConstantAddedToPcs, .MutableAddedToPcs:
-        err(s, destination.name.pos, "TODO: Figure out what to do with old code")
+        diagnostic(s, destination.name.pos, "TODO: Figure out what to do with old code")
         return CheckedMutation{}, false
     }
     panic("Unreachable")
@@ -1492,7 +1493,7 @@ check_block :: proc(
                 generic_args,
             )
             if len(value.destination) != 1 {
-                err(
+                diagnostic(
                     s,
                     stmt.position,
                     "TODO: Handle variable management where len(value.destination) != 1",
@@ -1570,7 +1571,12 @@ check_block :: proc(
             loop_index := s.loop_index
             if value.label.ident != "" {
                 if value.label.ident in s.labels_map {
-                    err(s, value.label.pos, "The label `%s` is already defined", value.label.ident)
+                    diagnostic(
+                        s,
+                        value.label.pos,
+                        "The label `%s` is already defined",
+                        value.label.ident,
+                    )
                     return nil, false
                 }
                 s.labels_map[value.label.ident] = LabelRef{len(s.scopes) - 1, loop_index}
@@ -1589,7 +1595,7 @@ check_block :: proc(
                 case ArrayType:
                     array_item_type := t.item_type
                     if value.variables[2].ident != "" {
-                        err(
+                        diagnostic(
                             s,
                             stmt.position,
                             "You can only capture at most 2 variables from iterating over an array",
@@ -1663,7 +1669,7 @@ check_block :: proc(
                     )
                     break outer
                 }
-                err(
+                diagnostic(
                     s,
                     iter.pos,
                     "Expected an array or an `OrderedHashMap`, got the type `%s`",
@@ -1672,7 +1678,7 @@ check_block :: proc(
 
             case NumericIterator:
                 if value.variables[1].ident != "" || value.variables[2].ident != "" {
-                    err(
+                    diagnostic(
                         s,
                         stmt.position,
                         "You can only capture at most one variable in a numeric iterator",
@@ -1772,11 +1778,11 @@ check_block :: proc(
 
         case ContinueStatement:
             if stmt_index + 1 != len(block) {
-                err(s, stmt.position, "Continue statement must be last statement in block")
+                diagnostic(s, stmt.position, "Continue statement must be last statement in block")
                 return nil, false
             }
             if s.parent_loop_index == max(uint) {
-                err(s, stmt.position, "Continue statement must go inside a loop")
+                diagnostic(s, stmt.position, "Continue statement must go inside a loop")
                 return nil, false
             }
             if value.label.ident == "" {
@@ -1784,7 +1790,7 @@ check_block :: proc(
             } else {
                 loop_ref, ok := s.labels_map[value.label.ident]
                 if !ok {
-                    err(
+                    diagnostic(
                         s,
                         value.label.pos,
                         "There is no parent loop labelled with `%s`",
@@ -1797,18 +1803,22 @@ check_block :: proc(
 
         case UnreachableStatement:
             if stmt_index + 1 != len(block) {
-                err(s, stmt.position, "Unreachable statement must be last statement in block")
+                diagnostic(
+                    s,
+                    stmt.position,
+                    "Unreachable statement must be last statement in block",
+                )
                 return nil, false
             }
             append_elem(body, UnreachableStatement{})
 
         case ReturnStatement:
             if stmt_index + 1 != len(block) {
-                err(s, stmt.position, "Return statement must be last statement in block")
+                diagnostic(s, stmt.position, "Return statement must be last statement in block")
                 return nil, false
             }
             if len(value) != len(s.return_types) {
-                err(
+                diagnostic(
                     s,
                     stmt.position,
                     "Function returns %d values, but %d values given",
@@ -1827,7 +1837,7 @@ check_block :: proc(
                 }
                 append_elem(body, CheckedReturn{v})
             case:
-                err(
+                diagnostic(
                     s,
                     stmt.position,
                     "Can only have <=1 value in return statement (TODO: add support for returning >1 values)",
@@ -1835,7 +1845,7 @@ check_block :: proc(
             }
 
         case YieldStatement:
-            err(s, stmt.position, "TODO: Handle yield statement")
+            diagnostic(s, stmt.position, "TODO: Handle yield statement")
             return nil, false
 
         case MatchStatement:
@@ -1865,7 +1875,7 @@ check_block :: proc(
                 variable_name: ^Unit = nil
                 if joined, is_joined := branch.label.value.(JoinedUnits); is_joined {
                     if joined.join_method != .Colon {
-                        err(
+                        diagnostic(
                             s,
                             branch.label.pos,
                             "Expected the join method to be `:`, got %v",
@@ -1883,7 +1893,7 @@ check_block :: proc(
                 if !is_variable ||
                    len(type_variable.segments) != 2 ||
                    type_variable.segments[0].ident != "" {
-                    err(
+                    diagnostic(
                         s,
                         branch_type.pos,
                         "Expected type variable without a generic type that starts with `.`",
@@ -1894,7 +1904,7 @@ check_block :: proc(
                 variant_name := type_variable.segments[1].ident
                 variant_index, exists := val_sum_type.variants_map[variant_name]
                 if !exists {
-                    err(
+                    diagnostic(
                         s,
                         branch_type.pos,
                         "The sum type `%s` does not have the variant `.%s`",
@@ -1905,11 +1915,8 @@ check_block :: proc(
                 }
 
                 if variant_has_branch[variant_index] {
-                    l := get_location(
-                        s.files.file[:len(s.files)],
-                        variant_branch_positions[variant_index],
-                    )
-                    err(
+                    l := get_location(s.files, variant_branch_positions[variant_index])
+                    diagnostic(
                         s,
                         branch_type.pos,
                         "The variant `.%s` already has a branch defined at %s",
@@ -1925,7 +1932,7 @@ check_block :: proc(
                 if variable_name != nil {
                     ident, is_ident := variable_name.value.(Ident)
                     if !is_ident || len(ident.segments) != 1 {
-                        err(s, variable_name.pos, "Expected an identifier without `.`")
+                        diagnostic(s, variable_name.pos, "Expected an identifier without `.`")
                         return nil, false
                     }
                     var_ok: bool = ---
@@ -1954,7 +1961,7 @@ check_block :: proc(
             unhandled_variants := false
             for has_branch, i in variant_has_branch {
                 if !has_branch {
-                    err(
+                    diagnostic(
                         s,
                         stmt.position,
                         "Unhandled variant `.%s`",
@@ -1990,15 +1997,15 @@ check_namespaced_var_ref :: proc(
     Type,
     int,
 ) {
-    file := s.files[namespace.index]
-    parsed_global, global_exists := file.globals[ref.segments[index].ident]
+    file_globals := s.parsed_files[namespace.index]
+    parsed_global, global_exists := file_globals[ref.segments[index].ident]
     if !global_exists {
-        err(
+        diagnostic(
             s,
             ref.segments[index].pos,
             "The variable `%s` is not defined in the file `%s`",
             ref.segments[index].ident,
-            file.file.file_path,
+            s.files[namespace.index].file_path,
         )
         return nil, invalid_type, 0
     }
@@ -2023,7 +2030,7 @@ check_namespaced_var_ref :: proc(
         // case:
         //     panic("Unreachable")
         // case nil:
-        //     err(
+        //     diagnostic(
         //         s,
         //         ref[index].pos,
         //         "Either this global has not been defined yet, there was an error checking this global, or this type of global is not yet supported (TODO)",
@@ -2033,7 +2040,7 @@ check_namespaced_var_ref :: proc(
         //     return value.inline_value, value.type, index + 1
         // case Import:
         //     if index + 1 >= len(ref) {
-        //         err(s, ref[index].pos, import_use_err)
+        //         diagnostic(s, ref[index].pos, import_use_err)
         //         return nil, invalid_type, 0
         //     }
         //     return check_namespaced_var_ref(s, value.file, ref, index + 1)
@@ -2054,7 +2061,7 @@ check_namespaced_var_ref :: proc(
         case:
             panic("Unreachable")
         case nil:
-            err(
+            diagnostic(
                 s,
                 ref[index].pos,
                 "Either this global has not been defined yet, there was an error checking this global, or this type of global is not yet supported (TODO)",
@@ -2064,7 +2071,7 @@ check_namespaced_var_ref :: proc(
             return value.inline_value, value.type, index + 1
         case Import:
             if index + 1 >= len(ref) {
-                err(s, ref[index].pos, import_use_err)
+                diagnostic(s, ref[index].pos, import_use_err)
                 return nil, invalid_type, 0
             }
             return check_namespaced_var_ref(s, value.file, ref, index + 1)
@@ -2097,7 +2104,7 @@ check_var_ref_start :: proc(
     }
     if builtin_func, builtin_func_type := get_builtin_func_from_name(ref.segments[0].ident);
        builtin_func != .invalid_builtin {
-        return builtin_func, builtin_func_type, 1
+        return CompileTimeValue(builtin_func), builtin_func_type, 1
     }
     if builtin_type := get_builtin_type_from_name(ref.segments[0].ident);
        builtin_type != unknown_type {
@@ -2106,20 +2113,22 @@ check_var_ref_start :: proc(
     if ref.segments[0].ident == "OrderedHashMap" {
         return CompileTimeValue(UninitialisedOrderedHashMapType{}), unknown_type, 1
     }
+    /*
     if ref.segments[0].ident == "compiler" {
         compiler_funcs :: "`compiler.emit_js_code`"
         if len(ref.segments) == 1 {
-            err(s, pos, "Expected " + compiler_funcs + " got just `compiler`")
+            diagnostic(s, pos, "Expected " + compiler_funcs + " got just `compiler`")
             return nil, invalid_type, 0
         }
         switch ref.segments[1].ident {
         case "emit_js_code":
-            return .emit_js_code, comptime_string_any_ordered_hashmap_and_string_to_string_type, 2
+            return .emit_js_code, string_any_ordered_hashmap_and_string_to_string_type, 2
         case:
-            err(s, pos, "Expected " + compiler_funcs + " got `compiler.%s`", ref.segments[1].ident)
+            diagnostic(s, pos, "Expected " + compiler_funcs + " got `compiler.%s`", ref.segments[1].ident)
             return nil, invalid_type, 0
         }
     }
+    */
     if var_ref, ok := s.variables_map[ref.segments[0].ident]; ok {
         return var_ref, get_variable_type(s, var_ref), 1
     }
@@ -2142,14 +2151,14 @@ check_var_ref :: proc(
         expected_return_type: Type = ---
         switch expected in a.type {
         case AnyType:
-            err(s, pos, value_err1)
+            diagnostic(s, pos, value_err1)
             return nil
         case Type:
-            err(s, pos, "TODO: Generate `.` functions better")
+            diagnostic(s, pos, "TODO: Generate `.` functions better")
             return nil
         case FunctionWithExpectedReturnTypes:
             if len(expected.expected_return_types) != 1 {
-                err(
+                diagnostic(
                     s,
                     pos,
                     "Compiler cannot generate a `.` function which generates %d return types",
@@ -2159,7 +2168,7 @@ check_var_ref :: proc(
             }
             switch expected_return in expected.expected_return_types[0] {
             case AnyType, FunctionWithExpectedReturnTypes:
-                err(s, pos, value_err1)
+                diagnostic(s, pos, value_err1)
             case Type:
                 expected_return_type = expected_return
             }
@@ -2172,7 +2181,7 @@ check_var_ref :: proc(
 
         variant_index, exists := sum_type.variants_map[ref.segments[1].ident]
         if !exists {
-            err(
+            diagnostic(
                 s,
                 pos,
                 "The sum type `%s` does not have a variant called `%s`",
@@ -2246,7 +2255,7 @@ check_var_ref :: proc(
                 out = LengthOfOrderedHashMapWithStringKey{new_clone(out)}
                 continue
             }
-            err(
+            diagnostic(
                 s,
                 extra_segment.pos,
                 "The value before `.len` is of type %s\nExpected an array type of an OrderedHashSet type",
@@ -2276,7 +2285,7 @@ check_var_ref :: proc(
         }
         field_index, field_exists := struct_type.fields_map[extra_segment.ident]
         if !field_exists {
-            err(
+            diagnostic(
                 s,
                 extra_segment.pos,
                 "The field `%s` does not exist on the struct type `%s`",
@@ -2303,13 +2312,13 @@ check_array_initialisation :: proc(
     when debug_checker {
         print_call(loc, "check_array_initialisation")
     }
-    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, no_generic_args)
+    array_type_value, ok := check_array_type(s, array_type_pos, array_type_node, a.generic_args)
     if !ok {
         return nil
     }
     array_type := create_type(&s.types, array_type_value).type
     if array_type_value.length != 0 && len(args) != int(array_type_value.length) {
-        err(
+        diagnostic(
             s,
             pos,
             "Type initialisation provides %d values\nType expects %d values",
@@ -2353,18 +2362,12 @@ check_function_call :: proc(
     }
 
     func_args: []Type = ---
-    func_type: FunctionType = ---
     when debug_checker {
         func_args = nil // So that `func_args` can be printed by `debug_arg` without causing a segfault
     }
-    expected_type := FunctionWithExpectedReturnTypes{&func_args, &func_type, expected_return_types}
+    expected_type := FunctionWithExpectedReturnTypes{&func_args, expected_return_types}
     value := check_runtime_value(s, call.unit_being_called^, body, expected_type, generic_args)
     if value == nil {
-        return nil
-    }
-
-    if s.func_type == .Normal && func_type == .ComptimeFunc {
-        err(s, pos, function_err)
         return nil
     }
 
@@ -2391,7 +2394,6 @@ AnyType :: struct {
 
 FunctionWithExpectedReturnTypes :: struct {
     args_store:            ^[]Type,
-    type_store:            ^FunctionType,
     expected_return_types: []ExpectedType,
 }
 
@@ -2423,22 +2425,22 @@ check_value_with_markers :: proc(
         }
         comptime_value, is_comptime := value.(CompileTimeValue)
         if !is_comptime {
-            err(s, v.pos, "Expected a compile time known value")
+            diagnostic(s, v.pos, "Expected a compile time known value")
             return nil
         }
 
-        file := s.files[v.pos.file.index].file
+        file := s.files[v.pos.file.index]
         joined, join_err := filepath.join(
             []string{file.dir_path, string(comptime_value.(StringLiteralValue))},
             context.allocator,
         )
         if join_err != nil {
-            err(s, v.pos, "Failed to join strings: %v", join_err)
+            diagnostic(s, v.pos, "Failed to join strings: %v", join_err)
             return nil
         }
         data, data_err := os.read_entire_file(joined, context.allocator)
         if data_err != nil {
-            err(s, markers[0].pos, "Failed to read `%s`: %#v\n", joined, data_err)
+            diagnostic(s, markers[0].pos, "Failed to read `%s`: %#v\n", joined, data_err)
             return nil
         }
         return finish_checking_value(
@@ -2452,7 +2454,13 @@ check_value_with_markers :: proc(
     case "debug_ast":
         debug_unit(nil, v)
     case:
-        warn(s, markers[0].pos, "TODO: Handle the `%s` marker", markers[0].ident)
+        diagnostic(
+            s,
+            markers[0].pos,
+            "TODO: Handle the `%s` marker",
+            markers[0].ident,
+            type = .Warning,
+        )
     }
 
     return check_value_with_markers(s, v, markers[1:], a)
@@ -2476,7 +2484,7 @@ check_joined_unit_value :: proc(
     switch value.join_method {
 
     case .Colon:
-        err(s, pos, "Cannot use `:` to join values")
+        diagnostic(s, pos, "Cannot use `:` to join values")
         return nil
 
     case .In:
@@ -2495,7 +2503,7 @@ check_joined_unit_value :: proc(
             val0_expected_type = string_type
         }
         if val0_expected_type == invalid_type {
-            err(
+            diagnostic(
                 s,
                 value.unit1.pos,
                 "Expected an ordered hash map type\nGot the type %s",
@@ -2515,7 +2523,7 @@ check_joined_unit_value :: proc(
         }
         tuple, is_tuple := value.unit0.value.(Tuple)
         if !is_tuple {
-            err(
+            diagnostic(
                 s,
                 value.unit1.pos,
                 "While checking function type: The unit before the `->` should be a tuple (for example `(String, U64)`)",
@@ -2523,7 +2531,7 @@ check_joined_unit_value :: proc(
             return CompileTimeValue(invalid_type)
         }
         assert(value.unit1 != nil)
-        t, ok := check_function_type(s, tuple.elements, value.unit1, .Normal, a.generic_args)
+        t, ok := check_function_type(s, tuple.elements, value.unit1, a.generic_args)
         if !ok {
             return nil
         }
@@ -2629,7 +2637,7 @@ check_joined_unit_value :: proc(
             return nil
         }
         if item_type0 != item_type1 {
-            err(
+            diagnostic(
                 s,
                 pos,
                 "Array item type mismatch:\nItem type on left is %s\nItem type on right is %s",
@@ -2790,7 +2798,7 @@ check_value :: proc(
     }
     switch value in v.value {
     case:
-        err(s, v.pos, "Internal error: got nil value in check_value")
+        diagnostic(s, v.pos, "Internal error: got nil value in check_value")
         return nil
 
     case Struct(Unit, struct {}):
@@ -2846,7 +2854,7 @@ check_value :: proc(
             "",
         )
     case Import:
-        err(s, v.pos, import_use_err)
+        diagnostic(s, v.pos, import_use_err)
         return nil
 
     case MarkedUnit:
@@ -2854,7 +2862,7 @@ check_value :: proc(
 
     case Tuple:
         if len(value.elements) != 1 {
-            err(
+            diagnostic(
                 s,
                 v.pos,
                 "Only tuples with one element are supported\nThis tuple has %d elements",
@@ -2902,7 +2910,7 @@ check_value :: proc(
                 } else if key == i64_type {
                     type_value = OrderedHashMapTypeWithI64Key{checked_args[1]}
                 } else {
-                    err(
+                    diagnostic(
                         s,
                         v.pos,
                         "The key of an `OrderedHashMap` must be a `String` or an `I64`\nGot the key `%s`\nTODO: Support `OrderedHashMap`s with keys other than `String`s and `I64`s",
@@ -2912,11 +2920,29 @@ check_value :: proc(
                 }
                 out: CheckedValue = CompileTimeValue(create_type(&s.types, type_value).type)
                 return finish_checking_value(s, v.pos, a.type, out, type_type, "")
+            case BuiltinFunction:
+                assert(comptime_value == .cast_func)
+                if len(checked_args) != 1 {
+                    argument_count_mismatch(s, v.pos, len(checked_args), 1, "cast")
+                    return nil
+                }
+                args := make([]Type, 1)
+                args[0] = any_type
+                return_types := make([]Type, 1)
+                return_types[0] = checked_args[0]
+                return finish_checking_value(
+                    s,
+                    v.pos,
+                    a.type,
+                    CompileTimeValue(CastFunction{checked_args[0]}),
+                    create_type(&s.types, FuncType{args, return_types}).type,
+                    "",
+                )
             }
             panic("Unreachable")
         }
         if len(value.args) != 1 {
-            err(
+            diagnostic(
                 s,
                 v.pos,
                 "Indexed accesses into an array or ordered hash map must pass one value into the square brackets\nGot %d values",
@@ -2926,13 +2952,18 @@ check_value :: proc(
         }
         #partial switch t in get_type(s.types, being_called_type) {
         case ArrayType:
-            warn(s, v.pos, "This array access is not bounds checked\nTODO: Bounds checks")
+            diagnostic(
+                s,
+                v.pos,
+                "This array access is not bounds checked\nTODO: Bounds checks",
+                type = .Warning,
+            )
             index_value := check_runtime_value(s, value.args[0], a.body, i64_type, a.generic_args)
             if index_value == nil {
                 return nil
             }
             //if t.length == 0 {
-            //    err(
+            //    diagnostic(
             //        s,
             //        value.array.pos,
             //        "TODO: Implement element access for dynamically sized arrays",
@@ -2962,7 +2993,7 @@ check_value :: proc(
                 t.value_type,
                 "",
             )}
-        err(
+        diagnostic(
             s,
             value.unit_being_called.pos,
             "The value is of type `%s`\nExpected an array type or an `OrderedHashMap` type",
@@ -3043,29 +3074,10 @@ check_anonymous_func_head :: proc(
     FuncType,
 ) {
     func := s.func_defs[ref.index]
-
-    func_type: FunctionType
-    if len(func.markers) == 0 {
-        func_type = .Normal
-    } else if len(func.markers) > 1 {
-        err(s, func.markers[1].pos, "TODO: Handle function definitions with more than one marker")
-        return CheckedFuncRef{max(uint)}, invalid_type, FuncType{}
-    } else if func.markers[0].ident == "comptime" {
-        func_type = .ComptimeFunc
-    } else {
-        err(
-            s,
-            func.markers[0].pos,
-            "Expected marker to be `#comptime`\nGot `#%s`",
-            func.markers[0].ident,
-        )
-        return CheckedFuncRef{max(uint)}, invalid_type, FuncType{}
-    }
     checked_func_type, ok := check_function_type(
         s,
         func.inputs.value_type[:len(func.inputs)],
         func.output,
-        func_type,
         generic_args,
     )
     if !ok {
@@ -3084,7 +3096,6 @@ check_anonymous_func_body :: proc(s: ^CheckerState, ref: CheckedFuncRef) -> bool
     func := s.func_defs[checked_func.definition.index]
     func_type := get_type(s.types, checked_func.type).(FuncType)
 
-    s.func_type = func_type.type
     s.return_types = make([]Type, len(func_type.return_types))
     s.loop_index = 0
     s.parent_loop_index = max(uint)
@@ -3169,7 +3180,7 @@ check_global_value_without_generic :: proc(
     }
     comptime_value, ok := checked_value.(CompileTimeValue)
     if !ok {
-        err(s, value.unit.pos, non_compiletime_global_err)
+        diagnostic(s, value.unit.pos, non_compiletime_global_err)
         out = CheckedGlobalValue{invalid_type, nil}
         return
     }
@@ -3203,7 +3214,7 @@ check_array :: proc(
 ) {
     array, ok := get_array_type(s, pos, "This value", value_type)
     if !ok {
-        // err(s, pos, err_msg, type_to_string(s, value_type))
+        // diagnostic(s, pos, err_msg, type_to_string(s, value_type))
         return nil, Type{}
     }
     if array.length != 0 {
@@ -3223,14 +3234,14 @@ get_global_function :: proc(
     Pos,
     bool,
 ) {
-    parsed_global, exists := s.files[file_to_search.index].globals[name]
+    parsed_global, exists := s.parsed_files[file_to_search.index][name]
     if !exists {
-        err(s, usage_pos, "The global `%s` is not defined%s", name, extra_text)
+        diagnostic(s, usage_pos, "The global `%s` is not defined%s", name, extra_text)
         return CheckedFuncRef{}, unknown_pos, false
     }
     pos := usage_pos == unknown_pos ? Pos{parsed_global.pos, file_to_search} : usage_pos
     if parsed_global.has_generics {
-        err(
+        diagnostic(
             s,
             pos,
             "The global `%s` has generic\nExpected it to not have generics%s",
@@ -3242,7 +3253,7 @@ get_global_function :: proc(
     global := s.global_values_without_generic[parsed_global.index]
     func_ref, is_func := global.v.value.(CheckedFuncRef)
     if !is_func {
-        err(
+        diagnostic(
             s,
             pos,
             "The global value `%s` is not a function and so cannot be called%s",
@@ -3259,97 +3270,34 @@ EntryFuncType :: enum {
     MainFunc,
 }
 
-DiagnosticsInfo :: struct {
-    number_of_errors:   uint,
-    number_of_warnings: uint,
-}
-
 CheckerOutput :: struct {
-    checked:          Checked,
-    diagnostics_info: DiagnosticsInfo,
-    entry_func_ref:   CheckedFuncRef,
-    entry_func_type:  EntryFuncType,
-}
-
-Checked :: struct {
+    reporter:      DiagnosticReporter,
+    func_ref:      CheckedFuncRef,
+    globals:       []GlobalValueWithGeneric,
     checked_funcs: []CheckedFunction,
     types:         Types,
 }
 
-check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
+check :: proc(parsed: ParsedProject, func_name: string, io: Pipe(^os.File)) -> CheckerOutput {
     state := CheckerState {
-        stderr                        = stderr,
-        files                         = parsed.files,
+        r                             = DiagnosticReporter {
+            parsed.files,
+            io,
+            [DiagnosticType]uint{},
+        },
+        parsed_files                  = parsed.parsed_files,
         global_values_without_generic = soa_zip(
             parsed.global_values_without_generic,
             make([]CheckedGlobalValue, len(parsed.global_values_without_generic)),
         ),
         global_values_with_generics   = parsed.global_values_with_generics,
         func_defs                     = parsed.function_defs,
+        types                         = create_types(),
     }
 
     for _, i in state.global_values_without_generic {
         state.global_values_without_generic[i].v.type = unknown_type
     }
-
-    array_with_string_type := make([]Type, 1)
-    array_with_string_type[0] = string_type
-
-    array_with_2string_types := make([]Type, 2)
-    array_with_2string_types[0] = string_type
-    array_with_2string_types[1] = string_type
-
-    array_with_i64_type := make([]Type, 1)
-    array_with_i64_type[0] = i64_type
-
-    array_with_u64_type := make([]Type, 1)
-    array_with_u64_type[0] = u64_type
-
-    array_with_string_any_ordered_hash_map_and_string := make([]Type, 2)
-    array_with_string_any_ordered_hash_map_and_string[0] = string_any_ordered_hashmap_type
-    array_with_string_any_ordered_hash_map_and_string[1] = string_type
-
-    array_with_dynamic_array_of_strings := make([]Type, 1)
-    array_with_dynamic_array_of_strings[0] = dynamic_array_of_strings
-
-    array_with_string_i64_types := make([]Type, 2)
-    array_with_string_i64_types[0] = string_type
-    array_with_string_i64_types[1] = i64_type
-
-    assert(dynamic_array_of_strings == create_type(&state.types, ArrayType{0, string_type}).type)
-    assert(
-        string_to_nil_type ==
-        create_type(&state.types, FuncType{array_with_string_type, nil, .Normal}).type,
-    )
-    assert(
-        string_string_to_nil_type ==
-        create_type(&state.types, FuncType{array_with_2string_types, nil, .Normal}).type,
-    )
-    assert(
-        string_to_string_type ==
-        create_type(&state.types, FuncType{array_with_string_type, array_with_string_type, .Normal}).type,
-    )
-    assert(
-        string_any_ordered_hashmap_type ==
-        create_type(&state.types, OrderedHashMapTypeWithStringKey{any_type}).type,
-    )
-    assert(no_args_to_nil_type == create_type(&state.types, FuncType{nil, nil, .Normal}).type)
-    assert(
-        array_of_strings_to_nil_type ==
-        create_type(&state.types, FuncType{array_with_dynamic_array_of_strings, nil, .Normal}).type,
-    )
-    assert(
-        i64_to_nil_type ==
-        create_type(&state.types, FuncType{array_with_i64_type, nil, .Normal}).type,
-    )
-    assert(
-        string_i64_to_string_type ==
-        create_type(&state.types, FuncType{array_with_string_i64_types, array_with_string_type, .Normal}).type,
-    )
-    assert(
-        comptime_string_any_ordered_hashmap_and_string_to_string_type ==
-        create_type(&state.types, FuncType{array_with_string_any_ordered_hash_map_and_string, array_with_string_type, .ComptimeFunc}).type,
-    )
 
     for _, i in parsed.global_values_without_generic {
         check_global_value_without_generic(&state, GlobalValueWithoutGenericRef{uint(i)})
@@ -3366,7 +3314,7 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         for arg in type.generics {
             expect_camel_case(&state, "generic names", arg)
             if is_builtin(arg.ident) {
-                err(&state, arg.pos, builtins_err, arg.ident)
+                diagnostic(&state, arg.pos, builtins_err, arg.ident)
             }
         }
         // TODO: Check that unused generics are valid
@@ -3381,17 +3329,17 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
     // initialise_global_type_without_generic(&state, uint(i))
     // }
 
-    if state.diagnostics_info.number_of_errors > 0 {
-        return CheckerOutput{diagnostics_info = state.diagnostics_info}
+    if state.r.number_of[.Error] > 0 {
+        return CheckerOutput{reporter = state.r}
     }
 
-    for file, i in parsed.files {
+    for file, i in parsed.parsed_files {
         // state.file = FileRef{uint(i)}
         // TODO: Iterating over globals as a map is a big source of the
         // non-deterministic error ordering in this compiler
-        for global_name, global in file.globals {
+        for global_name, global in file {
             if is_builtin(global_name) {
-                err(&state, Pos{global.pos, FileRef{uint(i)}}, builtins_err, global_name)
+                diagnostic(&state, Pos{global.pos, FileRef{uint(i)}}, builtins_err, global_name)
                 continue
             }
             // TODO: Check that the name is the correct case
@@ -3419,11 +3367,29 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         }
     }
 
-    if state.diagnostics_info.number_of_errors > 0 {
-        return CheckerOutput{diagnostics_info = state.diagnostics_info}
+    if state.r.number_of[.Error] > 0 {
+        return CheckerOutput{reporter = state.r}
     }
 
-    // TODO: Check the arguments and return types of the `build` or `main` functions
+    func_ref, _, func_ok := get_global_function(
+        &state,
+        unknown_pos,
+        FileRef{0},
+        func_name,
+        "\nTODO: Write hint",
+    )
+    if !func_ok {
+        return CheckerOutput{reporter = state.r}
+    }
+    return CheckerOutput {
+        state.r,
+        func_ref,
+        state.global_values_with_generics,
+        state.checked_functions[:],
+        state.types,
+    }
+
+    /*
     hint ::
         "\n\nHint: If you define a `build` function, the compiler will run that " +
         "function at compile time to build the program, for example:\n\n" +
@@ -3445,7 +3411,7 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
     entry_func_type: EntryFuncType = ---
     if build_props, build_exists := parsed.files[0].globals["build"]; build_exists {
         if build_props.has_generics {
-            err(
+            diagnostic(
                 &state,
                 Pos{build_props.pos, FileRef{0}},
                 "`build` is has generics\nExpected it to be a function without generics%s",
@@ -3456,7 +3422,7 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         build_value := state.global_values_without_generic[build_props.index]
         build_ref, build_is_func := build_value.v.value.(CheckedFuncRef)
         if !build_is_func {
-            err(
+            diagnostic(
                 &state,
                 Pos{build_props.pos, FileRef{0}},
                 "`build` is a value other than a function\nExpected it to be a function%s",
@@ -3466,7 +3432,7 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         }
         build_info := get_type(state.types, build_value.v.type).(FuncType)
         if build_info.type != .ComptimeFunc {
-            err(
+            diagnostic(
                 &state,
                 Pos{build_props.pos, FileRef{0}},
                 "`build` is not marked with `#comptime`\nExpected it to be marked with `#comptime`%s",
@@ -3489,7 +3455,7 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
         }
         main_info := get_type(state.types, state.checked_functions[main_ref.index].type).(FuncType)
         if main_info.type != .Normal {
-            err(&state, main_pos, "`main` has a marker\nExpected `main` to not have a marker")
+            diagnostic(&state, main_pos, "`main` has a marker\nExpected `main` to not have a marker")
             return CheckerOutput{diagnostics_info = state.diagnostics_info}
         }
         entry_func_ref = main_ref
@@ -3500,5 +3466,6 @@ check :: proc(parsed: ParsedProject, stderr: ^os.File) -> CheckerOutput {
     }
     checked := Checked{state.checked_functions[:], state.types}
     return CheckerOutput{checked, state.diagnostics_info, entry_func_ref, entry_func_type}
+    */
 }
 

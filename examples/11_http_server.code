@@ -1,0 +1,43 @@
+// TODO: Add an automated test for this example
+
+get_http_server = |cache: CompilerCache| -> HttpServer {
+    // - The `CompilerCache` is a place to store values across program
+    //   executions when using the `-watch` flag
+    // - For this demo, all saving the initialised HTTP server in the
+    //   `CompilerCache` does is ensure that the same port is used
+    // - But in the future, the compilers cache will allow the program to send
+    //   data to a websocket which tells the client to update the UI being shown
+    // - In the future, this will make it possible to implement state-preserving
+    //   hot reload which is triggered by the programmer updating one of the source code files
+    if cache.contains("server") {
+        return cast[HttpServer](cache.get("server"))
+    } else {
+        server = init_http_server()
+        cache.set("server", server)
+        return server
+    }
+}
+
+handler = |req: HttpRequest| -> HttpResponse {
+    if req.method == "GET" {
+		return .Html("<p>Hello world</p><p>Url is " & req.url & "</p>")
+	} else if req.method == "POST" {
+	    return .Plain("TODO: Handle post")
+	} else {
+	    return .Plain("TODO: Handle method `" & req.method & "`")
+	}
+}
+
+// This is a simpler API for the HTTP server, I'm just not sure if the code
+// in the programming language will be able to save the right data in the
+// cache to hot reload when the source code changes
+// This API is also missing a way to get the port of the web server
+// http_listen_and_serve(handler)
+
+main = |compiler: Compiler| -> I64 {
+	server = get_http_server(compiler.cache)
+	server.set_handler(handler)
+    println("Listening and serving on port " & server.port.to_str & "...")
+	server.listen_and_serve()
+	return 0
+}

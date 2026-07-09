@@ -248,7 +248,11 @@ is_nothing_char :: proc(c: byte) -> bool {
     return c == ' ' || c == '\t'
 }
 
+// TODO: Dry
 is_alphanumeric_char :: proc(c: byte) -> bool {
+    return c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
+}
+is_alphanumeric_char_rune :: proc(c: rune) -> bool {
     return c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
 }
 
@@ -300,7 +304,7 @@ skip :: proc(
     return skip_ignore_first(s, f, should_continue)
 }
 
-get_location :: proc(files: []CompilerFile, position: Pos) -> string {
+get_location :: proc(files: [^]CompilerFile, position: Pos) -> string {
     file := files[position.file.index]
     line := 1
     column := 1
@@ -354,8 +358,7 @@ wrong_token_err :: proc(
         i += 1
     }
     diagnostic(
-        state.stderr,
-        state.files.file[:len(state.files)],
+        &state.r,
         Pos{state.last_token_pos, state.file_ref},
         "%sExpected%s\nGot %s",
         string(info_bytes),

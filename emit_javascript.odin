@@ -17,9 +17,14 @@ emit_js_func_call :: proc(s: ^GeneralEmitterState, c: CheckedFunctionCall) {
 
 emit_js_comptime_value :: proc(s: ^GeneralEmitterState, v: CompileTimeValue) {
     switch comptime in v {
+    case CastFunction:
+        panic("TODO")
+    case BuiltinFunction:
+        strings.write_string(&s.b, "builtin")
+        strings.write_uint(&s.b, uint(comptime))
     case CompileTimeStructInitialisation:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(comptime.func.type.index))
+        strings.write_uint(&s.b, uint(comptime.func.return_type.index))
         strings.write_byte(&s.b, '(')
         first_arg := true
         for arg in comptime.args {
@@ -27,6 +32,7 @@ emit_js_comptime_value :: proc(s: ^GeneralEmitterState, v: CompileTimeValue) {
                 strings.write_byte(&s.b, ',')
             }
             emit_js_comptime_value(s, arg)
+            first_arg = false
         }
         strings.write_byte(&s.b, ')')
 
@@ -114,7 +120,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case KeysOfOrderedHashMapWithI64Key:
         emit_js_map_keys_func(s, v.hash_map^)
     case CheckedOrderedHashMapAccess:
-        strings.write_string(&s.b, "Map.prototype.get(")
+        strings.write_string(&s.b, "Map.prototype.get.call(")
         emit_js_value(s, v.hash_map^)
         strings.write_byte(&s.b, ',')
         emit_js_value(s, v.key^)
@@ -125,9 +131,6 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         strings.write_string(&s.b, "String(")
         emit_js_value(s, v.value^)
         strings.write_byte(&s.b, ')')
-    case BuiltinFunction:
-        strings.write_string(&s.b, "builtin")
-        strings.write_uint(&s.b, uint(v))
     case CheckedFieldAccess:
         emit_js_value(s, v.value^)
         strings.write_string(&s.b, ".field")
@@ -148,7 +151,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
         emit_js_func_call(s, v)
     case StructTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
-        strings.write_uint(&s.b, uint(v.type.index))
+        strings.write_uint(&s.b, uint(v.return_type.index))
     case SumTypeInitFunc:
         strings.write_string(&s.b, "init_Type")
         strings.write_uint(&s.b, uint(v.sum_type.index))
@@ -399,11 +402,11 @@ emit_js_block :: proc(
     emit_js_block_body(s, nesting_level, body)
 }
 
-emit_javascript :: proc(c: Checked) -> strings.Builder {
-    s := GeneralEmitterState{strings.builder_make(), c.types, c}
+emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> strings.Builder {
+    s := GeneralEmitterState{strings.builder_make(), types, checked_functions}
     strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
-    for _, index in c.types.values {
+    for _, index in types.values {
         emit_js_global_type(&s, index)
     }
 
@@ -424,14 +427,14 @@ emit_javascript :: proc(c: Checked) -> strings.Builder {
     }
     */
 
-    for func, index in c.checked_funcs {
+    for func, index in checked_functions {
         when debug_emitter {
             debug("emitting function index %d", index)
         }
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info := get_type(c.types, func.type).(FuncType)
+        info := get_type(types, func.type).(FuncType)
         first_arg := true
         for _, i in info.args {
             if first_arg {

@@ -16,7 +16,7 @@ get_next_token :: proc(
 ) {
     tokenizer_get_next_token(
         &s.tokenizer_state,
-        s.files[s.file_ref.index].file,
+        s.files[s.file_ref.index],
         skip_newlines_and_comments_and_semicolons,
         loc,
     )
@@ -24,16 +24,14 @@ get_next_token :: proc(
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
-    // This field does not change as the project is parsed
-    stderr:                         ^os.File,
-
     // Updated every time the parser starts parsing a different file
     file_ref:                       FileRef,
     using tokenizer_state:          TokenizerState,
 
     // Grow as the project is parsed
+    using r:                        DiagnosticReporter,
     files_map:                      map[string]FileRef,
-    files:                          #soa[dynamic]File,
+    parsed_files:                   [dynamic]map[string]ParsedGlobal,
     global_values_without_generics: [dynamic]GlobalValueWithoutGeneric,
     global_values_with_generics:    [dynamic]GlobalValueWithGeneric,
     function_defs:                  [dynamic]FunctionDefinition,
@@ -66,13 +64,9 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             return wrong_token(s)
         }
         if field.ident in fields_map {
-            loc := get_location(
-                s.files.file[:len(s.files)],
-                fields[fields_map[field.ident]].name.pos,
-            )
+            loc := get_location(s.files, fields[fields_map[field.ident]].name.pos)
             diagnostic(
-                s.stderr,
-                s.files.file[:len(s.files)],
+                &s.r,
                 field.pos,
                 "There is already a field called `%s` defined in this struct at %s",
                 field.ident,
@@ -169,17 +163,11 @@ parse_initial_unit :: proc(
             return Unit{}, nil, false
         }
         joined, join_err := filepath.join(
-            []string{s.files[s.file_ref.index].file.dir_path, string(path)},
+            []string{s.files[s.file_ref.index].dir_path, string(path)},
             context.allocator,
         )
         if join_err != nil {
-            diagnostic(
-                s.stderr,
-                s.files.file[:len(s.files)],
-                unknown_pos,
-                "Failed to join filepath: %v",
-                join_err,
-            )
+            diagnostic(&s.r, unknown_pos, "Failed to join filepath: %v", join_err)
             return Unit{}, nil, false
         }
         if file_ref, exists := s.files_map[joined]; exists {
@@ -188,8 +176,7 @@ parse_initial_unit :: proc(
             data, data_err := os.read_entire_file(joined, context.allocator)
             if data_err != nil {
                 diagnostic(
-                    s.stderr,
-                    s.files.file[:len(s.files)],
+                    &s.r,
                     Pos{s.last_token_pos, s.file_ref},
                     "Failed to read `%s`: %#v",
                     joined,
@@ -197,10 +184,12 @@ parse_initial_unit :: proc(
                 )
                 return Unit{}, nil, false
             }
-            out.value = Import{FileRef{len(s.files)}}
-            append_soa_elem(
+            out.value = Import{FileRef{len(s.parsed_files)}}
+            append2(
+                &s.parsed_files,
                 &s.files,
-                File{nil, CompilerFile{string(data), joined, filepath.dir(joined)}},
+                nil,
+                CompilerFile{string(data), joined, filepath.dir(joined)},
             )
         }
 
@@ -246,8 +235,7 @@ parse_initial_unit :: proc(
                 variant_name := token2[0]
                 if variant_name.ident in variants_map {
                     diagnostic(
-                        s.stderr,
-                        s.files.file[:len(s.files)],
+                        &s.r,
                         Pos{variant_name.index, s.file_ref},
                         "There is already a variant called `%s` in this sum type",
                         variant_name.ident,
@@ -335,14 +323,7 @@ parse_initial_unit :: proc(
         if !ok {
             return Unit{}, nil, false
         }
-        func_ref, is_func := val.value.(FuncDefinitionRef)
-        if is_func {
-            assert(s.function_defs[func_ref.index].markers == nil)
-            s.function_defs[func_ref.index].markers = markers[:]
-            out.value = func_ref
-        } else {
-            out.value = MarkedUnit{new_clone(val), markers[:]}
-        }
+        out.value = MarkedUnit{new_clone(val), markers[:]}
         return out, descriptions_of_other_possible_tokens, true
 
     case TrueToken:
@@ -651,8 +632,7 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
         case CommaToken:
             if variable_index >= 3 {
                 diagnostic(
-                    s.stderr,
-                    s.files.file[:len(s.files)],
+                    &s.r,
                     Pos{s.last_token_pos, s.file_ref},
                     "There cannot be more than 3 variables in a for loop head (the iteration the for loop is on, the key of the thing being iterated over, and the value of the thing being iterated over)",
                 )
@@ -857,7 +837,6 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                 "`continue`",
                 "`unreachable`",
                 "`}`",
-                "`@` to create a label",
             )
             ok: bool = ---
             var: VariableDest = ---
@@ -960,8 +939,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             }
             if len(token) != 1 {
                 diagnostic(
-                    s.stderr,
-                    s.files.file[:len(s.files)],
+                    &s.r,
                     Pos{s.last_token_pos, s.file_ref},
                     "TODO: Support assigns where the destination has more than one segment",
                 )
@@ -1287,7 +1265,7 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
     if !ok {
         return FunctionDefinition{}, false
     }
-    return FunctionDefinition{args[:], return_type, block, nil}, true
+    return FunctionDefinition{args[:], return_type, block}, true
 }
 
 GlobalValueWithGeneric :: struct {
@@ -1344,16 +1322,9 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 return false
             }
             name := token[0].ident
-            if def, exists := s.files[s.file_ref.index].globals[name]; exists {
-                loc := get_location(s.files.file[:len(s.files)], Pos{def.pos, s.file_ref})
-                diagnostic(
-                    s.stderr,
-                    s.files.file[:len(s.files)],
-                    position,
-                    "The global `%s` is already declared at %s",
-                    name,
-                    loc,
-                )
+            if def, exists := s.parsed_files[s.file_ref.index][name]; exists {
+                loc := get_location(s.files, Pos{def.pos, s.file_ref})
+                diagnostic(&s.r, position, "The global `%s` is already declared at %s", name, loc)
                 return false
             }
             get_next_token(s, false)
@@ -1373,10 +1344,9 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
                     if segments[0].ident in generic_map {
                         pos := generic_map[segments[0].ident]
-                        loc := get_location(s.files.file[:len(s.files)], pos)
+                        loc := get_location(s.files, pos)
                         diagnostic(
-                            s.stderr,
-                            s.files.file[:len(s.files)],
+                            &s.r,
                             Pos{s.last_token_pos, s.file_ref},
                             "There is already a generic argument called `%s` defined on %s in this global type",
                             segments[0].ident,
@@ -1407,11 +1377,10 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
                 if len(generic) == 0 {
                     diagnostic(
-                        s.stderr,
-                        s.files.file[:len(s.files)],
+                        &s.r,
                         position,
                         "The parser is interpreting this as a non-generic value\nThe empty `[]` can be omitted",
-                        type = "Warning",
+                        type = .Warning,
                     )
                 }
 
@@ -1435,7 +1404,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     return false
                 }
                 if len(generic) == 0 {
-                    s.files[s.file_ref.index].globals[name] = ParsedGlobal {
+                    s.parsed_files[s.file_ref.index][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_without_generics)),
                         false,
@@ -1445,7 +1414,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                         GlobalValueWithoutGeneric{name, type.unit, s.file_ref},
                     )
                 } else {
-                    s.files[s.file_ref.index].globals[name] = ParsedGlobal {
+                    s.parsed_files[s.file_ref.index][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_with_generics)),
                         true,
@@ -1463,7 +1432,8 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
 ParsedProject :: struct {
     files_map:                     map[string]FileRef,
-    files:                         #soa[]File,
+    parsed_files:                  []map[string]ParsedGlobal,
+    files:                         [^]CompilerFile,
     global_values_without_generic: []GlobalValueWithoutGeneric,
     global_values_with_generics:   []GlobalValueWithGeneric,
     function_defs:                 []FunctionDefinition,
@@ -1471,11 +1441,14 @@ ParsedProject :: struct {
 
 parse_project :: proc(
     first_file_relative_path: string,
-    stderr: ^os.File,
+    io: Pipe(^os.File),
+    exit_early: EarlyExitInfo,
 ) -> (
     ParsedProject,
     bool,
 ) {
+    // TODO: There are some return paths where `exit_early` is not updated and
+    // therefore the `-watch` flag does not auto reload
     first_file_absolute_path, err := filepath.abs(first_file_relative_path, context.allocator)
     if err != nil {
         fmt.eprintfln("Failed to make filepath `%s` absolute: %v", first_file_relative_path, err)
@@ -1490,23 +1463,22 @@ parse_project :: proc(
     }
 
     state := ParserState {
-        stderr = stderr,
+        r = DiagnosticReporter{io = io},
     }
-    append_soa_elem(
+    append2(
+        &state.parsed_files,
         &state.files,
-        File {
-            nil,
-            CompilerFile {
-                string(data),
-                first_file_absolute_path,
-                filepath.dir(first_file_absolute_path),
-            },
+        nil,
+        CompilerFile {
+            string(data),
+            first_file_absolute_path,
+            filepath.dir(first_file_absolute_path),
         },
     )
 
     ok := true
-    for state.file_ref.index < len(state.files) {
-        file_path := state.files[state.file_ref.index].file.file_path
+    for state.file_ref.index < len(state.parsed_files) {
+        file_path := state.files[state.file_ref.index].file_path
         fmt.printfln("Parsing `%s`...", file_path)
         state.tokenizer_state = TokenizerState{}
         file_ok := parse_file(&state)
@@ -1515,12 +1487,21 @@ parse_project :: proc(
         }
         state.file_ref.index += 1
     }
+    if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
+        #partial switch &exit_early_info_value in exit_early_info {
+        case ExitEarlyAwaitingSourceCodeChange:
+            exit_early_info_value.files = state.files[:len(state.parsed_files)]
+        case:
+            panic("Unreachable")
+        }
+    }
     if !ok {
         return ParsedProject{}, false
     }
     return ParsedProject {
             state.files_map,
-            state.files[:],
+            state.parsed_files[:],
+            state.files,
             state.global_values_without_generics[:],
             state.global_values_with_generics[:],
             state.function_defs[:],
