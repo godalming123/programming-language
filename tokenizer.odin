@@ -31,7 +31,7 @@ ArrowToken :: struct {} // ->
 AssignToken :: struct {} // =
 SymbolsToken :: distinct string
 DigitsToken :: distinct string
-IdentToken :: #soa[]IdentAndIndex // A list of the segments in the identifier, where each segment is separated by `.`
+IdentToken :: #soa[]IdentAndPos // A list of the segments in the identifier, where each segment is separated by `.`
 MarkerToken :: distinct string
 TrueToken :: struct {} // true
 FalseToken :: struct {} // false
@@ -110,110 +110,116 @@ TokenContents :: union {
     EndOfFileToken,
 }
 
-token_contents_to_string :: proc(token: TokenContents) -> string {
+token_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+    if verb != 'v' {
+        return false
+    }
+    token := cast(^TokenContents)arg.data
     switch value in token {
     case Error:
-        return fmt.aprintf("the tokenizer error \"%s\"", value)
+        fmt.wprintf(fi.writer, "the tokenizer error \"%s\"", value)
     case NewlineToken:
-        return "a newline"
+        fmt.wprint(fi.writer, "a newline")
     case OpenBracketToken:
-        return "an open bracket (`(`)"
+        fmt.wprint(fi.writer, "an open bracket (`(`)")
     case CloseBracketToken:
-        return "a close bracket (`)`)"
+        fmt.wprint(fi.writer, "a close bracket (`)`)")
     case OpenSquareBracketToken:
-        return "an open square bracket (`[`)"
+        fmt.wprint(fi.writer, "an open square bracket (`[`)")
     case CloseSquareBracketToken:
-        return "a close square bracket (`]`)"
+        fmt.wprint(fi.writer, "a close square bracket (`]`)")
     case OpenAngleBracketToken:
-        return "an open angle bracket (`<`)"
+        fmt.wprint(fi.writer, "an open angle bracket (`<`)")
     case LessThanOrEqualToken:
-        return "an less than or equal sign (`<=`)"
+        fmt.wprint(fi.writer, "an less than or equal sign (`<=`)")
     case CloseAngleBracketToken:
-        return "a close angle bracket (`>`)"
+        fmt.wprint(fi.writer, "a close angle bracket (`>`)")
     case GreaterThanOrEqualToken:
-        return "a greater than or equal sign (`>=`)"
+        fmt.wprint(fi.writer, "a greater than or equal sign (`>=`)")
     case CommaToken:
-        return "a comma (`,`)"
+        fmt.wprint(fi.writer, "a comma (`,`)")
     case AtToken:
-        return "an at sign (`@`)"
+        fmt.wprint(fi.writer, "an at sign (`@`)")
     case ColonToken:
-        return "`:`"
+        fmt.wprint(fi.writer, "`:`")
     case ColonColonToken:
-        return "`::`"
+        fmt.wprint(fi.writer, "`::`")
     case SemiColonToken:
-        return "`;`"
+        fmt.wprint(fi.writer, "`;`")
     case BarToken:
-        return "`|`"
+        fmt.wprint(fi.writer, "`|`")
     case PipeToken:
-        return "`|>`"
+        fmt.wprint(fi.writer, "`|>`")
     case OpenBraceToken:
-        return "an open brace (`{`)"
+        fmt.wprint(fi.writer, "an open brace (`{`)")
     case CloseBraceToken:
-        return "a close brace (`}`)"
+        fmt.wprint(fi.writer, "a close brace (`}`)")
     case SymbolsToken:
-        return fmt.aprintf("the symbols `%s`", value)
+        fmt.wprintf(fi.writer, "the symbols `%s`", value)
     case ArrowToken:
-        return "`->`"
+        fmt.wprint(fi.writer, "`->`")
     case AssignToken:
-        return "`=`"
+        fmt.wprint(fi.writer, "`=`")
     case DigitsToken:
-        return fmt.aprintf("the digits `%s`", value)
+        fmt.wprintf(fi.writer, "the digits `%s`", value)
     case IdentToken:
-        return fmt.aprintf(
+        fmt.wprintf(
+            fi.writer,
             "the identifier `%s` (which has %d segments)",
             strings.join(value.ident[:len(value)], "."),
             len(value),
         )
     case MarkerToken:
-        return fmt.aprintf("the marker `#%s`", value)
+        fmt.wprintf(fi.writer, "the marker `#%s`", value)
     case TrueToken:
-        return "the keyword `true`"
+        fmt.wprint(fi.writer, "the keyword `true`")
     case FalseToken:
-        return "the keyword `false`"
+        fmt.wprint(fi.writer, "the keyword `false`")
     case InToken:
-        return "the keyword `in`"
+        fmt.wprint(fi.writer, "the keyword `in`")
     case StepToken:
-        return "the keyword `step`"
+        fmt.wprint(fi.writer, "the keyword `step`")
     case ForToken:
-        return "the keyword `for`"
+        fmt.wprint(fi.writer, "the keyword `for`")
     case DoToken:
-        return "the keyword `do`"
+        fmt.wprint(fi.writer, "the keyword `do`")
     case WhileToken:
-        return "the keyword `while`"
+        fmt.wprint(fi.writer, "the keyword `while`")
     case IfToken:
-        return "the keyword `if`"
+        fmt.wprint(fi.writer, "the keyword `if`")
     case ElseToken:
-        return "the keyword `else`"
+        fmt.wprint(fi.writer, "the keyword `else`")
     case ImportToken:
-        return "the keyword `import`"
+        fmt.wprint(fi.writer, "the keyword `import`")
     case ReturnToken:
-        return "the keyword `return`"
+        fmt.wprint(fi.writer, "the keyword `return`")
     case YieldToken:
-        return "the keyword `yield`"
+        fmt.wprint(fi.writer, "the keyword `yield`")
     case ContinueToken:
-        return "the keyword `continue`"
+        fmt.wprint(fi.writer, "the keyword `continue`")
     case UnreachableToken:
-        return "the keyword `unreachable`"
+        fmt.wprint(fi.writer, "the keyword `unreachable`")
     case AndToken:
-        return "the keyword `and`"
+        fmt.wprint(fi.writer, "the keyword `and`")
     case OrToken:
-        return "the keyword `or`"
+        fmt.wprint(fi.writer, "the keyword `or`")
     case MatchToken:
-        return "the keyword `match`"
+        fmt.wprint(fi.writer, "the keyword `match`")
     case MutToken:
-        return "the keyword `mut`"
+        fmt.wprint(fi.writer, "the keyword `mut`")
     case CommentToken:
-        return "a comment"
+        fmt.wprint(fi.writer, "a comment")
     case StringToken:
-        return fmt.aprintf("the string literal `%s`", value)
+        fmt.wprintf(fi.writer, "the string literal `%s`", value)
     case CharToken:
         // TODO: Properly format character literals that use escapes
-        return fmt.aprintf("the character literal '%c'", value)
+        fmt.wprintf(fi.writer, "the character literal '%c'", value)
     case EndOfFileToken:
-        return "the end of the file"
+        fmt.wprint(fi.writer, "the end of the file")
     case:
         panic("got nil")
     }
+    return true
 }
 
 is_close_brace :: proc(t: TokenContents) -> bool {
@@ -238,6 +244,7 @@ CompilerFile :: struct {
 }
 
 TokenizerState :: struct {
+    file_ref:           ^CompilerFile,
     index:              uint,
     last_token_pos:     uint,
     last_token:         TokenContents,
@@ -276,56 +283,28 @@ SkipperResult :: struct {
 
 skip_ignore_first :: proc(
     s: ^TokenizerState,
-    f: CompilerFile,
     should_continue: proc(_: byte) -> bool,
 ) -> SkipperResult {
     for {
         s.index += 1
-        if s.index >= len(f.code) {
+        if s.index >= len(s.file_ref.code) {
             return SkipperResult{true, true}
         }
-        if !should_continue(f.code[s.index]) {
+        if !should_continue(s.file_ref.code[s.index]) {
             return SkipperResult{false, true}
         }
     }
 }
 
-skip :: proc(
-    s: ^TokenizerState,
-    f: CompilerFile,
-    should_continue: proc(_: byte) -> bool,
-) -> SkipperResult {
-    if s.index >= len(f.code) {
+skip :: proc(s: ^TokenizerState, should_continue: proc(_: byte) -> bool) -> SkipperResult {
+    if s.index >= len(s.file_ref.code) {
         return SkipperResult{true, false}
     }
-    if !should_continue(f.code[s.index]) {
+    if !should_continue(s.file_ref.code[s.index]) {
         return SkipperResult{false, false}
     }
-    return skip_ignore_first(s, f, should_continue)
+    return skip_ignore_first(s, should_continue)
 }
-
-/*
-write_location :: proc(b: ^strings.Builder, files: [^]CompilerFile, position: Pos) {
-    file := files[position.file.index]
-    line := 1
-    column := 1
-    for char in file.code[:position.index] {
-        if char == '\n' {
-            line += 1
-            column = 1
-        } else {
-            column += 1
-        }
-    }
-    strings.write_byte(b, '`')
-    strings.write_string(b, file.file_path)
-    strings.write_string(b, " (")
-    strings.write_int(b, line)
-    strings.write_byte(b, ':')
-    strings.write_int(b, column)
-    strings.write_byte(b, ')')
-}
-*/
 
 wrong_token_err :: proc(
     state: ^ParserState,
@@ -368,26 +347,32 @@ wrong_token_err :: proc(
     diagnostic(
         &state.r,
         Pos{state.last_token_pos, state.file_ref},
-        "%sExpected%s\nGot %s",
+        "%sExpected%s\nGot %v",
         string(info_bytes),
         string(expected_bytes),
-        token_contents_to_string(state.last_token),
+        state.last_token,
         loc = loc,
     )
 }
 
-tokenize_segmented_identifier :: proc(s: ^TokenizerState, f: CompilerFile, first_ident: string) {
-    segments := make(#soa[dynamic]IdentAndIndex, 1)
-    segments[0] = IdentAndIndex{first_ident, s.last_token_pos}
-    for s.index < len(f.code) && f.code[s.index] == '.' {
+tokenize_segmented_identifier :: proc(s: ^TokenizerState, first_ident: string) {
+    segments := make(#soa[dynamic]IdentAndPos, 1)
+    segments[0] = IdentAndPos{first_ident, Pos{s.last_token_pos, s.file_ref}}
+    for s.index < len(s.file_ref.code) && s.file_ref.code[s.index] == '.' {
         s.index += 1
         segment_start := s.index
-        skipper_result := skip(s, f, is_alphanumeric_char)
+        skipper_result := skip(s, is_alphanumeric_char)
         if skipper_result.skipped_atleast_one_char {
-            append_soa_elem(&segments, IdentAndIndex{f.code[segment_start:s.index], segment_start})
+            append_soa_elem(
+                &segments,
+                IdentAndPos {
+                    s.file_ref.code[segment_start:s.index],
+                    Pos{segment_start, s.file_ref},
+                },
+            )
         } else {
             s.last_token = Error(
-                skipper_result.reached_end_of_file ? "While tokenizing segmented identifier\nExpected an alphanumeric\nGot the end of the file" : fmt.aprintf("While tokenizing segmented identifier\nExpected an alphanumeric\nGot `%c`", f.code[s.index]),
+                skipper_result.reached_end_of_file ? "While tokenizing segmented identifier\nExpected an alphanumeric\nGot the end of the file" : fmt.aprintf("While tokenizing segmented identifier\nExpected an alphanumeric\nGot `%c`", s.file_ref.code[s.index]),
             )
             return
         }
@@ -395,9 +380,8 @@ tokenize_segmented_identifier :: proc(s: ^TokenizerState, f: CompilerFile, first
     s.last_token = segments[:]
 }
 
-tokenizer_get_next_token :: proc(
+get_next_token :: proc(
     state: ^TokenizerState,
-    file: CompilerFile,
     skip_newlines_and_comments_and_semicolons: bool,
     loc := #caller_location,
 ) {
@@ -407,19 +391,19 @@ tokenizer_get_next_token :: proc(
             debug("last token set to %s", token_contents_to_string(state.last_token))
         }
     }
-    if skip(state, file, is_nothing_char).reached_end_of_file {
-        state.last_token_pos = len(file.code)
+    if skip(state, is_nothing_char).reached_end_of_file {
+        state.last_token_pos = len(state.file_ref.code)
         state.last_token = EndOfFileToken{}
         return
     }
     state.last_token_pos = state.index
     state.last_token_skipped = false
-    char := file.code[state.index]
+    char := state.file_ref.code[state.index]
     switch char {
     case '\n':
         state.index += 1
         if skip_newlines_and_comments_and_semicolons {
-            tokenizer_get_next_token(state, file, skip_newlines_and_comments_and_semicolons)
+            get_next_token(state, skip_newlines_and_comments_and_semicolons)
             state.last_token_skipped = true
         } else {
             state.last_token = NewlineToken{}
@@ -451,7 +435,7 @@ tokenizer_get_next_token :: proc(
         state.last_token = AtToken{}
     case ':':
         state.index += 1
-        if state.index < len(file.code) && file.code[state.index] == ':' {
+        if state.index < len(state.file_ref.code) && state.file_ref.code[state.index] == ':' {
             state.index += 1
             state.last_token = ColonColonToken{}
         } else {
@@ -460,7 +444,7 @@ tokenizer_get_next_token :: proc(
 
     case '<':
         state.index += 1
-        if state.index < len(file.code) && file.code[state.index] == '=' {
+        if state.index < len(state.file_ref.code) && state.file_ref.code[state.index] == '=' {
             state.index += 1
             state.last_token = LessThanOrEqualToken{}
         } else {
@@ -469,7 +453,7 @@ tokenizer_get_next_token :: proc(
 
     case '>':
         state.index += 1
-        if state.index < len(file.code) && file.code[state.index] == '=' {
+        if state.index < len(state.file_ref.code) && state.file_ref.code[state.index] == '=' {
             state.index += 1
             state.last_token = GreaterThanOrEqualToken{}
         } else {
@@ -479,7 +463,7 @@ tokenizer_get_next_token :: proc(
     case ';':
         state.index += 1
         if skip_newlines_and_comments_and_semicolons {
-            tokenizer_get_next_token(state, file, skip_newlines_and_comments_and_semicolons)
+            get_next_token(state, skip_newlines_and_comments_and_semicolons)
             state.last_token_skipped = true
         } else {
             state.last_token = SemiColonToken{}
@@ -487,7 +471,7 @@ tokenizer_get_next_token :: proc(
 
     case '|':
         state.index += 1
-        if state.index < len(file.code) && file.code[state.index] == '>' {
+        if state.index < len(state.file_ref.code) && state.file_ref.code[state.index] == '>' {
             state.index += 1
             state.last_token = PipeToken{}
         } else {
@@ -495,14 +479,16 @@ tokenizer_get_next_token :: proc(
         }
 
     case '0' ..< '9':
-        skip_ignore_first(state, file, is_digit_char)
-        state.last_token = DigitsToken(file.code[state.last_token_pos:state.index])
+        skip_ignore_first(state, is_digit_char)
+        state.last_token = DigitsToken(state.file_ref.code[state.last_token_pos:state.index])
 
     case '#':
         state.index += 1
-        skipper_result := skip(state, file, is_alphanumeric_char)
+        skipper_result := skip(state, is_alphanumeric_char)
         if skipper_result.skipped_atleast_one_char {
-            state.last_token = MarkerToken(file.code[state.last_token_pos + 1:state.index])
+            state.last_token = MarkerToken(
+                state.file_ref.code[state.last_token_pos + 1:state.index],
+            )
         } else if skipper_result.reached_end_of_file {
             state.last_token = Error(
                 "While tokenizing marker\nExpected an alphanumeric\nGot the end of the file",
@@ -511,14 +497,14 @@ tokenizer_get_next_token :: proc(
             state.last_token = Error(
                 fmt.aprintf(
                     "While tokenizing marker\nExpected an alphanumeric\nGot `%c`",
-                    file.code[state.index],
+                    state.file_ref.code[state.index],
                 ),
             )
         }
 
     case '_', 'a' ..< 'z', 'A' ..< 'Z':
-        skip_ignore_first(state, file, is_alphanumeric_char)
-        ident := file.code[state.last_token_pos:state.index]
+        skip_ignore_first(state, is_alphanumeric_char)
+        ident := state.file_ref.code[state.last_token_pos:state.index]
         switch ident {
         case "in":
             state.last_token = InToken{}
@@ -557,25 +543,25 @@ tokenizer_get_next_token :: proc(
         case "mut":
             state.last_token = MutToken{}
         case:
-            tokenize_segmented_identifier(state, file, ident)
+            tokenize_segmented_identifier(state, ident)
         }
     case '"':
         state.index += 1
         contents := make([dynamic]byte)
         for {
-            if state.index >= len(file.code) {
-                state.last_token_pos = len(file.code)
+            if state.index >= len(state.file_ref.code) {
+                state.last_token_pos = len(state.file_ref.code)
                 state.last_token = Error("Unexpected end of file while tokenizing string")
                 return
             }
-            switch file.code[state.index] {
+            switch state.file_ref.code[state.index] {
             case '"':
                 state.index += 1
                 state.last_token = StringToken(contents[:])
                 return
             case '\\':
                 state.index += 1
-                switch state.index >= len(file.code) ? '?' : file.code[state.index] {
+                switch state.index >= len(state.file_ref.code) ? '?' : state.file_ref.code[state.index] {
                 case 'n':
                     append_elem(&contents, '\n')
                 case 't':
@@ -592,69 +578,74 @@ tokenizer_get_next_token :: proc(
                     return
                 }
             case:
-                append_elem(&contents, file.code[state.index])
+                append_elem(&contents, state.file_ref.code[state.index])
             }
             state.index += 1
         }
     case '\'':
         state.index += 1
-        if state.index >= len(file.code) {
+        if state.index >= len(state.file_ref.code) {
             state.last_token = Error("Unexpected end of file while tokenizing character")
             return
         }
-        if file.code[state.index] == '\\' {
+        if state.file_ref.code[state.index] == '\\' {
             state.index += 1
-            if state.index >= len(file.code) {
+            if state.index >= len(state.file_ref.code) {
                 state.last_token = Error("Unexpected end of file while tokenizing character")
                 return
             }
         }
-        state.last_token = CharToken(file.code[state.index])
+        state.last_token = CharToken(state.file_ref.code[state.index])
         state.index += 1
-        if state.index >= len(file.code) {
+        if state.index >= len(state.file_ref.code) {
             state.last_token = Error(
                 "While tokenizing character. Expected `'`. Got unexpected end of file.",
             )
             return
         }
-        if file.code[state.index] != '\'' {
-            state.last_token = Error(fmt.aprintf("Expected `'`, got `%c`", file.code[state.index]))
+        if state.file_ref.code[state.index] != '\'' {
+            state.last_token = Error(
+                fmt.aprintf("Expected `'`, got `%c`", state.file_ref.code[state.index]),
+            )
             return
         }
         state.index += 1
     case '/':
-        if state.index + 1 < len(file.code) && file.code[state.index + 1] == '/' {
+        if state.index + 1 < len(state.file_ref.code) &&
+           state.file_ref.code[state.index + 1] == '/' {
             state.index += 2
-            for state.index < len(file.code) && file.code[state.index] != '\n' {
+            for state.index < len(state.file_ref.code) &&
+                state.file_ref.code[state.index] != '\n' {
                 state.index += 1
             }
             state.index += 1
             if skip_newlines_and_comments_and_semicolons {
-                tokenizer_get_next_token(state, file, skip_newlines_and_comments_and_semicolons)
+                get_next_token(state, skip_newlines_and_comments_and_semicolons)
                 state.last_token_skipped = true
             } else {
                 state.last_token = CommentToken(
-                    strings.trim(file.code[state.last_token_pos:state.index - 1], " "),
+                    strings.trim(state.file_ref.code[state.last_token_pos:state.index - 1], " "),
                 )
             }
         } else {
-            skip_ignore_first(state, file, is_symbol_char)
-            state.last_token = SymbolsToken(file.code[state.last_token_pos:state.index])
+            skip_ignore_first(state, is_symbol_char)
+            state.last_token = SymbolsToken(state.file_ref.code[state.last_token_pos:state.index])
         }
     case '.':
-        if state.index + 1 < len(file.code) && is_alphanumeric_char(file.code[state.index + 1]) {
-            tokenize_segmented_identifier(state, file, "")
+        if state.index + 1 < len(state.file_ref.code) &&
+           is_alphanumeric_char(state.file_ref.code[state.index + 1]) {
+            tokenize_segmented_identifier(state, "")
         } else {
-            skip_ignore_first(state, file, is_symbol_char)
-            state.last_token = SymbolsToken(file.code[state.last_token_pos:state.index])
+            skip_ignore_first(state, is_symbol_char)
+            state.last_token = SymbolsToken(state.file_ref.code[state.last_token_pos:state.index])
         }
     case:
         if !is_symbol_char(char) {
             state.last_token = Error(fmt.aprintf("Unrecognized character `%c`", char))
             return
         }
-        skip_ignore_first(state, file, is_symbol_char)
-        symbols := file.code[state.last_token_pos:state.index]
+        skip_ignore_first(state, is_symbol_char)
+        symbols := state.file_ref.code[state.last_token_pos:state.index]
         switch symbols {
         case "->":
             state.last_token = ArrowToken{}

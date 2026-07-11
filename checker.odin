@@ -1627,7 +1627,7 @@ check_block :: proc(
                             loop_index,
                             index_ref,
                             elem_ref,
-                            &Dynamic(CheckedStatement){loop_body_array, 0},
+                            &DoubleDynamic(CheckedStatement){loop_body_array, 0},
                             loop_variables,
                             v,
                             t,
@@ -1663,7 +1663,7 @@ check_block :: proc(
                             index,
                             key,
                             value_var,
-                            &Dynamic(CheckedStatement){loop_body_array, 0},
+                            &DoubleDynamic(CheckedStatement){loop_body_array, 0},
                             loop_variables,
                         ),
                     )
@@ -1739,7 +1739,7 @@ check_block :: proc(
                         start,
                         end,
                         step,
-                        &Dynamic(CheckedStatement){loop_body_array, 0},
+                        &DoubleDynamic(CheckedStatement){loop_body_array, 0},
                         loop_variables,
                     ),
                 )
@@ -1915,13 +1915,12 @@ check_block :: proc(
                 }
 
                 if variant_has_branch[variant_index] {
-                    l := get_location(s.files, variant_branch_positions[variant_index])
                     diagnostic(
                         s,
                         branch_type.pos,
-                        "The variant `.%s` already has a branch defined at %s",
+                        "The variant `.%s` already has a branch defined at %v",
                         variant_name,
-                        l,
+                        variant_branch_positions[variant_index],
                     )
                     return nil, false
                 }
@@ -1997,7 +1996,8 @@ check_namespaced_var_ref :: proc(
     Type,
     int,
 ) {
-    file_globals := s.parsed_files[namespace.index]
+    namespace_index := get_index(s.files, namespace)
+    file_globals := s.parsed_files[namespace_index]
     parsed_global, global_exists := file_globals[ref.segments[index].ident]
     if !global_exists {
         diagnostic(
@@ -2005,7 +2005,7 @@ check_namespaced_var_ref :: proc(
             ref.segments[index].pos,
             "The variable `%s` is not defined in the file `%s`",
             ref.segments[index].ident,
-            s.files[namespace.index].file_path,
+            s.files[namespace_index].file_path,
         )
         return nil, invalid_type, 0
     }
@@ -2429,9 +2429,8 @@ check_value_with_markers :: proc(
             return nil
         }
 
-        file := s.files[v.pos.file.index]
         joined, join_err := filepath.join(
-            []string{file.dir_path, string(comptime_value.(StringLiteralValue))},
+            []string{v.pos.file.dir_path, string(comptime_value.(StringLiteralValue))},
             context.allocator,
         )
         if join_err != nil {
@@ -3234,7 +3233,7 @@ get_global_function :: proc(
     Pos,
     bool,
 ) {
-    parsed_global, exists := s.parsed_files[file_to_search.index][name]
+    parsed_global, exists := s.parsed_files[get_index(s.files, file_to_search)][name]
     if !exists {
         diagnostic(s, usage_pos, "The global `%s` is not defined%s", name, extra_text)
         return CheckedFuncRef{}, unknown_pos, false
@@ -3339,7 +3338,7 @@ check :: proc(parsed: ParsedProject, func_name: string, io: Pipe(^os.File)) -> C
         // non-deterministic error ordering in this compiler
         for global_name, global in file {
             if is_builtin(global_name) {
-                diagnostic(&state, Pos{global.pos, FileRef{uint(i)}}, builtins_err, global_name)
+                diagnostic(&state, Pos{global.pos, &state.files[i]}, builtins_err, global_name)
                 continue
             }
             // TODO: Check that the name is the correct case
@@ -3374,7 +3373,7 @@ check :: proc(parsed: ParsedProject, func_name: string, io: Pipe(^os.File)) -> C
     func_ref, _, func_ok := get_global_function(
         &state,
         unknown_pos,
-        FileRef{0},
+        state.files,
         func_name,
         "\nTODO: Write hint",
     )

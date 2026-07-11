@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -35,9 +36,18 @@ position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 
 @(init)
 init :: proc "contextless" () {
+    context = runtime.default_context()
     user_formatters := new(map[typeid]fmt.User_Formatter)
     user_formatters[Pos] = position_formatter
+    user_formatters[TokenContents] = token_formatter
     fmt.set_user_formatters(user_formatters)
+}
+
+@(fini)
+fini :: proc "contextless" () {
+    context = runtime.default_context()
+    delete_map(fmt._user_formatters^)
+    free(fmt._user_formatters)
 }
 
 // The `string` returned is the path to the executable

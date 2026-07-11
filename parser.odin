@@ -2,33 +2,20 @@
 package main
 
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
-/*
-FileRef :: struct {
-    index: uint, // An index into `ParsedProject.files`
-}
-*/
 FileRef :: ^CompilerFile
-get_next_token :: proc(
-    s: ^ParserState,
-    skip_newlines_and_comments_and_semicolons: bool,
-    loc := #caller_location,
-) {
-    tokenizer_get_next_token(
-        &s.tokenizer_state,
-        s.file_ref^,
-        skip_newlines_and_comments_and_semicolons,
-        loc,
-    )
+
+get_index :: proc(files: [^]CompilerFile, ref: FileRef, loc := #caller_location) -> int {
+    return mem.ptr_sub(ref, cast(^CompilerFile)files)
 }
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
     // Updated every time the parser starts parsing a different file
-    file_ref:                       FileRef,
     using tokenizer_state:          TokenizerState,
 
     // Grow as the project is parsed
@@ -62,7 +49,7 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             if len(token) != 1 {
                 return wrong_token(s)
             }
-            field = IdentAndPos{token[0].ident, Pos{token[0].index, s.file_ref}}
+            field = IdentAndPos{token[0].ident, token[0].pos}
         case:
             return wrong_token(s)
         }
@@ -240,7 +227,7 @@ parse_initial_unit :: proc(
                 if variant_name.ident in variants_map {
                     diagnostic(
                         &s.r,
-                        Pos{variant_name.index, s.file_ref},
+                        variant_name.pos,
                         "There is already a variant called `%s` in this sum type",
                         variant_name.ident,
                     )
@@ -260,7 +247,7 @@ parse_initial_unit :: proc(
                 append(
                     &variants,
                     SumTypeVariant(Struct(Unit, struct {})) {
-                        IdentAndPos{variant_name.ident, Pos{variant_name.index, s.file_ref}},
+                        IdentAndPos{variant_name.ident, variant_name.pos},
                         variant_payload,
                     },
                 )
@@ -311,7 +298,7 @@ parse_initial_unit :: proc(
         return out, other_possible_tokens, true
 
     case IdentToken:
-        out.value = make_ident(token, s.file_ref)
+        out.value = Ident{token}
 
     case MarkerToken:
         markers := [dynamic]IdentAndPos{{string(token), Pos{s.last_token_pos, s.file_ref}}}
@@ -396,6 +383,7 @@ parse_units_until :: proc(
             return units[:], true
         }
         v := parse_unit(s, end_description)
+        defer delete(v.descriptions_of_other_possible_tokens)
         if !v.ok {
             return nil, false
         }
@@ -597,7 +585,7 @@ parse_possible_loop_label :: proc(s: ^ParserState) -> (IdentAndPos, bool) {
             return IdentAndPos{}, false
         }
         get_next_token(s, false)
-        return IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}, true
+        return IdentAndPos{ident[0].ident, ident[0].pos}, true
     }
     return IdentAndPos{}, true
 }
@@ -623,7 +611,7 @@ parse_for_loop :: proc(s: ^ParserState) -> (ForInLoop, bool) {
             wrong_token_err(s, possible)
             return ForInLoop{}, false
         }
-        variables[variable_index] = IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}
+        variables[variable_index] = IdentAndPos{ident[0].ident, ident[0].pos}
         variable_index += 1
 
         get_next_token(s, false)
@@ -746,11 +734,7 @@ get_identifier :: proc(
     if !is_open_square_brace {
         others := make([dynamic]string, 1)
         others[0] = "`[`"
-        return VariableDest {
-                IdentAndPos{ident.ident, Pos{ident.index, s.file_ref}},
-                variable_dest_type,
-                nil,
-            },
+        return VariableDest{IdentAndPos{ident.ident, ident.pos}, variable_dest_type, nil},
             others,
             true
     }
@@ -767,7 +751,7 @@ get_identifier :: proc(
     }
     get_next_token(s, true)
     return VariableDest {
-            IdentAndPos{ident.ident, Pos{ident.index, s.file_ref}},
+            IdentAndPos{ident.ident, ident.pos},
             variable_dest_type,
             new_clone(value.unit),
         },
@@ -931,10 +915,9 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                     return nil, false
                 }
                 get_next_token(s, true)
-                variable := make_ident(token, s.file_ref)
                 append_elem(
                     &out,
-                    Statement{pos, CallWithBrackets{new_clone(Unit{pos, variable}), args}},
+                    Statement{pos, CallWithBrackets{new_clone(Unit{pos, Ident{token}}), args}},
                 )
                 break switch_stmt
             case CommaToken:
@@ -982,7 +965,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
                     wrong_token_err(s, []string{"An identifier with one segment"})
                     return nil, false
                 }
-                label = IdentAndPos{ident[0].ident, Pos{ident[0].index, s.file_ref}}
+                label = IdentAndPos{ident[0].ident, ident[0].pos}
                 get_next_token(s, true)
             }
             clear_dynamic_array(&other_possible_tokens)
@@ -1204,14 +1187,14 @@ parse_function_def :: proc(s: ^ParserState) -> (FunctionDefinition, bool) {
                     wrong_token_err(s, expected)
                     return FunctionDefinition{}, false
                 }
-                arg.name = IdentAndPos{token2[0].ident, Pos{token2[0].index, s.file_ref}}
+                arg.name = IdentAndPos{token2[0].ident, token2[0].pos}
             }
         case IdentToken:
             if len(token) != 1 {
                 wrong_token_err(s, expected)
                 return FunctionDefinition{}, false
             }
-            arg.name = IdentAndPos{token[0].ident, Pos{token[0].index, s.file_ref}}
+            arg.name = IdentAndPos{token[0].ident, token[0].pos}
         }
 
         get_next_token(s, true)
@@ -1326,11 +1309,14 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 return false
             }
             name := token[0].ident
-            if def, exists := s.parsed_files[s.file_ref.index][name]; exists {
-                d := diagnostic(&s.r, position)
-                fmt.sbprintf(&d.b, "The global `%s` is already declared at ", name)
-                write_location(&d.b, Pos{def.pos, s.file_ref})
-                write(d)
+            if def, exists := s.parsed_files[get_index(s.files, s.file_ref)][name]; exists {
+                diagnostic(
+                    &s.r,
+                    position,
+                    "The global `%s` is already declared at %v",
+                    name,
+                    Pos{def.pos, s.file_ref},
+                )
                 return false
             }
             get_next_token(s, false)
@@ -1350,17 +1336,16 @@ parse_file :: proc(s: ^ParserState) -> bool {
 
                     if segments[0].ident in generic_map {
                         pos := generic_map[segments[0].ident]
-                        loc := get_location(s.files, pos)
                         diagnostic(
                             &s.r,
                             Pos{s.last_token_pos, s.file_ref},
-                            "There is already a generic argument called `%s` defined on %s in this global type",
+                            "There is already a generic argument called `%s` defined on %v in this global type",
                             segments[0].ident,
-                            loc,
+                            pos,
                         )
                         return false
                     }
-                    pos := Pos{segments[0].index, s.file_ref}
+                    pos := segments[0].pos
                     append_elem(&generic, IdentAndPos{segments[0].ident, pos})
                     generic_map[segments[0].ident] = pos
 
@@ -1410,7 +1395,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     return false
                 }
                 if len(generic) == 0 {
-                    s.parsed_files[s.file_ref.index][name] = ParsedGlobal {
+                    s.parsed_files[get_index(s.files, s.file_ref)][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_without_generics)),
                         false,
@@ -1420,7 +1405,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                         GlobalValueWithoutGeneric{name, type.unit, s.file_ref},
                     )
                 } else {
-                    s.parsed_files[s.file_ref.index][name] = ParsedGlobal {
+                    s.parsed_files[get_index(s.files, s.file_ref)][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_with_generics)),
                         true,
@@ -1486,18 +1471,21 @@ parse_project :: proc(
             filepath.dir(first_file_absolute_path),
         },
     )
-    state.files_map[first_file_absolute_path] = FileRef{0}
+    state.files_map[first_file_absolute_path] = state.files
+    state.file_ref = state.files
 
     ok := true
-    for state.file_ref.index < len(state.parsed_files) {
-        file_path := state.files[state.file_ref.index].file_path
+    for get_index(state.files, state.file_ref) < len(state.parsed_files) {
+        file_path := state.file_ref.file_path
         fmt.printfln("Parsing `%s`...", file_path)
-        state.tokenizer_state = TokenizerState{}
+        state.tokenizer_state = TokenizerState {
+            file_ref = state.file_ref,
+        }
         file_ok := parse_file(&state)
         if !file_ok {
             ok = false
         }
-        state.file_ref.index += 1
+        state.file_ref = &state.files[get_index(state.files, state.file_ref) + 1]
     }
     if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
         #partial switch &exit_early_info_value in exit_early_info {

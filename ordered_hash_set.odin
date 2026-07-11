@@ -33,7 +33,7 @@ OrderedHashSet :: struct(Value: typeid) {
     values: [dynamic]OrderedHashSetValue(Value),
 }
 
-get_index :: proc(slots_len: $T, hash: T) -> T {
+get_hash_set_index :: proc(slots_len: $T, hash: T) -> T {
     return hash & (slots_len - 1)
 }
 
@@ -76,7 +76,7 @@ resize :: proc(
             panic("Unreachable")
         }
 
-        start_slot_index := get_index(new_slots_len, value.hash)
+        start_slot_index := get_hash_set_index(new_slots_len, value.hash)
         free_slot_index := find_index_of_free_slot(ordered_hash_set.slots, start_slot_index)
 
         when debug_ordered_hash_sets {
@@ -119,7 +119,7 @@ ordered_hash_set_insert :: proc(
         return OrderedHashSetSlotRef{0}, value, .Inserted
     }
 
-    i := get_index(len(ordered_hash_set.slots), int(hash))
+    i := get_hash_set_index(len(ordered_hash_set.slots), int(hash))
     for {
         if ordered_hash_set.slots[i].index == max(u32) {
             when debug_ordered_hash_sets {

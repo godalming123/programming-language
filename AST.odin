@@ -28,6 +28,7 @@ Ident :: struct {
     segments: #soa[]IdentAndPos,
 }
 
+/*
 make_ident :: proc(token: IdentToken, file: FileRef) -> Ident {
     // TODO: Do not copy the token
     out := make(#soa[]IdentAndPos, len(token))
@@ -36,6 +37,7 @@ make_ident :: proc(token: IdentToken, file: FileRef) -> Ident {
     }
     return Ident{out}
 }
+*/
 
 Number :: struct {
     is_negated:      bool,
@@ -256,12 +258,14 @@ Pos :: struct {
     file:  FileRef,
 }
 
-unknown_pos :: Pos{max(uint), FileRef{max(uint)}}
+unknown_pos :: Pos{max(uint), nil}
 
+/*
 IdentAndIndex :: struct {
     ident: string,
     index: uint,
 }
+*/
 
 IdentAndPos :: struct {
     ident: string,

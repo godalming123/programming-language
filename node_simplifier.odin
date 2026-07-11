@@ -106,7 +106,7 @@ iterate_array :: proc(
     loop_index: uint,
     index_variable: VariableRef,
     value_variable: VariableRef,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
     array_value: CheckedValue,
     array_type: ArrayType,
@@ -157,7 +157,7 @@ iterate_start_end_step :: proc(
     start: CheckedValue,
     end: CheckedValue,
     step: CheckedValue,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
     // TODO: Handle when `step` is negative
@@ -197,7 +197,7 @@ iterate_ordered_hash_map :: proc(
     index_variable: VariableRef,
     key_variable: VariableRef,
     value_variable: VariableRef,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
     keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)} // TODO: Handle for I64 keys

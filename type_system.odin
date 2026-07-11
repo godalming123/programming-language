@@ -3,6 +3,7 @@ package main
 import "base:runtime"
 
 Type :: OrderedHashSetSlotRef
+// TypeList :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
 i64_type :: Type{max(u32) - 1}

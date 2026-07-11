@@ -275,12 +275,12 @@ append2 :: proc(
 }
 
 // Like a dynamic array, except can also be inserted into in average O(1) time
-Dynamic :: struct(T: typeid) {
+DoubleDynamic :: struct(T: typeid) {
     elems:       [dynamic]T,
     start_index: int,
 }
 
-dynamic_grow_front :: proc(array: ^Dynamic($T), grow_by: int) {
+dynamic_grow_front :: proc(array: ^DoubleDynamic($T), grow_by: int) {
     old_start_index := array.start_index
     array.start_index += grow_by
 
@@ -291,7 +291,7 @@ dynamic_grow_front :: proc(array: ^Dynamic($T), grow_by: int) {
     delete(old_elems)
 }
 
-dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
+dynamic_insert :: proc(array: ^DoubleDynamic($T), elems: ..T) {
     if array.start_index < len(elems) {
         dynamic_grow_front(array, max(len(array.elems), len(elems)))
     }
@@ -299,11 +299,11 @@ dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
     copy(array.elems[array.start_index:], elems)
 }
 
-dynamic_append_elem :: proc(array: ^Dynamic($T), elem: T) {
+dynamic_append_elem :: proc(array: ^DoubleDynamic($T), elem: T) {
     append_elem(&array.elems, elem)
 }
 
-dynamic_to_fixed :: proc(array: Dynamic($T)) -> []T {
+dynamic_to_fixed :: proc(array: DoubleDynamic($T)) -> []T {
     return array.elems[array.start_index:]
 }
 
