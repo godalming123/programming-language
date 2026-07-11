@@ -160,6 +160,7 @@ A new language for the web, because it's time to stop working around javascript.
       return self(n + 1, sum + n)
     }
     ```
+- It might be better to use [nbio] for the http server, the websocket server, and checking if the source code has changed for the `-watch` flag instead of finding non-blocking ways to perform the IO operation and `time.sleep`
 
 # The syntax
 

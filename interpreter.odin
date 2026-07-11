@@ -1,5 +1,6 @@
 package main
 
+import "core:time"
 // This file is mostly AI generated
 // TODO: Proper memory management (garbage collector?)
 
@@ -279,6 +280,13 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
             // TODO: Set timeout on accept_tcp so it does not block the
             // automatic recompilation of the `-watch` flag
             client, _, accept_err := net.accept_tcp(server.socket)
+            if accept_err == .Would_Block {
+                if should_exit_early(s.exit_early) {
+                    return nil
+                }
+                time.sleep(10 * time.Millisecond)
+                continue
+            }
             if accept_err != nil {
                 // TODO: Better error handling
                 panic(fmt.aprintf("Accept error: %v", accept_err))
@@ -1105,6 +1113,10 @@ default_builtin_handler_procedure :: proc(
             // TODO: Log that the port is being tried
             socket, err := net.listen_tcp(endpoint)
             if err == nil {
+                err2 := net.set_blocking(socket, false)
+                if err2 != nil {
+                    panic(fmt.aprintf("Failed to disable blocking: %v", err2))
+                }
                 fields[2] = i64(endpoint.port)
                 append(&state.l.http_servers, HttpServer{socket, CheckedFuncRef{max(uint)}})
                 return RuntimeStruct{true, fields, http_server_type}
