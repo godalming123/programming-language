@@ -304,7 +304,8 @@ skip :: proc(
     return skip_ignore_first(s, f, should_continue)
 }
 
-get_location :: proc(files: [^]CompilerFile, position: Pos) -> string {
+/*
+write_location :: proc(b: ^strings.Builder, files: [^]CompilerFile, position: Pos) {
     file := files[position.file.index]
     line := 1
     column := 1
@@ -316,8 +317,15 @@ get_location :: proc(files: [^]CompilerFile, position: Pos) -> string {
             column += 1
         }
     }
-    return fmt.aprintf("`%s` (%d:%d)", file.file_path, line, column)
+    strings.write_byte(b, '`')
+    strings.write_string(b, file.file_path)
+    strings.write_string(b, " (")
+    strings.write_int(b, line)
+    strings.write_byte(b, ':')
+    strings.write_int(b, column)
+    strings.write_byte(b, ')')
 }
+*/
 
 wrong_token_err :: proc(
     state: ^ParserState,

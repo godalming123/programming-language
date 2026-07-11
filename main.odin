@@ -14,6 +14,32 @@ debug_ordered_hash_sets :: false
 debug_interpreter :: false
 debug_diagnostics :: false
 
+position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+    if verb != 'v' {
+        return false
+    }
+    pos := cast(^Pos)arg.data
+    line := 1
+    column := 1
+    for char in pos.file.code[:pos.index] {
+        if char == '\n' {
+            line += 1
+            column = 1
+        } else {
+            column += 1
+        }
+    }
+    fmt.wprintf(fi.writer, "`%s` (%d:%d)", pos.file.file_path, line, column)
+    return true
+}
+
+@(init)
+init :: proc "contextless" () {
+    user_formatters := new(map[typeid]fmt.User_Formatter)
+    user_formatters[Pos] = position_formatter
+    fmt.set_user_formatters(user_formatters)
+}
+
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
     c_code_path := fmt.aprintf("%s.c", path)

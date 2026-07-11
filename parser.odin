@@ -6,9 +6,12 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
+/*
 FileRef :: struct {
     index: uint, // An index into `ParsedProject.files`
 }
+*/
+FileRef :: ^CompilerFile
 get_next_token :: proc(
     s: ^ParserState,
     skip_newlines_and_comments_and_semicolons: bool,
@@ -16,7 +19,7 @@ get_next_token :: proc(
 ) {
     tokenizer_get_next_token(
         &s.tokenizer_state,
-        s.files[s.file_ref.index],
+        s.file_ref^,
         skip_newlines_and_comments_and_semicolons,
         loc,
     )
@@ -64,13 +67,12 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit, struct {}), bool) {
             return wrong_token(s)
         }
         if field.ident in fields_map {
-            loc := get_location(s.files, fields[fields_map[field.ident]].name.pos)
             diagnostic(
                 &s.r,
                 field.pos,
-                "There is already a field called `%s` defined in this struct at %s",
+                "There is already a field called `%s` defined in this struct at %v",
                 field.ident,
-                loc,
+                fields[fields_map[field.ident]].name.pos,
             )
             return Struct(Unit, struct {}){}, false
         }
@@ -163,7 +165,7 @@ parse_initial_unit :: proc(
             return Unit{}, nil, false
         }
         joined, join_err := filepath.join(
-            []string{s.files[s.file_ref.index].dir_path, string(path)},
+            []string{s.file_ref.dir_path, string(path)},
             context.allocator,
         )
         if join_err != nil {
@@ -184,7 +186,7 @@ parse_initial_unit :: proc(
                 )
                 return Unit{}, nil, false
             }
-            ref := FileRef{len(s.parsed_files)}
+            ref := &s.files[len(s.parsed_files)]
             out.value = Import{ref}
             append2(
                 &s.parsed_files,
@@ -1325,8 +1327,10 @@ parse_file :: proc(s: ^ParserState) -> bool {
             }
             name := token[0].ident
             if def, exists := s.parsed_files[s.file_ref.index][name]; exists {
-                loc := get_location(s.files, Pos{def.pos, s.file_ref})
-                diagnostic(&s.r, position, "The global `%s` is already declared at %s", name, loc)
+                d := diagnostic(&s.r, position)
+                fmt.sbprintf(&d.b, "The global `%s` is already declared at ", name)
+                write_location(&d.b, Pos{def.pos, s.file_ref})
+                write(d)
                 return false
             }
             get_next_token(s, false)

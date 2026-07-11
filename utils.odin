@@ -322,6 +322,20 @@ join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     return dyn[:]
 }
 
+/*
+OutputBuilder :: struct {
+    file:   ^os.File,
+    b:      strings.Builder,
+    footer: string,
+}
+
+write :: proc(output_builder: ^OutputBuilder) {
+    strings.write_string(&output_builder.b, footer)
+    fmt.fprint(output_builder.file, strings.to_string(output_builder.b))
+    strings.builder_destroy(&output_builder.b)
+}
+*/
+
 DiagnosticType :: enum {
     Error,
     Warning,
@@ -366,9 +380,7 @@ diagnostic :: proc(
     }
     strings.write_string(&message, " compiling")
     if position != unknown_pos {
-        loc := get_location(r.files, position)
-        strings.write_byte(&message, ' ')
-        strings.write_string(&message, loc)
+        fmt.sbprintf(&message, " %v", position)
     }
     strings.write_byte(&message, '\n')
 
