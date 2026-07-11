@@ -2,7 +2,7 @@ package main
 
 import "base:runtime"
 
-Type :: OrderedHashSetSlotRef
+Type :: OrderedHashMapSlotRef
 // TypeList :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
@@ -111,9 +111,8 @@ http_server_type :: Type{22}
 no_args_to_http_server_type :: Type{23}
 
 GenericTypeValue :: struct {
-    global:           GlobalValueWithGenericRef,
-    generic_args:     []Type,
-    initialised_type: Type, // Set to `unknown_type` when not initialised yet
+    global:       GlobalValueWithGenericRef,
+    generic_args: []Type,
 }
 
 get_hash_of_array_of_types :: proc(arr: []Type) -> u32 {
@@ -124,42 +123,24 @@ get_hash_of_array_of_types :: proc(arr: []Type) -> u32 {
     return result
 }
 
-TypeValue :: union {
+TypeKey :: union {
     ArrayType,
     OrderedHashMapTypeWithStringKey,
     OrderedHashMapTypeWithI64Key,
     FuncType,
-    GenericTypeValue,
+    GenericTypeValue, // The `TypeValue.type` is the initialised type, which is set to `unknown_type` when the generic is not initialised yet
     SumType(Type), // The type is always a struct
-
-    // The extra data is the initialisation function
-    Struct(Type, Type),
+    Struct(Type), // The `TypeValue.type` is the initialisation function
 }
 
-init_struct_type :: proc(
-    types: ^Types,
-    type: Type,
-    fields: #soa[]StructField(Type),
-    fields_map: map[string]uint,
-) {
-    // created := create_type(types, Struct(Type, Type){unknown_type, fields_map, fields})
-    // if created.type_value.(Struct(Type, Type)).extra_data != unknown_type {
-    // return created.type
-    // }
+init_struct_type :: proc(types: ^Types, type: Type, fields: #soa[]StructField(Type)) {
+    assert(types.values[type.index].value.type == unknown_type)
 
     return_types := make([]Type, 1)
     return_types[0] = type
 
-    created := create_type(
-        types,
-        Struct(Type, Type) {
-            create_type(types, FuncType{fields.type[:len(fields)], return_types}).type,
-            fields_map,
-            fields,
-        },
-    )
-    assert(created.type == type)
-    // return created.type
+    t := create_type(types, FuncType{fields.type[:len(fields)], return_types}).type
+    types.values[type.index].value.type = t
 }
 
 create_types :: proc() -> Types {
@@ -275,7 +256,7 @@ create_types :: proc() -> Types {
     compiler_cache_fields_map["get"] = 2
     assert(
         compiler_cache_type ==
-        create_type(&out, Struct(Type, Type){unknown_type, compiler_cache_fields_map, compiler_cache_fields}).type,
+        create_type(&out, Struct(Type){compiler_cache_fields_map, compiler_cache_fields}).type,
     )
 
     compiler_fields := make(#soa[]StructField(Type), 2)
@@ -289,7 +270,7 @@ create_types :: proc() -> Types {
     compiler_fields_map["cache"] = 1
     assert(
         compiler_type ==
-        create_type(&out, Struct(Type, Type){unknown_type, compiler_fields_map, compiler_fields}).type,
+        create_type(&out, Struct(Type){compiler_fields_map, compiler_fields}).type,
     )
 
     assert(
@@ -308,7 +289,7 @@ create_types :: proc() -> Types {
     http_request_type_fields_map["method"] = 1
     assert(
         http_request_type ==
-        create_type(&out, Struct(Type, Type){unknown_type, http_request_type_fields_map, http_request_type_fields}).type,
+        create_type(&out, Struct(Type){http_request_type_fields_map, http_request_type_fields}).type,
     )
 
     http_response_body_fields := make(#soa[]StructField(Type), 1)
@@ -317,7 +298,7 @@ create_types :: proc() -> Types {
     http_response_body_fields_map["body"] = 0
     assert(
         http_response_body_type ==
-        create_type(&out, Struct(Type, Type){unknown_type, http_response_body_fields_map, http_response_body_fields}).type,
+        create_type(&out, Struct(Type){http_response_body_fields_map, http_response_body_fields}).type,
     )
 
     http_response_type_variants := make(#soa[]SumTypeVariant(Type), 3)
@@ -368,7 +349,7 @@ create_types :: proc() -> Types {
     http_server_fields_map["port"] = 2
     assert(
         http_server_type ==
-        create_type(&out, Struct(Type, Type){unknown_type, http_server_fields_map, http_server_fields}).type,
+        create_type(&out, Struct(Type){http_server_fields_map, http_server_fields}).type,
     )
 
     assert(
@@ -376,38 +357,33 @@ create_types :: proc() -> Types {
         create_type(&out, FuncType{nil, array_with_http_server}).type,
     )
 
-    init_struct_type(&out, compiler_type, compiler_fields, compiler_fields_map)
-    init_struct_type(&out, compiler_cache_type, compiler_cache_fields, compiler_cache_fields_map)
-    init_struct_type(
-        &out,
-        http_request_type,
-        http_request_type_fields,
-        http_request_type_fields_map,
-    )
-    init_struct_type(
-        &out,
-        http_response_body_type,
-        http_response_body_fields,
-        http_response_body_fields_map,
-    )
-    init_struct_type(&out, http_server_type, http_server_fields, http_server_fields_map)
+    init_struct_type(&out, compiler_type, compiler_fields)
+    init_struct_type(&out, compiler_cache_type, compiler_cache_fields)
+    init_struct_type(&out, http_request_type, http_request_type_fields)
+    init_struct_type(&out, http_response_body_type, http_response_body_fields)
+    init_struct_type(&out, http_server_type, http_server_fields)
 
     return out
 }
 
-TypeSlot :: struct {
-    aliases: ^[dynamic]string,
-    value:   TypeValue,
+TypeValue :: struct {
+    aliases: [dynamic]string,
+    type:    Type, // Usually `unknown_type`
 }
 
-Types :: OrderedHashSet(TypeSlot)
+Types :: OrderedHashMap(TypeKey, TypeValue)
 
-get_type :: proc(types: Types, t: Type) -> TypeValue {
+GotType :: struct {
+    key:   TypeKey,
+    value: TypeValue,
+}
+
+get_type :: proc(types: Types, t: Type) -> GotType {
     if t.index > max_index {
-        return nil
+        return GotType{nil, TypeValue{}}
     }
-    slot := get_value(types, t)
-    return slot.value
+    slot_key, slot_value := get_value(types, t)
+    return GotType{slot_key, slot_value}
 }
 
 CreatedType :: struct {
@@ -418,7 +394,7 @@ CreatedType :: struct {
 
 create_type :: proc(
     types: ^Types,
-    value: TypeValue,
+    value: TypeKey,
     aliases: [dynamic]string = nil,
     loc := #caller_location,
 ) -> CreatedType {
@@ -426,21 +402,22 @@ create_type :: proc(
         print_call(loc, "create_type")
         debug("value: %v", value)
     }
-    type, type_value, result := insert(
+    type, type_value, result := ordered_hash_map_insert(
         types,
+        value,
         hash_type_value(value),
-        TypeSlot{new_clone(aliases), value},
-        merge_type_slot,
+        TypeValue{aliases, unknown_type},
+        type_key_is_equal,
         loc,
     )
-    out := CreatedType{type, type_value.value, result}
+    out := CreatedType{type, type_value, result}
     when debug_checker {
         debug("out: %v", out)
     }
     return out
 }
 
-hash_type_value :: proc(value: TypeValue) -> u32 {
+hash_type_value :: proc(value: TypeKey) -> u32 {
     switch v in value {
     case ArrayType:
         return v.length ~ v.item_type.index
@@ -450,7 +427,7 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
         return v.value_type.index + 2
     case SumType(Type):
         return hash_sum_type(v)
-    case Struct(Type, Type):
+    case Struct(Type):
         return hash_struct_type(v)
     case FuncType:
         return hash_func_type(v)
@@ -460,7 +437,7 @@ hash_type_value :: proc(value: TypeValue) -> u32 {
     panic("Unreachable")
 }
 
-hash_struct_type :: proc(value: Struct(Type, Type)) -> u32 {
+hash_struct_type :: proc(value: Struct(Type)) -> u32 {
     result: u32
     for field, j in value.fields {
         for c in field.name.ident {
@@ -493,144 +470,95 @@ hash_func_type :: proc(value: FuncType) -> u32 {
     return result
 }
 
-merge_type_slot :: proc(
-    a: TypeSlot,
-    b: TypeSlot,
-    loc: runtime.Source_Code_Location,
-) -> (
-    bool,
-    TypeSlot,
-) {
-    equal, merged := merge_type_value(a.value, b.value, loc)
-    if equal {
-        append_elems(a.aliases, ..b.aliases[:])
-        return true, TypeSlot{a.aliases, merged}
-    }
-    return false, TypeSlot{}
-}
-
-merge_type_value :: proc(
-    a: TypeValue,
-    b: TypeValue,
-    loc: runtime.Source_Code_Location,
-) -> (
-    bool,
-    TypeValue,
-) {
+type_key_is_equal :: proc(a: TypeKey, b: TypeKey, loc: runtime.Source_Code_Location) -> bool {
     switch va in a {
     case OrderedHashMapTypeWithStringKey:
         vb, ok := b.(OrderedHashMapTypeWithStringKey)
-        if ok && va.value_type == vb.value_type {
-            return true, a
-        }
-        return false, nil
+        return ok && va.value_type == vb.value_type
     case OrderedHashMapTypeWithI64Key:
         vb, ok := b.(OrderedHashMapTypeWithI64Key)
-        if ok && va.value_type == vb.value_type {
-            return true, a
-        }
-        return false, nil
+        return ok && va.value_type == vb.value_type
     case ArrayType:
         vb, ok := b.(ArrayType)
-        if ok && va.length == vb.length && va.item_type.index == vb.item_type.index {
-            return true, a
-        }
-        return false, nil
+        return ok && va.length == vb.length && va.item_type.index == vb.item_type.index
     case SumType(Type):
         vb, ok := b.(SumType(Type))
         if !ok {
-            return false, nil
+            return false
         }
-        return merge_sum_types(va, vb, loc)
-    case Struct(Type, Type):
-        vb, ok := b.(Struct(Type, Type))
+        return sum_types_are_equal(va, vb, loc)
+    case Struct(Type):
+        vb, ok := b.(Struct(Type))
         if !ok {
-            return false, nil
+            return false
         }
-        return merge_struct_types(va, vb, loc)
+        return struct_types_are_equal(va, vb, loc)
     case FuncType:
         vb, ok := b.(FuncType)
         if !ok {
-            return false, nil
+            return false
         }
-        return func_types_are_equal(va, vb), a
+        return func_types_are_equal(va, vb)
     case GenericTypeValue:
         vb, ok := b.(GenericTypeValue)
         if !ok {
-            return false, nil
+            return false
         }
         if va.global.index != vb.global.index {
-            return false, nil
+            return false
         }
         if len(va.generic_args) != len(vb.generic_args) {
-            return false, nil
+            return false
         }
         for arg, i in va.generic_args {
             if arg.index != vb.generic_args[i].index {
-                return false, nil
+                return false
             }
         }
-        if va.initialised_type != unknown_type {
-            assert(vb.initialised_type == unknown_type)
-            return true, va
-        }
-        return true, vb
+        return true
     case:
         panic("Unreachable")
     }
 }
 
-merge_struct_types :: proc(
-    a: Struct(Type, Type),
-    b: Struct(Type, Type),
+struct_types_are_equal :: proc(
+    a: Struct(Type),
+    b: Struct(Type),
     loc: runtime.Source_Code_Location,
-) -> (
-    bool,
-    Struct(Type, Type),
-) {
+) -> bool {
     if len(a.fields) != len(b.fields) {
-        return false, Struct(Type, Type){}
+        return false
     }
     for a_field, i in a.fields {
         b_field := b.fields[i]
         if a_field.name.ident != b_field.name.ident {
-            return false, Struct(Type, Type){}
+            return false
         }
         if a_field.type != b_field.type {
-            return false, Struct(Type, Type){}
+            return false
         }
     }
-    if a.extra_data != unknown_type {
-        if b.extra_data != unknown_type {
-            debug("file %s, line %d, column %d", loc.file_path, loc.line, loc.column)
-            panic("Unreachable")
-        }
-        return true, a
-    }
-    return true, b
+    return true
 }
 
-merge_sum_types :: proc(
+sum_types_are_equal :: proc(
     a: SumType(Type),
     b: SumType(Type),
     loc: runtime.Source_Code_Location,
-) -> (
-    bool,
-    SumType(Type),
-) {
+) -> bool {
     if len(a.variants) != len(b.variants) {
-        return false, SumType(Type){}
+        return false
     }
     for a_variant, i in a.variants {
         b_variant := b.variants[i]
         if a_variant.name.ident != b_variant.name.ident {
-            return false, SumType(Type){}
+            return false
         }
         if a_variant.payload != b_variant.payload {
-            return false, SumType(Type){}
+            return false
         }
     }
-    return true, a
+    return true
 }
 
 func_types_are_equal :: proc(a: FuncType, b: FuncType) -> bool {

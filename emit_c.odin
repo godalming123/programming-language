@@ -26,7 +26,7 @@ emit_variable :: proc(b: ^strings.Builder, variable: VariableRef) {
 }
 
 // Does not include the `struct`
-emit_struct_type :: proc(b: ^strings.Builder, type: Struct(Type, Type), loc := #caller_location) {
+emit_struct_type :: proc(b: ^strings.Builder, type: Struct(Type), loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_struct_type")
     }
@@ -464,7 +464,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
     }
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
-    switch type in s.types.values[index].value.value {
+    switch type in s.types.values[index].key {
     case ArrayType:
         strings.write_string(&s.other_type_definitions, "struct ")
         strings.write_string(&s.other_type_definitions, name)
@@ -527,7 +527,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.other_type_definitions, ");")
     case GenericTypeValue:
         strings.write_string(&s.other_type_definitions, "typedef ")
-        emit_type(&s.other_type_definitions, name, type.initialised_type)
+        emit_type(&s.other_type_definitions, name, s.types.values[index].value.type)
         strings.write_byte(&s.other_type_definitions, ';')
     case SumType(Type):
         // Main struct type
@@ -548,7 +548,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
 
         // Variant funcs
         for variant, i in type.variants {
-            payload := get_type(s.types, variant.payload).(Struct(Type, Type))
+            payload := get_type(s.types, variant.payload).key.(Struct(Type))
             strings.write_string(&s.sum_type_initialisation_funcs, name)
             strings.write_string(&s.sum_type_initialisation_funcs, " init_")
             strings.write_string(&s.sum_type_initialisation_funcs, name)
@@ -590,7 +590,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             }
             strings.write_string(&s.sum_type_initialisation_funcs, ");return out;}")
         }
-    case Struct(Type, Type):
+    case Struct(Type):
         // Type def
         emit_forward_struct_definition(s, name)
 
@@ -633,7 +633,7 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     when debug_emitter {
         debug("emitting function index %d", func_index)
     }
-    info := get_type(s.types, type).(FuncType)
+    info := get_type(s.types, type).key.(FuncType)
     switch len(info.return_types) {
     case 0:
         strings.write_string(&s.b, "void")

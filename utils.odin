@@ -309,7 +309,7 @@ dynamic_to_fixed :: proc(array: DoubleDynamic($T)) -> []T {
 
 insert :: proc {
     dynamic_insert,
-    ordered_hash_set_insert,
+    ordered_hash_map_insert,
 }
 
 up_line :: "\033[A"

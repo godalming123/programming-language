@@ -51,7 +51,6 @@ LabelRef :: struct {
 GenericInitialisation :: struct {
     global: GlobalValueWithGenericRef,
     args:   []Type,
-    v:      CheckedGlobalValue,
 }
 
 CheckedGlobalValue :: struct {
@@ -59,27 +58,20 @@ CheckedGlobalValue :: struct {
     value: CompileTimeValue,
 }
 
-generic_initialisation_equal_merge_func :: proc(
+generic_initialisation_equal_func :: proc(
     v0: GenericInitialisation,
     v1: GenericInitialisation,
     loc: runtime.Source_Code_Location,
-) -> (
-    bool,
-    GenericInitialisation,
-) {
+) -> bool {
     if len(v0.args) != len(v1.args) {
-        return false, GenericInitialisation{}
+        return false
     }
     for arg, i in v0.args {
         if arg != v1.args[i] {
-            return false, GenericInitialisation{}
+            return false
         }
     }
-    if v0.v.type != unknown_type {
-        return true, v0
-    } else {
-        return true, v1
-    }
+    return true
 }
 
 CheckerState :: struct {
@@ -91,7 +83,7 @@ CheckerState :: struct {
 
     // The following fields change while checking
     using r:                       DiagnosticReporter,
-    generic_initialisations:       OrderedHashSet(GenericInitialisation),
+    generic_initialisations:       OrderedHashMap(GenericInitialisation, CheckedGlobalValue),
     checked_functions:             [dynamic]CheckedFunction,
     first_unchecked_function:      uint,
     types:                         Types,
@@ -359,7 +351,7 @@ no_generic_args :: map[string]Type{}
 
 check_struct_type :: proc(
     s: ^CheckerState,
-    type: Struct(Unit, struct {}),
+    type: Struct(Unit),
     generic_args: map[string]Type,
 ) -> Type {
     field_types := make([]Type, len(type.fields))
@@ -376,10 +368,11 @@ check_struct_type :: proc(
     }
 
     fields: #soa[]StructField(Type) = soa_zip(type.fields.name[:len(type.fields)], field_types)
-    created := create_type(&s.types, Struct(Type, Type){unknown_type, type.fields_map, fields})
-    if created.type_value.(Struct(Type, Type)).extra_data == unknown_type {
-        init_struct_type(&s.types, created.type, fields, type.fields_map)
+    created := create_type(&s.types, Struct(Type){type.fields_map, fields})
+    if created.type_value.type == unknown_type {
+        init_struct_type(&s.types, created.type, fields)
     }
+    assert(get_type(s.types, created.type).value.type != unknown_type)
     return created.type
 }
 
@@ -499,6 +492,8 @@ check_runtime_value :: proc(
 ) -> CheckedValue {
     when debug_checker {
         print_call(loc, "check_runtime_value")
+        print_arg("type", type)
+        print_arg("generic_args", generic_args)
     }
     out := check_value(s, v, CheckValueArgs{body, type, generic_args, nil})
     if comptime_value, is_comptime_value := out.(CompileTimeValue); is_comptime_value {
@@ -663,14 +658,15 @@ check_comptime_func_call :: proc(
     }
 
     hash := global.index ~ get_hash_of_array_of_types(generic_args)
-    ref, value, _ := ordered_hash_set_insert(
+    ref, value, _ := ordered_hash_map_insert(
         &s.generic_initialisations,
+        GenericInitialisation{global, generic_args},
         hash,
-        GenericInitialisation{global, generic_args, CheckedGlobalValue{unknown_type, nil}},
-        generic_initialisation_equal_merge_func,
+        CheckedGlobalValue{unknown_type, nil},
+        generic_initialisation_equal_func,
     )
-    if value.v.type != unknown_type {
-        return finish_checking_value(s, pos, type, value.v.value, value.v.type, "")
+    if value.type != unknown_type {
+        return finish_checking_value(s, pos, type, value.value, value.type, "")
     }
 
     generic_args_map := make(map[string]Type)
@@ -688,7 +684,7 @@ check_comptime_func_call :: proc(
             &body,
             AnyType{&value_type},
             generic_args_map,
-            GenericTypeValue{global, generic_args, unknown_type},
+            GenericTypeValue{global, generic_args},
         },
     )
     if checked_value == nil {
@@ -701,7 +697,7 @@ check_comptime_func_call :: proc(
     }
     assert(len(body) == 0)
 
-    s.generic_initialisations.values[ref.index].value.v = CheckedGlobalValue {
+    s.generic_initialisations.values[ref.index].value = CheckedGlobalValue {
         value_type,
         comptime_value,
     }
@@ -718,11 +714,8 @@ check_comptime_func_call :: proc(
         if initialised_type == nil {
             return out
         }
-        s.types.values[type_value.index].value.value = GenericTypeValue {
-            global,
-            generic_args,
-            initialised_type.(CompileTimeValue).(Type),
-        }
+        s.types.values[type_value.index].key = GenericTypeValue{global, generic_args}
+        s.types.values[type_value.index].value.type = initialised_type.(CompileTimeValue).(Type)
     }
 
     return out
@@ -822,8 +815,10 @@ simplify_type :: proc(s: ^CheckerState, type: Type, loc := #caller_location) -> 
     }
     cur_type := type
     for {
-        if generic, ok := get_type(s.types, cur_type).(GenericTypeValue); ok {
-            cur_type = generic.initialised_type
+        got := get_type(s.types, cur_type)
+        if _, ok := got.key.(GenericTypeValue); ok {
+            cur_type = got.value.type
+            assert(cur_type != unknown_type)
         } else {
             return cur_type
         }
@@ -849,7 +844,7 @@ get_sum_type :: proc(
         print_arg("type", type)
     }
     simplified := simplify_type(s, type)
-    sum_type, is_sum_type := get_type(s.types, simplified).(SumType(Type))
+    sum_type, is_sum_type := get_type(s.types, simplified).key.(SumType(Type))
     if is_sum_type {
         when debug_checker {
             debug("returned SumType(Struct(Type)) is %#v", sum_type)
@@ -862,9 +857,9 @@ get_sum_type :: proc(
     return SumType(Type){}, unknown_type, false
 }
 
-get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type, Type), bool) {
+get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type), bool) {
     simplified := simplify_type(s, type)
-    struct_type, is_struct_type := get_type(s.types, simplified).(Struct(Type, Type))
+    struct_type, is_struct_type := get_type(s.types, simplified).key.(Struct(Type))
     if is_struct_type {
         return struct_type, true
     }
@@ -872,20 +867,31 @@ get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type,
         got := type_to_string(s, type)
         diagnostic(s, pos, "Expected a struct type, but got the type `%s`", got)
     }
-    return Struct(Type, Type){}, false
+    return Struct(Type){}, false
 }
 
 // Always returns a function type
 // Returns `invalid_type` on failure
-get_func_type :: proc(s: ^CheckerState, pos: Pos, value: ^CheckedValue, type: Type) -> Type {
+get_func_type :: proc(
+    s: ^CheckerState,
+    pos: Pos,
+    value: ^CheckedValue,
+    type: Type,
+    loc := #caller_location,
+) -> Type {
+    when debug_checker {
+        print_call(loc, "get_func_type")
+        print_arg("type", type_to_string(s, type))
+    }
     simplified := simplify_type(s, type)
     if simplified == type_type && value != nil {
         value_type_unsimplified := value.(CompileTimeValue).(Type)
         value_type := simplify_type(s, value_type_unsimplified)
-        #partial switch type in get_type(s.types, value_type) {
-        case Struct(Type, Type):
+        got := get_type(s.types, value_type)
+        #partial switch type in got.key {
+        case Struct(Type):
             value^ = StructTypeInitFunc{value_type}
-            return type.extra_data
+            return got.value.type
         // TODO: CLEANUP
         case OrderedHashMapTypeWithI64Key:
             value^ = OrderedHashMapInitFunc{value_type}
@@ -904,7 +910,7 @@ get_func_type :: proc(s: ^CheckerState, pos: Pos, value: ^CheckedValue, type: Ty
             "The type `%s` cannot be converted to a function type",
             type_to_string(s, value_type_unsimplified),
         )
-    } else if _, is_func := get_type(s.types, simplified).(FuncType); is_func {
+    } else if _, is_func := get_type(s.types, simplified).key.(FuncType); is_func {
         return simplified
     }
     if pos != unknown_pos {
@@ -966,7 +972,7 @@ type_is_subset :: proc(
         return false
     }
     superset_type := get_type(s.types, superset)
-    #partial switch superset_value in superset_type {
+    #partial switch superset_value in superset_type.key {
     case nil:
         panic("Unreachable")
     case:
@@ -979,7 +985,7 @@ type_is_subset :: proc(
         }
         return false
     case GenericTypeValue:
-        return type_is_subset(s, type, superset_value.initialised_type)
+        return type_is_subset(s, type, superset_type.value.type)
     }
 }
 
@@ -1041,7 +1047,7 @@ expect_value_of_type :: proc(
     when debug_checker {
         print_call(loc, "expect_value_of_type")
         print_arg("expected", expected)
-        print_arg("got", got_type)
+        print_arg("got_type", type_to_string(s, got_type))
     }
     switch e in expected {
     case AnyType:
@@ -1054,7 +1060,7 @@ expect_value_of_type :: proc(
         if func_type == invalid_type {
             return false
         }
-        func_info := get_type(s.types, func_type).(FuncType)
+        func_info := get_type(s.types, func_type).key.(FuncType)
         if len(func_info.return_types) != len(e.expected_return_types) {
             diagnostic(
                 s,
@@ -1141,7 +1147,7 @@ build_struct_string :: proc(
     types: Types,
     globals: []GlobalValueWithGeneric,
     b: ^strings.Builder,
-    type: Struct(Type, Type),
+    type: Struct(Type),
 ) {
     strings.write_byte(b, '{')
     first_field := true
@@ -1200,8 +1206,8 @@ build_type_string :: proc(
     case any_type:
         strings.write_string(b, "Any")
     case:
-        switch tv in get_type(types, t) {
-        case Struct(Type, Type):
+        switch tv in get_type(types, t).key {
+        case Struct(Type):
             build_struct_string(types, globals, b, tv)
         case SumType(Type):
             strings.write_byte(b, '<')
@@ -1210,7 +1216,7 @@ build_type_string :: proc(
                 if !first_variant {
                     strings.write_string(b, ", ")
                 }
-                variant_type := get_type(types, variant.payload).(Struct(Type, Type))
+                variant_type := get_type(types, variant.payload).key.(Struct(Type))
                 strings.write_string(b, variant.name.ident)
                 build_struct_string(types, globals, b, variant_type)
                 first_variant = false
@@ -1304,7 +1310,7 @@ get_array_type :: proc(
     bool,
 ) {
     type := simplify_type(s, type_unsimplified)
-    if out, is_array := get_type(s.types, type).(ArrayType); is_array {
+    if out, is_array := get_type(s.types, type).key.(ArrayType); is_array {
         return out, true
     }
     diagnostic(
@@ -1334,7 +1340,7 @@ check_mutation_destination :: proc(
     if key == nil {
         return var_type, var_ref
     }
-    #partial switch var_type_value in get_type(s.types, simplify_type(s, var_type)) {
+    #partial switch var_type_value in get_type(s.types, simplify_type(s, var_type)).key {
     case ArrayType:
         diagnostic(
             s,
@@ -1591,7 +1597,7 @@ check_block :: proc(
                 if v == nil {
                     return nil, false
                 }
-                #partial switch t in get_type(s.types, simplify_type(s, type)) {
+                #partial switch t in get_type(s.types, simplify_type(s, type)).key {
                 case ArrayType:
                     array_item_type := t.item_type
                     if value.variables[2].ident != "" {
@@ -2190,15 +2196,18 @@ check_var_ref :: proc(
             )
             return nil
         }
-        func_ref :=
-            get_type(s.types, sum_type.variants[variant_index].payload).(Struct(Type, Type)).extra_data
+        got := get_type(s.types, sum_type.variants[variant_index].payload)
+        _, is_struct := got.key.(Struct(Type))
+        assert(is_struct)
+        func_type := got.value.type
+        assert(func_type != unknown_type)
         // TODO: Use `StructTypeInitFunc` instead of `SumTypeInitFunc` if `type` is the struct type rather than the sum type
         return finish_checking_value(
             s,
             pos,
             a.type,
             SumTypeInitFunc{type_type, variant_index},
-            func_ref,
+            func_type,
             "",
         )
         /*
@@ -2241,7 +2250,7 @@ check_var_ref :: proc(
     for i := start_i; i < len(ref.segments); i += 1 {
         extra_segment := ref.segments[i]
         if extra_segment.ident == "len" {
-            #partial switch type in get_type(s.types, simplify_type(s, out_type)) {
+            #partial switch type in get_type(s.types, simplify_type(s, out_type)).key {
             case ArrayType:
                 out_type = i64_type
                 out = length_of_array(type, out)
@@ -2359,6 +2368,7 @@ check_function_call :: proc(
     } {
     when debug_checker {
         print_call(loc, "check_function_call")
+        print_arg("expected_return_types", expected_return_types)
     }
 
     func_args: []Type = ---
@@ -2495,7 +2505,7 @@ check_joined_unit_value :: proc(
             return nil
         }
         val0_expected_type := invalid_type
-        #partial switch t in get_type(s.types, simplify_type(s, val1_type)) {
+        #partial switch t in get_type(s.types, simplify_type(s, val1_type)).key {
         case OrderedHashMapTypeWithI64Key:
             val0_expected_type = i64_type
         case OrderedHashMapTypeWithStringKey:
@@ -2773,7 +2783,7 @@ CheckValueArgs :: struct {
     // If the value is a type and `early_exit_if_value_is_type != nil`, the
     // check value function returns
     // `finish_checking_early_return_type(s, v.pos, a)`
-    early_exit_if_value_is_type: TypeValue,
+    early_exit_if_value_is_type: TypeKey,
 }
 
 finish_checking_early_return_type :: proc(
@@ -2800,7 +2810,7 @@ check_value :: proc(
         diagnostic(s, v.pos, "Internal error: got nil value in check_value")
         return nil
 
-    case Struct(Unit, struct {}):
+    case Struct(Unit):
         if a.early_exit_if_value_is_type != nil {
             return finish_checking_early_return_type(s, v.pos, a)
         }
@@ -2823,7 +2833,7 @@ check_value :: proc(
         }
         return CompileTimeValue(create_type(&s.types, array).type)
 
-    case SumType(Struct(Unit, struct {})):
+    case SumType(Struct(Unit)):
         if a.early_exit_if_value_is_type != nil {
             return finish_checking_early_return_type(s, v.pos, a)
         }
@@ -2903,11 +2913,11 @@ check_value :: proc(
                     return nil
                 }
                 key := simplify_type(s, checked_args[0])
-                type_value: TypeValue
+                type_key: TypeKey
                 if key == string_type {
-                    type_value = OrderedHashMapTypeWithStringKey{checked_args[1]}
+                    type_key = OrderedHashMapTypeWithStringKey{checked_args[1]}
                 } else if key == i64_type {
-                    type_value = OrderedHashMapTypeWithI64Key{checked_args[1]}
+                    type_key = OrderedHashMapTypeWithI64Key{checked_args[1]}
                 } else {
                     diagnostic(
                         s,
@@ -2917,7 +2927,7 @@ check_value :: proc(
                     )
                     return nil
                 }
-                out: CheckedValue = CompileTimeValue(create_type(&s.types, type_value).type)
+                out: CheckedValue = CompileTimeValue(create_type(&s.types, type_key).type)
                 return finish_checking_value(s, v.pos, a.type, out, type_type, "")
             case BuiltinFunction:
                 assert(comptime_value == .cast_func)
@@ -2949,7 +2959,7 @@ check_value :: proc(
             )
             return nil
         }
-        #partial switch t in get_type(s.types, being_called_type) {
+        #partial switch t in get_type(s.types, being_called_type).key {
         case ArrayType:
             diagnostic(
                 s,
@@ -3093,7 +3103,7 @@ check_anonymous_func_body :: proc(s: ^CheckerState, ref: CheckedFuncRef) -> bool
     checked_func := s.checked_functions[ref.index]
     generic_args := checked_func.generic_args
     func := s.func_defs[checked_func.definition.index]
-    func_type := get_type(s.types, checked_func.type).(FuncType)
+    func_type := get_type(s.types, checked_func.type).key.(FuncType)
 
     s.return_types = make([]Type, len(func_type.return_types))
     s.loop_index = 0
@@ -3159,7 +3169,7 @@ check_global_value_without_generic :: proc(
         return
     }
     body: [dynamic]CheckedStatement = nil
-    early_exit_if_value_is_type: TypeValue = nil // TODO: Do not use nil to prevent infinite cycles with global types without generics
+    early_exit_if_value_is_type: TypeKey = nil // TODO: Do not use nil to prevent infinite cycles with global types without generics
     type: Type = unknown_type
     checked_value := check_value(
         s,

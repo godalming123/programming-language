@@ -729,7 +729,7 @@ interp_exec_statement :: proc(state: InterpState, stmt: CheckedStatement) {
         interp_push_scope(state, branch.block.variables)
         val_var, has_val := branch.value_var.(VariableRef)
         if has_val {
-            sum_type := get_type(state.types, val.type).(SumType(Type))
+            sum_type := get_type(state.types, val.type).key.(SumType(Type))
             state.frames[len(state.frames) - 1].scopes[val_var.nesting_level][val_var.index] =
                 RuntimeStruct{false, val.payload, sum_type.variants[val.variant_index].payload}
         }
@@ -787,7 +787,7 @@ interp_eval_comptime_value :: proc(s: InterpState, value: CompileTimeValue) -> R
 interp_eval_value :: proc(s: InterpState, v: CheckedValue) -> RuntimeValue {
     switch value in v {
     case OrderedHashMapInitFunc:
-        #partial switch type in get_type(s.types, value.type) {
+        #partial switch type in get_type(s.types, value.type).key {
         case OrderedHashMapTypeWithStringKey:
             return RuntimeStringOrderedHashMapInitFunc{value.type}
         case OrderedHashMapTypeWithI64Key:

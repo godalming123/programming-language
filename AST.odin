@@ -5,9 +5,7 @@ StructField :: struct(T: typeid) {
     type: T,
 }
 
-Struct :: struct(T: typeid, ExtraData: typeid) {
-    extra_data: ExtraData,
-
+Struct :: struct(T: typeid) {
     // Stored this way to preserve the order
     fields_map: map[string]uint, // An index into `fields`
     fields:     #soa[]StructField(T),
@@ -98,8 +96,8 @@ InitialUnit :: union {
 */
 
 UnitWithoutPos :: union {
-    Struct(Unit, struct {}),
-    SumType(Struct(Unit, struct {})),
+    Struct(Unit),
+    SumType(Struct(Unit)),
     Tuple,
     FuncDefinitionRef,
     CallWithBrackets,
@@ -422,9 +420,9 @@ debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
     debug("value at character index %d", unit.pos)
     debug_nesting += 1
     switch v in unit.value {
-    case Struct(Unit, struct {}):
+    case Struct(Unit):
         panic("TODO")
-    case SumType(Struct(Unit, struct {})):
+    case SumType(Struct(Unit)):
         panic("TODO")
     case Number:
         debug("is_negated: %v", v.is_negated)

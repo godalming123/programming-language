@@ -11,7 +11,7 @@ debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
-debug_ordered_hash_sets :: false
+debug_ordered_hash_maps :: false
 debug_interpreter :: false
 debug_diagnostics :: false
 
@@ -20,6 +20,10 @@ position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
         return false
     }
     pos := cast(^Pos)arg.data
+    if pos^ == unknown_pos {
+        fmt.wprint(fi.writer, "unknown_pos")
+        return true
+    }
     line := 1
     column := 1
     for char in pos.file.code[:pos.index] {

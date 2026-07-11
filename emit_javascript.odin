@@ -219,7 +219,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
 emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
-    switch t in s.types.values[index].value.value {
+    switch t in s.types.values[index].key {
     case OrderedHashMapTypeWithStringKey:
     case OrderedHashMapTypeWithI64Key:
     case ArrayType:
@@ -227,7 +227,7 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     case GenericTypeValue:
     case SumType(Type):
         for variant, i in t.variants {
-            payload := get_type(s.types, variant.payload).(Struct(Type, Type))
+            payload := get_type(s.types, variant.payload).key.(Struct(Type))
             strings.write_string(&s.b, "function init_")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")
@@ -252,7 +252,7 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
             }
             strings.write_string(&s.b, "}}")
         }
-    case Struct(Type, Type):
+    case Struct(Type):
         strings.write_string(&s.b, "function init_")
         strings.write_string(&s.b, name)
         strings.write_byte(&s.b, '(')
@@ -434,7 +434,7 @@ emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> s
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info := get_type(types, func.type).(FuncType)
+        info := get_type(types, func.type).key.(FuncType)
         first_arg := true
         for _, i in info.args {
             if first_arg {
