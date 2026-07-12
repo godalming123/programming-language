@@ -14,6 +14,7 @@ debug_emitter :: false
 debug_ordered_hash_maps :: false
 debug_interpreter :: false
 debug_diagnostics :: false
+debug_arena :: false
 
 position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
     if verb != 'v' {

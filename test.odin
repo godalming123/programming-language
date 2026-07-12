@@ -578,6 +578,106 @@ invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
     expect_finished(&e)
 }
 
+// Just to test `arena.odin`, so no proper error handling
+
+TreeNode :: union {
+    string,
+    []TreeNode,
+}
+
+string_to_node :: proc(a: ^Arena, i: ^int, text: string) -> TreeNode {
+    for text[i^] == ' ' {
+        i^ += 1
+    }
+    switch text[i^] {
+    case '(':
+        i^ += 1
+        children := create_dynamic(a, TreeNode)
+        for text[i^] != ')' {
+            child := string_to_node(a, i, text)
+            append_dynamic(&children, child)
+        }
+        i^ += 1
+        return fix_resizable_dynamic(children)
+    case '`':
+        i^ += 1
+        start := i^
+        for text[i^] != '`' {
+            i^ += 1
+        }
+        out := text[start:i^]
+        i^ += 1
+        return out
+    case:
+        panic("Unreachable")
+    }
+}
+
+node_to_string := proc(d: ^Dynamic(byte), node: TreeNode) {
+    switch n in node {
+    case string:
+        append_dynamic(d, '`')
+        for c in transmute([]byte)n {
+            append_dynamic(d, c)
+        }
+        append_dynamic(d, '`')
+    case []TreeNode:
+        append_dynamic(d, '(')
+        first_child := true
+        for child in n {
+            if first_child == false {
+                append_dynamic(d, ' ')
+            }
+            node_to_string(d, child)
+            first_child = false
+        }
+        append_dynamic(d, ')')
+    case:
+        panic("Unreachable")
+    }
+}
+
+@(test)
+arena_test :: proc(t: ^testing.T) {
+    a := Arena{}
+    defer delete_arena(&a, expect_empty = false)
+
+    my_tree_string :: "(((`a` `b` `c`) `d` (`e` `f`)) `g` `h`)"
+
+    index := 0
+    my_tree_node := string_to_node(&a, &index, my_tree_string)
+    testing.expect(t, index == len(my_tree_string))
+
+    // Even though `my_tree_dynamic_array` was not created with
+    // `always_resizable == true`, it is still resizable because the last
+    // allocation is always resizable
+    my_tree_dynamic_array := create_dynamic(&a, byte, false)
+    defer dealloc(my_tree_dynamic_array.data)
+    node_to_string(&my_tree_dynamic_array, my_tree_node)
+    my_tree_string2 := string(to_array(my_tree_dynamic_array))
+    if my_tree_string != my_tree_string2 {
+        testing.fail_now(t, fmt.aprintf("%s != %s", my_tree_string, my_tree_string2))
+    }
+
+    my_int := alloc(&a, int)
+    defer dealloc(my_int)
+    my_int^ = 5
+    defer testing.expect(t, my_int^ == 5)
+
+    fibonacci_numbers := create_dynamic(&a, int, false)
+    defer dealloc(fibonacci_numbers.data)
+    append_dynamic(&fibonacci_numbers, 1)
+    append_dynamic(&fibonacci_numbers, 1)
+
+    for _ in 1 ..= 50 {
+        append_dynamic(
+            &fibonacci_numbers,
+            fibonacci_numbers.data[fibonacci_numbers.length - 1] +
+            fibonacci_numbers.data[fibonacci_numbers.length - 2],
+        )
+    }
+}
+
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors
 
 // TODO: Add a fuzz test where the code that gets compiled has no invalid utf8 runes
