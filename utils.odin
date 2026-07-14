@@ -9,6 +9,19 @@ import "core:slice"
 import "core:strings"
 import "core:testing"
 
+// FNV-1a 32-bit
+simple_hash :: proc(data: []byte) -> u32 {
+    h: u32 = 0x811c_9dc5 // FNV 32-bit offset basis
+    for b in data {
+        h = (h ~ u32(b)) * 0x0100_0193 // FNV 32-bit prime
+    }
+    return h
+}
+
+simple_hash_string :: proc(data: string) -> u32 {
+    return simple_hash(transmute([]byte)data)
+}
+
 file_mock :: proc() -> (^os.File, ^strings.Builder) {
     builder := new_clone(strings.builder_make())
     stream_proc: os.File_Stream_Proc : proc(
@@ -309,7 +322,6 @@ dynamic_to_fixed :: proc(array: DoubleDynamic($T)) -> []T {
 
 insert :: proc {
     dynamic_insert,
-    ordered_hash_map_insert,
 }
 
 up_line :: "\033[A"
@@ -519,13 +531,7 @@ print_arg :: proc(arg_name: string, arg_value: any) {
 
 @(deferred_in_out = print_call_finished)
 print_call :: proc(loc: runtime.Source_Code_Location, func_name: string) {
-    debug(
-        "%s called from file %s at line %d column %d",
-        func_name,
-        loc.file_path,
-        loc.line,
-        loc.column,
-    )
+    debug("%s called from %v", func_name, loc)
     debug_nesting += 1
 }
 

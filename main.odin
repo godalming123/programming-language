@@ -2,6 +2,7 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -11,7 +12,7 @@ debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
-debug_ordered_hash_maps :: false
+debug_key_to_index :: false
 debug_interpreter :: false
 debug_diagnostics :: false
 debug_arena :: false
@@ -39,12 +40,22 @@ position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
     return true
 }
 
+source_code_location_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+    if verb != 'v' {
+        return false
+    }
+    loc := cast(^runtime.Source_Code_Location)arg.data
+    fmt.wprintf(fi.writer, "file %s at line %d column %d", loc.file_path, loc.line, loc.column)
+    return true
+}
+
 @(init)
 init :: proc "contextless" () {
     context = runtime.default_context()
     user_formatters := new(map[typeid]fmt.User_Formatter)
     user_formatters[Pos] = position_formatter
     user_formatters[TokenContents] = token_formatter
+    user_formatters[runtime.Source_Code_Location] = source_code_location_formatter
     fmt.set_user_formatters(user_formatters)
 }
 
@@ -171,6 +182,8 @@ compile :: proc(
     command: Command,
     exit_early: EarlyExitInfo,
 ) -> int {
+    a: Arena
+    defer delete_arena(&a, expect_empty = false)
     start := time.now()
     if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
         exit_early_info^ = ExitEarlyAwaitingSourceCodeChange{start, nil, time.Time{}}
@@ -201,7 +214,7 @@ compile :: proc(
     }
 
     fmt.fprintfln(compiler.stdout, "Checking...")
-    checker_output := check(parsed, func.func_name, compiler)
+    checker_output := check(&a, parsed, func.func_name, compiler)
     function_type := unknown_type
     if checker_output.func_ref.index < len(checker_output.checked_funcs) {
         function_type = checker_output.checked_funcs[checker_output.func_ref.index].type

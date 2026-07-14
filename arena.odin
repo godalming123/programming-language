@@ -5,6 +5,8 @@ package main
 // - `dealloc` is called in the reverse order that `alloc` is called in
 // See `arena_test` in `test.odin` for an example
 
+import "base:runtime"
+import "core:fmt"
 import "core:mem"
 import "core:mem/virtual"
 
@@ -23,10 +25,19 @@ ArenaBlockInfo :: struct {
     arena:                    ^Arena,
 }
 
-ArenaAllocation :: struct {
+_ArenaAllocation :: struct {
     block:                    ^virtual.Memory_Block,
     prev_allocation_in_arena: ^ArenaAllocation,
     prev_allocation_in_block: ^ArenaAllocation,
+}
+
+when ODIN_DEBUG {
+    ArenaAllocation :: struct {
+        using a: _ArenaAllocation,
+        loc:     runtime.Source_Code_Location,
+    }
+} else {
+    ArenaAllocation :: _ArenaAllocation
 }
 
 get_block_info :: proc(block: ^virtual.Memory_Block) -> ^ArenaBlockInfo {
@@ -60,10 +71,13 @@ create_block :: proc(a: ^Arena) {
     a.last_block = block
 }
 
-alloc :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location) -> ^T {
-    when debug_arena {
-        print_call(loc, "alloc")
-    }
+alloc :: proc(
+    a: ^Arena,
+    size: uint,
+    alignment: uint,
+    resizable: bool,
+    loc: runtime.Source_Code_Location,
+) -> []byte {
     if a.last_resizable_block == nil {
         create_block(a)
     }
@@ -79,7 +93,7 @@ alloc :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location
         panic("Failed to allocate from memory block")
     }
 
-    data, err2 := virtual.alloc_from_memory_block(a.last_resizable_block, size_of(T), align_of(T))
+    data, err2 := virtual.alloc_from_memory_block(a.last_resizable_block, size, alignment)
     if err2 != nil {
         panic("Failed to allocate from memory block")
     }
@@ -88,6 +102,9 @@ alloc :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location
     arena_allocation.prev_allocation_in_block = last_resizable_block_info.last_allocation_in_block
     arena_allocation.prev_allocation_in_arena = a.last_allocation
     arena_allocation.block = a.last_resizable_block
+    when ODIN_DEBUG {
+        arena_allocation.loc = loc
+    }
 
     last_resizable_block_info.last_allocation_in_block = arena_allocation
     a.last_allocation = arena_allocation
@@ -97,7 +114,47 @@ alloc :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location
         last_resizable_block_info.last_resizable_block = nil
     }
 
-    return (^T)(raw_data(data))
+    return data
+}
+
+arena_new :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location) -> ^T {
+    when debug_arena {
+        print_call(loc, "arena_new")
+    }
+    allocated := alloc(a, size_of(T), align_of(T), resizable, loc)
+    return (^T)(raw_data(allocated))
+}
+
+arena_make :: proc(
+    a: ^Arena,
+    $T: typeid/[]$E,
+    len: int,
+    resizable := false,
+    loc := #caller_location,
+) -> T {
+    when debug_arena {
+        print_call(loc, "arena_make")
+    }
+    allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
+    out: T = ---
+    out_raw := (^runtime.Raw_Slice)(&out)
+    out_raw.data = raw_data(allocated)
+    out_raw.len = len
+    return out
+}
+
+arena_make_multi :: proc(
+    a: ^Arena,
+    $T: typeid/[^]$E,
+    len: int,
+    resizable := false,
+    loc := #caller_location,
+) -> T {
+    when debug_arena {
+        print_call(loc, "arena_make_multi")
+    }
+    allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
+    return (T)(raw_data(allocated))
 }
 
 AllocationInfo :: struct {
@@ -124,9 +181,9 @@ is_resizable :: proc {
     is_resiable_from_allocation,
 }
 
-realloc :: proc(allocation: rawptr, new_size: int, loc := #caller_location) {
+resize :: proc(allocation: rawptr, new_size: int, loc := #caller_location) {
     when debug_arena {
-        print_call(loc, "realloc")
+        print_call(loc, "resize")
     }
     info := get_info(allocation)
     assert(is_resizable(info))
@@ -188,7 +245,18 @@ delete_arena :: proc(a: ^Arena, expect_empty := true, loc := #caller_location) {
         }
 
         // Expect that `fix_resizable` has been called for all resizable elements which were allocated on the arena
-        assert(block in resizable_blocks)
+        if block not_in resizable_blocks {
+            when ODIN_DEBUG {
+                panic(
+                    fmt.aprintf(
+                        "There was a resizable allocation allocated at %v for which `fix_resizable` was not called",
+                        block_info.last_allocation_in_block.loc,
+                    ),
+                )
+            } else {
+                panic("There was a resizable allocation for which `fix_resizable` was not called")
+            }
+        }
 
         prev_block := block.prev
         virtual.memory_block_dealloc(block)

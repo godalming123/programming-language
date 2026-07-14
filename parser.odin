@@ -9,12 +9,13 @@ import "core:strings"
 
 FileRef :: ^CompilerFile
 
-get_index :: proc(files: [^]CompilerFile, ref: FileRef, loc := #caller_location) -> int {
+get_file_index :: proc(files: [^]CompilerFile, ref: FileRef, loc := #caller_location) -> int {
     return mem.ptr_sub(ref, cast(^CompilerFile)files)
 }
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
+    a:                              Arena,
     // Updated every time the parser starts parsing a different file
     using tokenizer_state:          TokenizerState,
 
@@ -28,23 +29,26 @@ ParserState :: struct {
 }
 
 // Does not include the `{`
-parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
-    fields_map := make(map[string]uint)
-    fields := make(#soa[dynamic]StructField(Unit))
+parse_struct :: proc(s: ^ParserState) -> (StructUnit, bool) {
+    out := StructUnit {
+        make_key_to_index(&s.a, KeyToIndex(string)),
+        arena_make_multi(&s.a, [^]Pos, 0),
+        arena_make_multi(&s.a, [^]Unit, 0),
+    }
     for {
         field: IdentAndPos = ---
         get_next_token(s, true)
-        wrong_token :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
+        wrong_token :: proc(s: ^ParserState) -> (StructUnit, bool) {
             wrong_token_err(
                 s,
                 []string{"an identifier with one segment", "`}`"},
                 "While parsing struct type",
             )
-            return Struct(Unit){}, false
+            return StructUnit{}, false
         }
         #partial switch token in s.last_token {
         case CloseBraceToken:
-            return Struct(Unit){fields_map, fields[:]}, true
+            return out, true
         case IdentToken:
             if len(token) != 1 {
                 return wrong_token(s)
@@ -52,16 +56,6 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
             field = IdentAndPos{token[0].ident, token[0].pos}
         case:
             return wrong_token(s)
-        }
-        if field.ident in fields_map {
-            diagnostic(
-                &s.r,
-                field.pos,
-                "There is already a field called `%s` defined in this struct at %v",
-                field.ident,
-                fields[fields_map[field.ident]].name.pos,
-            )
-            return Struct(Unit){}, false
         }
 
         get_next_token(s, false)
@@ -77,11 +71,23 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
         get_next_token(s, true)
         parsed := parse_unit(s)
         if !parsed.ok {
-            return Struct(Unit){}, false
+            return StructUnit{}, false
         }
-
-        fields_map[field.ident] = len(fields)
-        append(&fields, StructField(Unit){field, parsed.unit})
+        i, result := lookup_or_insert(&out.m, field.ident, string_to_index_procs)
+        if result == .LookedUp {
+            diagnostic(
+                &s.r,
+                field.pos,
+                "There is already a field called `%s` defined in this struct at %v",
+                field.ident,
+                out.positions[i.index],
+            )
+            return StructUnit{}, false
+        }
+        resize(out.positions, len(out.m.keys))
+        resize(out.types, len(out.m.keys))
+        out.positions[i.index] = field.pos
+        out.types[i.index] = parsed.unit
 
         #partial switch _ in s.last_token {
         case:
@@ -91,10 +97,10 @@ parse_struct :: proc(s: ^ParserState) -> (Struct(Unit), bool) {
                 "`}`",
             )
             wrong_token_err(s, parsed.descriptions_of_other_possible_tokens[:])
-            return Struct(Unit){}, false
+            return StructUnit{}, false
         case CommaToken:
         case CloseBraceToken:
-            return Struct(Unit){fields_map, fields[:]}, true
+            return out, true
         }
     }
 }
@@ -207,8 +213,11 @@ parse_initial_unit :: proc(
         }
 
     case OpenAngleBracketToken:
-        variants_map := make(map[string]uint)
-        variants := make(#soa[dynamic]SumTypeVariant(Struct(Unit)))
+        sum_type := SumUnit {
+            make_key_to_index(&s.a, KeyToIndex(string)),
+            arena_make_multi(&s.a, [^]Pos, 0, resizable = true),
+            arena_make_multi(&s.a, [^]StructUnit, 0, resizable = true),
+        }
         loop: for {
             get_next_token(s, true)
             expected :: []string{"an identifier with one segment", "`>`"}
@@ -224,16 +233,7 @@ parse_initial_unit :: proc(
                     return Unit{}, nil, false
                 }
                 variant_name := token2[0]
-                if variant_name.ident in variants_map {
-                    diagnostic(
-                        &s.r,
-                        variant_name.pos,
-                        "There is already a variant called `%s` in this sum type",
-                        variant_name.ident,
-                    )
-                    return Unit{}, nil, false
-                }
-                variant_payload := Struct(Unit){}
+                variant_payload := StructUnit{}
                 get_next_token(s, true)
                 _, has_payload := s.last_token.(OpenBraceToken)
                 if has_payload {
@@ -243,14 +243,25 @@ parse_initial_unit :: proc(
                     }
                     get_next_token(s, false)
                 }
-                variants_map[variant_name.ident] = len(&variants)
-                append(
-                    &variants,
-                    SumTypeVariant(Struct(Unit)) {
-                        IdentAndPos{variant_name.ident, variant_name.pos},
-                        variant_payload,
-                    },
+                i, result := lookup_or_insert(
+                    &sum_type.m,
+                    variant_name.ident,
+                    string_to_index_procs,
                 )
+                if result == .LookedUp {
+                    diagnostic(
+                        &s.r,
+                        variant_name.pos,
+                        "There is already a variant called `%s` in this sum type at %v",
+                        variant_name.ident,
+                        sum_type.positions[i.index],
+                    )
+                    return Unit{}, nil, false
+                }
+                resize(sum_type.positions, len(sum_type.m.keys))
+                resize(sum_type.payloads, len(sum_type.m.keys))
+                sum_type.positions[i.index] = variant_name.pos
+                sum_type.payloads[i.index] = variant_payload
                 #partial switch _ in s.last_token {
                 case:
                     expected := [dynamic]string{"`,`", "`>`"}
@@ -271,7 +282,7 @@ parse_initial_unit :: proc(
                 }
             }
         }
-        out.value = SumType(Struct(Unit)){variants_map, variants[:]}
+        out.value = sum_type
 
     case OpenSquareBracketToken:
         args, args_ok := parse_units_until(s, is_close_square_bracket, "`]`")
@@ -1309,7 +1320,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                 return false
             }
             name := token[0].ident
-            if def, exists := s.parsed_files[get_index(s.files, s.file_ref)][name]; exists {
+            if def, exists := s.parsed_files[get_file_index(s.files, s.file_ref)][name]; exists {
                 diagnostic(
                     &s.r,
                     position,
@@ -1395,7 +1406,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     return false
                 }
                 if len(generic) == 0 {
-                    s.parsed_files[get_index(s.files, s.file_ref)][name] = ParsedGlobal {
+                    s.parsed_files[get_file_index(s.files, s.file_ref)][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_without_generics)),
                         false,
@@ -1405,7 +1416,7 @@ parse_file :: proc(s: ^ParserState) -> bool {
                         GlobalValueWithoutGeneric{name, type.unit, s.file_ref},
                     )
                 } else {
-                    s.parsed_files[get_index(s.files, s.file_ref)][name] = ParsedGlobal {
+                    s.parsed_files[get_file_index(s.files, s.file_ref)][name] = ParsedGlobal {
                         position.index,
                         u32(len(s.global_values_with_generics)),
                         true,
@@ -1475,7 +1486,7 @@ parse_project :: proc(
     state.file_ref = state.files
 
     ok := true
-    for get_index(state.files, state.file_ref) < len(state.parsed_files) {
+    for get_file_index(state.files, state.file_ref) < len(state.parsed_files) {
         file_path := state.file_ref.file_path
         fmt.printfln("Parsing `%s`...", file_path)
         state.tokenizer_state = TokenizerState {
@@ -1485,7 +1496,7 @@ parse_project :: proc(
         if !file_ok {
             ok = false
         }
-        state.file_ref = &state.files[get_index(state.files, state.file_ref) + 1]
+        state.file_ref = &state.files[get_file_index(state.files, state.file_ref) + 1]
     }
     if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
         #partial switch &exit_early_info_value in exit_early_info {

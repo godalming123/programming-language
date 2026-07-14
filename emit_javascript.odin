@@ -134,7 +134,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case CheckedFieldAccess:
         emit_js_value(s, v.value^)
         strings.write_string(&s.b, ".field")
-        strings.write_uint(&s.b, v.field_index)
+        strings.write_uint(&s.b, uint(v.field_index))
     case LengthOfArray:
         emit_js_value(s, v.array^)
         strings.write_string(&s.b, ".length")
@@ -219,22 +219,22 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
 emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
-    switch t in s.types.values[index].key {
+    switch t in s.types.m.keys[index].key {
     case OrderedHashMapTypeWithStringKey:
     case OrderedHashMapTypeWithI64Key:
     case ArrayType:
     case FuncType:
     case GenericTypeValue:
-    case SumType(Type):
-        for variant, i in t.variants {
-            payload := get_type(s.types, variant.payload).key.(Struct(Type))
+    case SumType:
+        for _, i in t.m.keys {
+            payload := get_type(s.types, t.payloads[i]).key.(StructType)
             strings.write_string(&s.b, "function init_")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")
             strings.write_int(&s.b, i)
             strings.write_byte(&s.b, '(')
             first_arg := true
-            for _, j in payload.fields {
+            for _, j in payload.m.keys {
                 if first_arg {
                     first_arg = false
                 } else {
@@ -245,19 +245,19 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
             }
             strings.write_string(&s.b, ") {return {variant:")
             strings.write_int(&s.b, i)
-            for _, j in payload.fields {
+            for _, j in payload.m.keys {
                 strings.write_byte(&s.b, ',')
                 strings.write_string(&s.b, "field")
                 strings.write_int(&s.b, j)
             }
             strings.write_string(&s.b, "}}")
         }
-    case Struct(Type):
+    case StructType:
         strings.write_string(&s.b, "function init_")
         strings.write_string(&s.b, name)
         strings.write_byte(&s.b, '(')
         first_field := true
-        for _, i in t.fields {
+        for _, i in t.m.keys {
             if first_field {
                 first_field = false
             } else {
@@ -268,7 +268,7 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
         }
         strings.write_string(&s.b, ") {return {")
         first_field = true
-        for _, i in t.fields {
+        for _, i in t.m.keys {
             if first_field {
                 first_field = false
             } else {
@@ -406,7 +406,7 @@ emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> s
     s := GeneralEmitterState{strings.builder_make(), types, checked_functions}
     strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
-    for _, index in types.values {
+    for _, index in types.m.keys {
         emit_js_global_type(&s, index)
     }
 

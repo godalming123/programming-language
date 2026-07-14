@@ -1,8 +1,6 @@
 package main
 
-import "base:runtime"
-
-Type :: OrderedHashMapSlotRef
+Type :: Index
 // TypeList :: OrderedHashSetSlotRef
 
 string_type :: Type{max(u32)}
@@ -81,7 +79,7 @@ http_response_body_type :: Type{18}
 // >
 http_response_type :: Type{19}
 
-response_type_variant_index_to_content_type :: proc(variant_index: uint) -> string {
+response_type_variant_index_to_content_type :: proc(variant_index: u32) -> string {
     switch variant_index {
     case 0:
         return "text/plain"
@@ -129,70 +127,78 @@ TypeKey :: union {
     OrderedHashMapTypeWithI64Key,
     FuncType,
     GenericTypeValue, // The `TypeValue.type` is the initialised type, which is set to `unknown_type` when the generic is not initialised yet
-    SumType(Type), // The type is always a struct
-    Struct(Type), // The `TypeValue.type` is the initialisation function
+    SumType, // The type is always a struct
+    StructType, // The `TypeValue.type` is the initialisation function
 }
 
-init_struct_type :: proc(types: ^Types, type: Type, fields: #soa[]StructField(Type)) {
-    assert(types.values[type.index].value.type == unknown_type)
+init_struct_type :: proc(types: ^Types, type: Type, fields: []Type) {
+    assert(types.values[type.index].type == unknown_type)
 
     return_types := make([]Type, 1)
     return_types[0] = type
 
-    t := create_type(types, FuncType{fields.type[:len(fields)], return_types}).type
-    types.values[type.index].value.type = t
+    t := create_type(types, FuncType{fields, return_types}).type
+    types.values[type.index].type = t
 }
 
-create_types :: proc() -> Types {
-    out: Types
+fix_types :: proc(t: Types) {
+    fix_key_to_index(t.m)
+    fix_resizable(t.values)
+}
 
-    array_with_string_type := make([]Type, 1)
+create_types :: proc(a: ^Arena) -> Types {
+    out := Types {
+        make_key_to_index(a, KeyToIndex(TypeKey)),
+        arena_make_multi(a, [^]TypeValue, 0, resizable = true),
+    }
+
+    array_with_string_type := arena_make(a, []Type, 1)
     array_with_string_type[0] = string_type
 
-    array_with_2string_types := make([]Type, 2)
+    array_with_2string_types := arena_make(a, []Type, 2)
     array_with_2string_types[0] = string_type
     array_with_2string_types[1] = string_type
 
-    array_with_i64_type := make([]Type, 1)
+    array_with_i64_type := arena_make(a, []Type, 1)
     array_with_i64_type[0] = i64_type
 
-    array_with_u64_type := make([]Type, 1)
+    array_with_u64_type := arena_make(a, []Type, 1)
     array_with_u64_type[0] = u64_type
 
-    array_with_string_any_ordered_hash_map_and_string := make([]Type, 2)
+    array_with_string_any_ordered_hash_map_and_string := arena_make(a, []Type, 2)
     array_with_string_any_ordered_hash_map_and_string[0] = string_any_ordered_hashmap_type
     array_with_string_any_ordered_hash_map_and_string[1] = string_type
 
-    array_with_dynamic_array_of_strings := make([]Type, 1)
+    array_with_dynamic_array_of_strings := arena_make(a, []Type, 1)
     array_with_dynamic_array_of_strings[0] = dynamic_array_of_strings
 
-    array_with_string_i64_types := make([]Type, 2)
+    array_with_string_i64_types := arena_make(a, []Type, 2)
     array_with_string_i64_types[0] = string_type
     array_with_string_i64_types[1] = i64_type
 
-    array_with_compiler_type := make([]Type, 1)
+    array_with_compiler_type := arena_make(a, []Type, 1)
     array_with_compiler_type[0] = compiler_type
 
-    array_with_string_any_type := make([]Type, 2)
+    array_with_string_any_type := arena_make(a, []Type, 2)
     array_with_string_any_type[0] = string_type
     array_with_string_any_type[1] = any_type
 
-    array_with_bool_type := make([]Type, 1)
+    array_with_bool_type := arena_make(a, []Type, 1)
     array_with_bool_type[0] = bool_type
 
-    array_with_any_type := make([]Type, 1)
+    array_with_any_type := arena_make(a, []Type, 1)
     array_with_any_type[0] = any_type
 
-    array_with_http_request := make([]Type, 1)
+    array_with_http_request := arena_make(a, []Type, 1)
     array_with_http_request[0] = http_request_type
 
-    array_with_http_response := make([]Type, 1)
+    array_with_http_response := arena_make(a, []Type, 1)
     array_with_http_response[0] = http_response_type
 
-    array_with_http_request_handler := make([]Type, 1)
+    array_with_http_request_handler := arena_make(a, []Type, 1)
     array_with_http_request_handler[0] = http_request_handler_type
 
-    array_with_http_server := make([]Type, 1)
+    array_with_http_server := arena_make(a, []Type, 1)
     array_with_http_server[0] = http_server_type
 
     assert(dynamic_array_of_strings == create_type(&out, ArrayType{0, string_type}).type)
@@ -237,40 +243,44 @@ create_types :: proc() -> Types {
         create_type(&out, FuncType{array_with_string_type, array_with_any_type}).type,
     )
 
-    compiler_cache_fields := make(#soa[]StructField(Type), 3)
-    compiler_cache_fields[0] = StructField(Type) {
-        IdentAndPos{"contains", unknown_pos},
-        string_to_bool_type,
-    }
-    compiler_cache_fields[1] = StructField(Type) {
-        IdentAndPos{"set", unknown_pos},
-        string_any_to_nil_type,
-    }
-    compiler_cache_fields[2] = StructField(Type) {
-        IdentAndPos{"get", unknown_pos},
-        string_to_any_type,
-    }
-    compiler_cache_fields_map: map[string]uint
-    compiler_cache_fields_map["contains"] = 0
-    compiler_cache_fields_map["set"] = 1
-    compiler_cache_fields_map["get"] = 2
+    positions := arena_make_multi(a, [^]Pos, 3)
+    positions[0] = unknown_pos
+    positions[1] = unknown_pos
+    positions[2] = unknown_pos
+
+    compiler_cache_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ := lookup_or_insert(&compiler_cache_map, "contains", string_to_index_procs)
+    assert(i.index == 0)
+    i, _ = lookup_or_insert(&compiler_cache_map, "set", string_to_index_procs)
+    assert(i.index == 1)
+    i, _ = lookup_or_insert(&compiler_cache_map, "get", string_to_index_procs)
+    assert(i.index == 2)
+    fix_key_to_index(compiler_cache_map)
+
+    compiler_cache_types := arena_make(a, []Type, 3)
+    compiler_cache_types[0] = string_to_bool_type
+    compiler_cache_types[1] = string_any_to_nil_type
+    compiler_cache_types[2] = string_to_any_type
+
     assert(
         compiler_cache_type ==
-        create_type(&out, Struct(Type){compiler_cache_fields_map, compiler_cache_fields}).type,
+        create_type(&out, StructType{compiler_cache_map, positions, &compiler_cache_types[0]}).type,
     )
 
-    compiler_fields := make(#soa[]StructField(Type), 2)
-    compiler_fields[0] = StructField(Type) {
-        IdentAndPos{"emit_js_code", unknown_pos},
-        string_any_ordered_hashmap_and_string_to_string_type,
-    }
-    compiler_fields[1] = StructField(Type){IdentAndPos{"cache", unknown_pos}, compiler_cache_type}
-    compiler_fields_map: map[string]uint
-    compiler_fields_map["emit_js_code"] = 0
-    compiler_fields_map["cache"] = 1
+    compiler_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ = lookup_or_insert(&compiler_map, "emit_js_code", string_to_index_procs)
+    assert(i.index == 0)
+    i, _ = lookup_or_insert(&compiler_map, "cache", string_to_index_procs)
+    assert(i.index == 1)
+    fix_key_to_index(compiler_map)
+
+    compiler_types := arena_make(a, []Type, 2)
+    compiler_types[0] = string_any_ordered_hashmap_and_string_to_string_type
+    compiler_types[1] = compiler_cache_type
+
     assert(
         compiler_type ==
-        create_type(&out, Struct(Type){compiler_fields_map, compiler_fields}).type,
+        create_type(&out, StructType{compiler_map, positions, &compiler_types[0]}).type,
     )
 
     assert(
@@ -278,49 +288,48 @@ create_types :: proc() -> Types {
         create_type(&out, FuncType{array_with_compiler_type, array_with_i64_type}).type,
     )
 
-    http_request_type_fields := make(#soa[]StructField(Type), 2)
-    http_request_type_fields[0] = StructField(Type){IdentAndPos{"url", unknown_pos}, string_type}
-    http_request_type_fields[1] = StructField(Type) {
-        IdentAndPos{"method", unknown_pos},
-        string_type,
-    }
-    http_request_type_fields_map: map[string]uint
-    http_request_type_fields_map["url"] = 0
-    http_request_type_fields_map["method"] = 1
+    http_request_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ = lookup_or_insert(&http_request_map, "url", string_to_index_procs)
+    assert(i.index == 0)
+    i, _ = lookup_or_insert(&http_request_map, "method", string_to_index_procs)
+    assert(i.index == 1)
+    fix_key_to_index(http_request_map)
+
+    http_request_types := arena_make(a, []Type, 2)
+    http_request_types[0] = string_type
+    http_request_types[1] = string_type
     assert(
         http_request_type ==
-        create_type(&out, Struct(Type){http_request_type_fields_map, http_request_type_fields}).type,
+        create_type(&out, StructType{http_request_map, positions, &http_request_types[0]}).type,
     )
 
-    http_response_body_fields := make(#soa[]StructField(Type), 1)
-    http_response_body_fields[0] = StructField(Type){IdentAndPos{"body", unknown_pos}, string_type}
-    http_response_body_fields_map: map[string]uint
-    http_response_body_fields_map["body"] = 0
+    http_response_body_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ = lookup_or_insert(&http_response_body_map, "body", string_to_index_procs)
+    assert(i.index == 0)
+    fix_key_to_index(http_response_body_map)
+
     assert(
         http_response_body_type ==
-        create_type(&out, Struct(Type){http_response_body_fields_map, http_response_body_fields}).type,
+        create_type(&out, StructType{http_response_body_map, positions, &array_with_string_type[0]}).type,
     )
 
-    http_response_type_variants := make(#soa[]SumTypeVariant(Type), 3)
-    http_response_type_variants[0] = SumTypeVariant(Type) {
-        IdentAndPos{"Plain", unknown_pos},
-        http_response_body_type,
-    }
-    http_response_type_variants[1] = SumTypeVariant(Type) {
-        IdentAndPos{"Css", unknown_pos},
-        http_response_body_type,
-    }
-    http_response_type_variants[2] = SumTypeVariant(Type) {
-        IdentAndPos{"Html", unknown_pos},
-        http_response_body_type,
-    }
-    http_response_type_variants_map: map[string]uint
-    http_response_type_variants_map["Plain"] = 0
-    http_response_type_variants_map["Css"] = 1
-    http_response_type_variants_map["Html"] = 2
+    http_response_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ = lookup_or_insert(&http_response_map, "Plain", string_to_index_procs)
+    assert(i.index == 0)
+    i, _ = lookup_or_insert(&http_response_map, "Css", string_to_index_procs)
+    assert(i.index == 1)
+    i, _ = lookup_or_insert(&http_response_map, "Html", string_to_index_procs)
+    assert(i.index == 2)
+    fix_key_to_index(http_response_map)
+
+    http_response_types := arena_make(a, []Type, 3)
+    http_response_types[0] = http_response_body_type
+    http_response_types[1] = http_response_body_type
+    http_response_types[2] = http_response_body_type
+
     assert(
         http_response_type ==
-        create_type(&out, SumType(Type){http_response_type_variants_map, http_response_type_variants}).type,
+        create_type(&out, SumType{http_response_map, positions, &http_response_types[0]}).type,
     )
 
     assert(
@@ -333,23 +342,22 @@ create_types :: proc() -> Types {
         create_type(&out, FuncType{array_with_http_request_handler, nil}).type,
     )
 
-    http_server_fields := make(#soa[]StructField(Type), 3)
-    http_server_fields[0] = StructField(Type) {
-        IdentAndPos{"set_handler", unknown_pos},
-        http_request_handler_to_nil_type,
-    }
-    http_server_fields[1] = StructField(Type) {
-        IdentAndPos{"listen_and_serve", unknown_pos},
-        no_args_to_nil_type,
-    }
-    http_server_fields[2] = StructField(Type){IdentAndPos{"port", unknown_pos}, i64_type}
-    http_server_fields_map: map[string]uint
-    http_server_fields_map["set_handler"] = 0
-    http_server_fields_map["listen_and_serve"] = 1
-    http_server_fields_map["port"] = 2
+    http_server_map := make_key_to_index(a, KeyToIndex(string))
+    i, _ = lookup_or_insert(&http_server_map, "set_handler", string_to_index_procs)
+    assert(i.index == 0)
+    i, _ = lookup_or_insert(&http_server_map, "listen_and_serve", string_to_index_procs)
+    assert(i.index == 1)
+    i, _ = lookup_or_insert(&http_server_map, "port", string_to_index_procs)
+    assert(i.index == 2)
+    fix_key_to_index(http_server_map)
+
+    http_server_types := arena_make(a, []Type, 3)
+    http_server_types[0] = http_request_handler_to_nil_type
+    http_server_types[1] = no_args_to_nil_type
+    http_server_types[2] = i64_type
     assert(
         http_server_type ==
-        create_type(&out, Struct(Type){http_server_fields_map, http_server_fields}).type,
+        create_type(&out, StructType{http_server_map, positions, &http_server_types[0]}).type,
     )
 
     assert(
@@ -357,21 +365,24 @@ create_types :: proc() -> Types {
         create_type(&out, FuncType{nil, array_with_http_server}).type,
     )
 
-    init_struct_type(&out, compiler_type, compiler_fields)
-    init_struct_type(&out, compiler_cache_type, compiler_cache_fields)
-    init_struct_type(&out, http_request_type, http_request_type_fields)
-    init_struct_type(&out, http_response_body_type, http_response_body_fields)
-    init_struct_type(&out, http_server_type, http_server_fields)
+    init_struct_type(&out, compiler_type, compiler_types)
+    init_struct_type(&out, compiler_cache_type, compiler_cache_types)
+    init_struct_type(&out, http_request_type, http_request_types)
+    init_struct_type(&out, http_response_body_type, array_with_string_type)
+    init_struct_type(&out, http_server_type, http_server_types)
 
     return out
 }
 
 TypeValue :: struct {
-    aliases: [dynamic]string,
-    type:    Type, // Usually `unknown_type`
+    // aliases: [dynamic]string, // TODO
+    type: Type, // Usually `unknown_type`
 }
 
-Types :: OrderedHashMap(TypeKey, TypeValue)
+Types :: struct {
+    m:      KeyToIndex(TypeKey),
+    values: [^]TypeValue,
+}
 
 GotType :: struct {
     key:   TypeKey,
@@ -382,8 +393,7 @@ get_type :: proc(types: Types, t: Type) -> GotType {
     if t.index > max_index {
         return GotType{nil, TypeValue{}}
     }
-    slot_key, slot_value := get_value(types, t)
-    return GotType{slot_key, slot_value}
+    return GotType{types.m.keys[t.index].key, types.values[t.index]}
 }
 
 CreatedType :: struct {
@@ -402,15 +412,16 @@ create_type :: proc(
         print_call(loc, "create_type")
         debug("value: %v", value)
     }
-    type, type_value, result := ordered_hash_map_insert(
-        types,
+    type, result := lookup_or_insert(
+        &types.m,
         value,
-        hash_type_value(value),
-        TypeValue{aliases, unknown_type},
-        type_key_is_equal,
+        KeyToIndexProcs(TypeKey){hash_type_value, type_key_is_equal},
         loc,
     )
-    out := CreatedType{type, type_value, result}
+    resize(types.values, len(types.m.keys) * size_of(TypeValue))
+    types.values[type.index] = TypeValue{unknown_type}
+
+    out := CreatedType{type, types.values[type.index], result}
     when debug_checker {
         debug("out: %v", out)
     }
@@ -425,9 +436,9 @@ hash_type_value :: proc(value: TypeKey) -> u32 {
         return v.value_type.index + 1
     case OrderedHashMapTypeWithI64Key:
         return v.value_type.index + 2
-    case SumType(Type):
+    case SumType:
         return hash_sum_type(v)
-    case Struct(Type):
+    case StructType:
         return hash_struct_type(v)
     case FuncType:
         return hash_func_type(v)
@@ -437,24 +448,24 @@ hash_type_value :: proc(value: TypeKey) -> u32 {
     panic("Unreachable")
 }
 
-hash_struct_type :: proc(value: Struct(Type)) -> u32 {
+hash_struct_type :: proc(value: StructType) -> u32 {
     result: u32
-    for field, j in value.fields {
-        for c in field.name.ident {
-            result ~= u32(c) ~ u32(j)
+    for field, i in value.m.keys {
+        for c in field.key {
+            result ~= u32(c) ~ u32(i)
         }
-        result ~= field.type.index
+        result ~= value.types[i].index
     }
     return result
 }
 
-hash_sum_type :: proc(value: SumType(Type)) -> u32 {
+hash_sum_type :: proc(value: SumType) -> u32 {
     result: u32
-    for variant in value.variants {
-        for c in variant.name.ident {
+    for variant, i in value.m.keys {
+        for c in variant.key {
             result ~= u32(c)
         }
-        result ~= variant.payload.index
+        result ~= value.payloads[i].index
     }
     return result
 }
@@ -470,7 +481,7 @@ hash_func_type :: proc(value: FuncType) -> u32 {
     return result
 }
 
-type_key_is_equal :: proc(a: TypeKey, b: TypeKey, loc: runtime.Source_Code_Location) -> bool {
+type_key_is_equal :: proc(a: TypeKey, b: TypeKey) -> bool {
     switch va in a {
     case OrderedHashMapTypeWithStringKey:
         vb, ok := b.(OrderedHashMapTypeWithStringKey)
@@ -481,18 +492,18 @@ type_key_is_equal :: proc(a: TypeKey, b: TypeKey, loc: runtime.Source_Code_Locat
     case ArrayType:
         vb, ok := b.(ArrayType)
         return ok && va.length == vb.length && va.item_type.index == vb.item_type.index
-    case SumType(Type):
-        vb, ok := b.(SumType(Type))
+    case SumType:
+        vb, ok := b.(SumType)
         if !ok {
             return false
         }
-        return sum_types_are_equal(va, vb, loc)
-    case Struct(Type):
-        vb, ok := b.(Struct(Type))
+        return sum_types_are_equal(va, vb)
+    case StructType:
+        vb, ok := b.(StructType)
         if !ok {
             return false
         }
-        return struct_types_are_equal(va, vb, loc)
+        return struct_types_are_equal(va, vb)
     case FuncType:
         vb, ok := b.(FuncType)
         if !ok {
@@ -521,40 +532,30 @@ type_key_is_equal :: proc(a: TypeKey, b: TypeKey, loc: runtime.Source_Code_Locat
     }
 }
 
-struct_types_are_equal :: proc(
-    a: Struct(Type),
-    b: Struct(Type),
-    loc: runtime.Source_Code_Location,
-) -> bool {
-    if len(a.fields) != len(b.fields) {
+struct_types_are_equal :: proc(a: StructType, b: StructType) -> bool {
+    if len(a.m.keys) != len(b.m.keys) {
         return false
     }
-    for a_field, i in a.fields {
-        b_field := b.fields[i]
-        if a_field.name.ident != b_field.name.ident {
+    for a_key, i in a.m.keys {
+        if a_key.key != b.m.keys[i].key {
             return false
         }
-        if a_field.type != b_field.type {
+        if a.types[i] != b.types[i] {
             return false
         }
     }
     return true
 }
 
-sum_types_are_equal :: proc(
-    a: SumType(Type),
-    b: SumType(Type),
-    loc: runtime.Source_Code_Location,
-) -> bool {
-    if len(a.variants) != len(b.variants) {
+sum_types_are_equal :: proc(a: SumType, b: SumType) -> bool {
+    if len(a.m.keys) != len(b.m.keys) {
         return false
     }
-    for a_variant, i in a.variants {
-        b_variant := b.variants[i]
-        if a_variant.name.ident != b_variant.name.ident {
+    for a_key, i in a.m.keys {
+        if a_key.key != b.m.keys[i].key {
             return false
         }
-        if a_variant.payload != b_variant.payload {
+        if a.payloads[i] != b.payloads[i] {
             return false
         }
     }

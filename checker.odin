@@ -1,6 +1,5 @@
 package main
 
-import "base:runtime"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -58,22 +57,6 @@ CheckedGlobalValue :: struct {
     value: CompileTimeValue,
 }
 
-generic_initialisation_equal_func :: proc(
-    v0: GenericInitialisation,
-    v1: GenericInitialisation,
-    loc: runtime.Source_Code_Location,
-) -> bool {
-    if len(v0.args) != len(v1.args) {
-        return false
-    }
-    for arg, i in v0.args {
-        if arg != v1.args[i] {
-            return false
-        }
-    }
-    return true
-}
-
 CheckerState :: struct {
     // The following fields do not change while checking
     parsed_files:                  []map[string]ParsedGlobal, // len(parsed_files) == len(r.files)
@@ -82,8 +65,12 @@ CheckerState :: struct {
     func_defs:                     []FunctionDefinition,
 
     // The following fields change while checking
+    a:                             ^Arena,
     using r:                       DiagnosticReporter,
-    generic_initialisations:       OrderedHashMap(GenericInitialisation, CheckedGlobalValue),
+    generic_initialisations:       struct {
+        m:      KeyToIndex(GenericInitialisation),
+        values: [^]CheckedGlobalValue,
+    },
     checked_functions:             [dynamic]CheckedFunction,
     first_unchecked_function:      uint,
     types:                         Types,
@@ -128,7 +115,7 @@ OrderedHashMapInitFunc :: struct {
 }
 SumTypeInitFunc :: struct {
     sum_type:      Type,
-    variant_index: uint,
+    variant_index: u32,
 }
 LengthOfArray :: struct {
     array: ^CheckedValue,
@@ -156,7 +143,7 @@ CheckedArrayAccess :: struct {
 }
 CheckedFieldAccess :: struct {
     value:       ^CheckedValue,
-    field_index: uint,
+    field_index: u32,
 }
 BoolValue :: distinct bool
 StringsAreEqual :: struct {
@@ -351,14 +338,18 @@ no_generic_args :: map[string]Type{}
 
 check_struct_type :: proc(
     s: ^CheckerState,
-    type: Struct(Unit),
+    type: StructUnit,
     generic_args: map[string]Type,
 ) -> Type {
-    field_types := make([]Type, len(type.fields))
+    field_types := arena_make_multi(s.a, [^]Type, len(type.m.keys))
     ok := true
-    for field, i in type.fields {
-        expect_snake_case(s, "the name of a struct field", field.name)
-        field_types[i] = check_type(s, field.type, generic_args)
+    for field, i in type.m.keys {
+        expect_snake_case(
+            s,
+            "the name of a struct field",
+            IdentAndPos{field.key, type.positions[i]},
+        )
+        field_types[i] = check_type(s, type.types[i], generic_args)
         if field_types[i] == invalid_type {
             ok = false
         }
@@ -367,10 +358,9 @@ check_struct_type :: proc(
         return invalid_type
     }
 
-    fields: #soa[]StructField(Type) = soa_zip(type.fields.name[:len(type.fields)], field_types)
-    created := create_type(&s.types, Struct(Type){type.fields_map, fields})
+    created := create_type(&s.types, StructType{type.m, type.positions, field_types})
     if created.type_value.type == unknown_type {
-        init_struct_type(&s.types, created.type, fields)
+        init_struct_type(&s.types, created.type, field_types[:len(type.m.keys)])
     }
     assert(get_type(s.types, created.type).value.type != unknown_type)
     return created.type
@@ -642,6 +632,23 @@ type_is_numeric :: proc(s: ^CheckerState, type: Type) -> bool {
 
 non_compiletime_global_err :: "This value is not a compile time known constant\nAll global values must be compile time known constants"
 
+generic_initialisation_to_index_procs :: KeyToIndexProcs(GenericInitialisation) {
+    proc(g: GenericInitialisation) -> u32 {
+        return g.global.index ~ get_hash_of_array_of_types(g.args)
+    },
+    proc(v0: GenericInitialisation, v1: GenericInitialisation) -> bool {
+        if len(v0.args) != len(v1.args) {
+            return false
+        }
+        for arg, i in v0.args {
+            if arg != v1.args[i] {
+                return false
+            }
+        }
+        return true
+    },
+}
+
 check_comptime_func_call :: proc(
     s: ^CheckerState,
     pos: Pos,
@@ -657,15 +664,16 @@ check_comptime_func_call :: proc(
         return invalid_type
     }
 
-    hash := global.index ~ get_hash_of_array_of_types(generic_args)
-    ref, value, _ := ordered_hash_map_insert(
-        &s.generic_initialisations,
+    ref, res := lookup_or_insert(
+        &s.generic_initialisations.m,
         GenericInitialisation{global, generic_args},
-        hash,
-        CheckedGlobalValue{unknown_type, nil},
-        generic_initialisation_equal_func,
+        generic_initialisation_to_index_procs,
     )
-    if value.type != unknown_type {
+    if res == .Inserted {
+        s.generic_initialisations.values[ref.index] = CheckedGlobalValue{unknown_type, nil}
+    } else {
+        value := s.generic_initialisations.values[ref.index]
+        assert(value.type != unknown_type)
         return finish_checking_value(s, pos, type, value.value, value.type, "")
     }
 
@@ -697,10 +705,7 @@ check_comptime_func_call :: proc(
     }
     assert(len(body) == 0)
 
-    s.generic_initialisations.values[ref.index].value = CheckedGlobalValue {
-        value_type,
-        comptime_value,
-    }
+    s.generic_initialisations.values[ref.index] = CheckedGlobalValue{value_type, comptime_value}
 
     out := finish_checking_value(s, pos, type, checked_value, value_type, "")
 
@@ -714,8 +719,8 @@ check_comptime_func_call :: proc(
         if initialised_type == nil {
             return out
         }
-        s.types.values[type_value.index].key = GenericTypeValue{global, generic_args}
-        s.types.values[type_value.index].value.type = initialised_type.(CompileTimeValue).(Type)
+        s.types.m.keys[type_value.index].key = GenericTypeValue{global, generic_args}
+        s.types.values[type_value.index].type = initialised_type.(CompileTimeValue).(Type)
     }
 
     return out
@@ -834,7 +839,7 @@ get_sum_type :: proc(
     type: Type,
     loc := #caller_location,
 ) -> (
-    SumType(Type),
+    SumType,
     Type,
     bool,
 ) {
@@ -844,22 +849,22 @@ get_sum_type :: proc(
         print_arg("type", type)
     }
     simplified := simplify_type(s, type)
-    sum_type, is_sum_type := get_type(s.types, simplified).key.(SumType(Type))
+    sum_type, is_sum_type := get_type(s.types, simplified).key.(SumType)
     if is_sum_type {
         when debug_checker {
-            debug("returned SumType(Struct(Type)) is %#v", sum_type)
+            debug("returned SumType(StructType) is %#v", sum_type)
         }
         return sum_type, simplified, true
     }
     if pos != unknown_pos {
         diagnostic(s, pos, "Expected a sum type, but got the type `%s`", type_to_string(s, type))
     }
-    return SumType(Type){}, unknown_type, false
+    return SumType{}, unknown_type, false
 }
 
-get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type), bool) {
+get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (StructType, bool) {
     simplified := simplify_type(s, type)
-    struct_type, is_struct_type := get_type(s.types, simplified).key.(Struct(Type))
+    struct_type, is_struct_type := get_type(s.types, simplified).key.(StructType)
     if is_struct_type {
         return struct_type, true
     }
@@ -867,7 +872,7 @@ get_struct_type :: proc(s: ^CheckerState, pos: Pos, type: Type) -> (Struct(Type)
         got := type_to_string(s, type)
         diagnostic(s, pos, "Expected a struct type, but got the type `%s`", got)
     }
-    return Struct(Type){}, false
+    return StructType{}, false
 }
 
 // Always returns a function type
@@ -889,7 +894,7 @@ get_func_type :: proc(
         value_type := simplify_type(s, value_type_unsimplified)
         got := get_type(s.types, value_type)
         #partial switch type in got.key {
-        case Struct(Type):
+        case StructType:
             value^ = StructTypeInitFunc{value_type}
             return got.value.type
         // TODO: CLEANUP
@@ -977,9 +982,9 @@ type_is_subset :: proc(
         panic("Unreachable")
     case:
         return false
-    case SumType(Type):
-        for variant in superset_value.variants {
-            if variant.payload == type {
+    case SumType:
+        for _, i in superset_value.m.keys {
+            if superset_value.payloads[i] == type {
                 return true
             }
         }
@@ -1147,18 +1152,18 @@ build_struct_string :: proc(
     types: Types,
     globals: []GlobalValueWithGeneric,
     b: ^strings.Builder,
-    type: Struct(Type),
+    type: StructType,
 ) {
     strings.write_byte(b, '{')
     first_field := true
-    for field in type.fields {
+    for field, i in type.m.keys {
         if !first_field {
             strings.write_string(b, ", ")
         }
         first_field = false
-        strings.write_string(b, field.name.ident)
+        strings.write_string(b, field.key)
         strings.write_string(b, ": ")
-        build_type_string(types, globals, b, field.type)
+        build_type_string(types, globals, b, type.types[i])
     }
     strings.write_byte(b, '}')
 }
@@ -1207,17 +1212,17 @@ build_type_string :: proc(
         strings.write_string(b, "Any")
     case:
         switch tv in get_type(types, t).key {
-        case Struct(Type):
+        case StructType:
             build_struct_string(types, globals, b, tv)
-        case SumType(Type):
+        case SumType:
             strings.write_byte(b, '<')
             first_variant := true
-            for variant in tv.variants {
+            for variant, i in tv.m.keys {
                 if !first_variant {
                     strings.write_string(b, ", ")
                 }
-                variant_type := get_type(types, variant.payload).key.(Struct(Type))
-                strings.write_string(b, variant.name.ident)
+                variant_type := get_type(types, tv.payloads[i]).key.(StructType)
+                strings.write_string(b, variant.key)
                 build_struct_string(types, globals, b, variant_type)
                 first_variant = false
             }
@@ -1869,10 +1874,10 @@ check_block :: proc(
             variable_ref := add_unnamed_variable(s, val_type, false)
             append_elem(body, CheckedMutation{variable_ref, val})
 
-            variant_has_branch := make([]bool, len(val_sum_type.variants))
-            variant_branch_positions := make([]Pos, len(val_sum_type.variants))
+            variant_has_branch := make([]bool, len(val_sum_type.m.keys))
+            variant_branch_positions := make([]Pos, len(val_sum_type.m.keys))
 
-            branches := make([]CheckedMatchBranch, len(val_sum_type.variants))
+            branches := arena_make(s.a, []CheckedMatchBranch, len(val_sum_type.m.keys))
             for branch in value.branches {
                 append_elem(&s.scopes, Scope{})
                 defer pop_scope(s)
@@ -1908,8 +1913,8 @@ check_block :: proc(
                 }
 
                 variant_name := type_variable.segments[1].ident
-                variant_index, exists := val_sum_type.variants_map[variant_name]
-                if !exists {
+                variant := lookup(val_sum_type.m, variant_name, string_to_index_procs)
+                if variant == does_not_exist {
                     diagnostic(
                         s,
                         branch_type.pos,
@@ -1920,13 +1925,13 @@ check_block :: proc(
                     return nil, false
                 }
 
-                if variant_has_branch[variant_index] {
+                if variant_has_branch[variant.index] {
                     diagnostic(
                         s,
                         branch_type.pos,
                         "The variant `.%s` already has a branch defined at %v",
                         variant_name,
-                        variant_branch_positions[variant_index],
+                        variant_branch_positions[variant.index],
                     )
                     return nil, false
                 }
@@ -1943,7 +1948,7 @@ check_block :: proc(
                     var_ok: bool = ---
                     var, var_ok = add_variable(
                         s,
-                        val_sum_type.variants[variant_index].payload,
+                        val_sum_type.payloads[variant.index],
                         false,
                         ident.segments[0],
                     )
@@ -1958,9 +1963,9 @@ check_block :: proc(
                     return nil, false
                 }
 
-                branches[variant_index] = CheckedMatchBranch{CheckedBlock{variables, body[:]}, var}
-                variant_has_branch[variant_index] = true
-                variant_branch_positions[variant_index] = branch.label.pos
+                branches[variant.index] = CheckedMatchBranch{CheckedBlock{variables, body[:]}, var}
+                variant_has_branch[variant.index] = true
+                variant_branch_positions[variant.index] = branch.label.pos
             }
 
             unhandled_variants := false
@@ -1970,7 +1975,7 @@ check_block :: proc(
                         s,
                         stmt.position,
                         "Unhandled variant `.%s`",
-                        val_sum_type.variants[i].name.ident,
+                        val_sum_type.m.keys[i].key,
                     )
                     unhandled_variants = true
                 }
@@ -2002,7 +2007,7 @@ check_namespaced_var_ref :: proc(
     Type,
     int,
 ) {
-    namespace_index := get_index(s.files, namespace)
+    namespace_index := get_file_index(s.files, namespace)
     file_globals := s.parsed_files[namespace_index]
     parsed_global, global_exists := file_globals[ref.segments[index].ident]
     if !global_exists {
@@ -2185,8 +2190,8 @@ check_var_ref :: proc(
             return nil
         }
 
-        variant_index, exists := sum_type.variants_map[ref.segments[1].ident]
-        if !exists {
+        variant := lookup(sum_type.m, ref.segments[1].ident, string_to_index_procs)
+        if variant == does_not_exist {
             diagnostic(
                 s,
                 pos,
@@ -2196,8 +2201,8 @@ check_var_ref :: proc(
             )
             return nil
         }
-        got := get_type(s.types, sum_type.variants[variant_index].payload)
-        _, is_struct := got.key.(Struct(Type))
+        got := get_type(s.types, sum_type.payloads[variant.index])
+        _, is_struct := got.key.(StructType)
         assert(is_struct)
         func_type := got.value.type
         assert(func_type != unknown_type)
@@ -2206,7 +2211,7 @@ check_var_ref :: proc(
             s,
             pos,
             a.type,
-            SumTypeInitFunc{type_type, variant_index},
+            SumTypeInitFunc{type_type, variant.index},
             func_type,
             "",
         )
@@ -2292,8 +2297,8 @@ check_var_ref :: proc(
         if !ok {
             return nil
         }
-        field_index, field_exists := struct_type.fields_map[extra_segment.ident]
-        if !field_exists {
+        field := lookup(struct_type.m, extra_segment.ident, string_to_index_procs)
+        if field == does_not_exist {
             diagnostic(
                 s,
                 extra_segment.pos,
@@ -2303,8 +2308,8 @@ check_var_ref :: proc(
             )
             return nil
         }
-        out_type = struct_type.fields[field_index].type
-        out = create_field_access(out, field_index)
+        out_type = struct_type.types[field.index]
+        out = create_field_access(out, field.index)
     }
     return finish_checking_value(s, pos, a.type, out, out_type, "")
 }
@@ -2810,7 +2815,7 @@ check_value :: proc(
         diagnostic(s, v.pos, "Internal error: got nil value in check_value")
         return nil
 
-    case Struct(Unit):
+    case StructUnit:
         if a.early_exit_if_value_is_type != nil {
             return finish_checking_early_return_type(s, v.pos, a)
         }
@@ -2833,19 +2838,20 @@ check_value :: proc(
         }
         return CompileTimeValue(create_type(&s.types, array).type)
 
-    case SumType(Struct(Unit)):
+    case SumUnit:
         if a.early_exit_if_value_is_type != nil {
             return finish_checking_early_return_type(s, v.pos, a)
         }
-        variants: #soa[]SumTypeVariant(Type) = soa_zip(
-            value.variants.name[:len(value.variants)],
-            make([]Type, len(value.variants)),
-        )
+        variant_payloads := arena_make_multi(s.a, [^]Type, len(value.m.keys))
         ok := true
-        for variant, i in value.variants {
-            expect_camel_case(s, "the name of a sum type variant", variant.name)
-            variants[i].payload = check_struct_type(s, variant.payload, a.generic_args)
-            if variants[i].payload == invalid_type {
+        for key, i in value.m.keys {
+            expect_camel_case(
+                s,
+                "the name of a sum type variant",
+                IdentAndPos{key.key, value.positions[i]},
+            )
+            variant_payloads[i] = check_struct_type(s, value.payloads[i], a.generic_args)
+            if variant_payloads[i] == invalid_type {
                 ok = false
             }
         }
@@ -2857,7 +2863,7 @@ check_value :: proc(
             v.pos,
             a.type,
             CompileTimeValue(
-                create_type(&s.types, SumType(Type){value.variants_map, variants}).type,
+                create_type(&s.types, SumType{value.m, value.positions, variant_payloads}).type,
             ),
             type_type,
             "",
@@ -3243,7 +3249,7 @@ get_global_function :: proc(
     Pos,
     bool,
 ) {
-    parsed_global, exists := s.parsed_files[get_index(s.files, file_to_search)][name]
+    parsed_global, exists := s.parsed_files[get_file_index(s.files, file_to_search)][name]
     if !exists {
         diagnostic(s, usage_pos, "The global `%s` is not defined%s", name, extra_text)
         return CheckedFuncRef{}, unknown_pos, false
@@ -3287,8 +3293,14 @@ CheckerOutput :: struct {
     types:         Types,
 }
 
-check :: proc(parsed: ParsedProject, func_name: string, io: Pipe(^os.File)) -> CheckerOutput {
+check :: proc(
+    a: ^Arena,
+    parsed: ParsedProject,
+    func_name: string,
+    io: Pipe(^os.File),
+) -> CheckerOutput {
     state := CheckerState {
+        a                             = a,
         r                             = DiagnosticReporter {
             parsed.files,
             io,
@@ -3301,8 +3313,9 @@ check :: proc(parsed: ParsedProject, func_name: string, io: Pipe(^os.File)) -> C
         ),
         global_values_with_generics   = parsed.global_values_with_generics,
         func_defs                     = parsed.function_defs,
-        types                         = create_types(),
+        types                         = create_types(a),
     }
+    defer fix_types(state.types)
 
     for _, i in state.global_values_without_generic {
         state.global_values_without_generic[i].v.type = unknown_type

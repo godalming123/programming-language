@@ -402,7 +402,7 @@ basic_type_system_test :: proc(t: ^testing.T) {
     generic_args1[0] = bool_type
     generic0 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
     generic1 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
-    types.values[generic1.type.index].value.type = i64_type
+    types.values[generic1.type.index].type = i64_type
     generic2 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args1})
     testing.expect(t, generic0.type == generic1.type)
     generic0_initialised := get_type(types, generic0.type).value.type
@@ -592,13 +592,14 @@ string_to_node :: proc(a: ^Arena, i: ^int, text: string) -> TreeNode {
     switch text[i^] {
     case '(':
         i^ += 1
-        children := create_dynamic(a, TreeNode)
+        children := arena_make(a, []TreeNode, 0, resizable = true)
         for text[i^] != ')' {
             child := string_to_node(a, i, text)
             append_dynamic(&children, child)
         }
         i^ += 1
-        return fix_resizable_dynamic(children)
+        fix_resizable_dynamic(children)
+        return children
     case '`':
         i^ += 1
         start := i^
@@ -613,7 +614,7 @@ string_to_node :: proc(a: ^Arena, i: ^int, text: string) -> TreeNode {
     }
 }
 
-node_to_string := proc(d: ^Dynamic(byte), node: TreeNode) {
+node_to_string := proc(d: ^[]byte, node: TreeNode) {
     switch n in node {
     case string:
         append_dynamic(d, '`')
@@ -649,31 +650,31 @@ arena_test :: proc(t: ^testing.T) {
     testing.expect(t, index == len(my_tree_string))
 
     // Even though `my_tree_dynamic_array` was not created with
-    // `always_resizable == true`, it is still resizable because the last
+    // `resizable == false`, it is still resizable because the last
     // allocation is always resizable
-    my_tree_dynamic_array := create_dynamic(&a, byte, false)
-    defer dealloc(my_tree_dynamic_array.data)
+    my_tree_dynamic_array := arena_make(&a, []byte, 0, resizable = false)
+    defer dealloc(raw_data(my_tree_dynamic_array))
     node_to_string(&my_tree_dynamic_array, my_tree_node)
-    my_tree_string2 := string(to_array(my_tree_dynamic_array))
+    my_tree_string2 := string(my_tree_dynamic_array)
     if my_tree_string != my_tree_string2 {
         testing.fail_now(t, fmt.aprintf("%s != %s", my_tree_string, my_tree_string2))
     }
 
-    my_int := alloc(&a, int)
+    my_int := arena_new(&a, int)
     defer dealloc(my_int)
     my_int^ = 5
     defer testing.expect(t, my_int^ == 5)
 
-    fibonacci_numbers := create_dynamic(&a, int, false)
-    defer dealloc(fibonacci_numbers.data)
+    fibonacci_numbers := arena_make(&a, []int, 0, resizable = false)
+    defer dealloc(raw_data(fibonacci_numbers))
     append_dynamic(&fibonacci_numbers, 1)
     append_dynamic(&fibonacci_numbers, 1)
 
     for _ in 1 ..= 50 {
         append_dynamic(
             &fibonacci_numbers,
-            fibonacci_numbers.data[fibonacci_numbers.length - 1] +
-            fibonacci_numbers.data[fibonacci_numbers.length - 2],
+            fibonacci_numbers[len(fibonacci_numbers) - 1] +
+            fibonacci_numbers[len(fibonacci_numbers) - 2],
         )
     }
 }

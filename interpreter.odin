@@ -146,7 +146,7 @@ RuntimeStruct :: struct {
 RuntimeSumType :: struct {
     type:          Type,
     needs_freeing: bool,
-    variant_index: uint,
+    variant_index: u32,
     payload:       []RuntimeValue,
 }
 
@@ -729,9 +729,9 @@ interp_exec_statement :: proc(state: InterpState, stmt: CheckedStatement) {
         interp_push_scope(state, branch.block.variables)
         val_var, has_val := branch.value_var.(VariableRef)
         if has_val {
-            sum_type := get_type(state.types, val.type).key.(SumType(Type))
+            sum_type := get_type(state.types, val.type).key.(SumType)
             state.frames[len(state.frames) - 1].scopes[val_var.nesting_level][val_var.index] =
-                RuntimeStruct{false, val.payload, sum_type.variants[val.variant_index].payload}
+                RuntimeStruct{false, val.payload, sum_type.payloads[val.variant_index]}
         }
         interp_exec_block(state, branch.block.body)
         interp_pop_scope(state)

@@ -1,25 +1,27 @@
 package main
 
-StructField :: struct(T: typeid) {
-    name: IdentAndPos,
-    type: T,
+StructUnit :: struct {
+    m:         KeyToIndex(string),
+    positions: [^]Pos,
+    types:     [^]Unit,
 }
 
-Struct :: struct(T: typeid) {
-    // Stored this way to preserve the order
-    fields_map: map[string]uint, // An index into `fields`
-    fields:     #soa[]StructField(T),
+StructType :: struct {
+    m:         KeyToIndex(string),
+    positions: [^]Pos,
+    types:     [^]Type,
 }
 
-SumTypeVariant :: struct(Payload: typeid) {
-    name:    IdentAndPos,
-    payload: Payload,
+SumUnit :: struct {
+    m:         KeyToIndex(string),
+    positions: [^]Pos,
+    payloads:  [^]StructUnit,
 }
 
-SumType :: struct(VariantPayload: typeid) {
-    // Stored this way to preserve the order
-    variants_map: map[string]uint, // An index into `variants`
-    variants:     #soa[]SumTypeVariant(VariantPayload),
+SumType :: struct {
+    m:         KeyToIndex(string),
+    positions: [^]Pos,
+    payloads:  [^]Type, // Always a struct type
 }
 
 Ident :: struct {
@@ -96,8 +98,8 @@ InitialUnit :: union {
 */
 
 UnitWithoutPos :: union {
-    Struct(Unit),
-    SumType(Struct(Unit)),
+    StructUnit,
+    SumUnit,
     Tuple,
     FuncDefinitionRef,
     CallWithBrackets,
@@ -420,9 +422,9 @@ debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
     debug("value at character index %d", unit.pos)
     debug_nesting += 1
     switch v in unit.value {
-    case Struct(Unit):
+    case StructUnit:
         panic("TODO")
-    case SumType(Struct(Unit)):
+    case SumUnit:
         panic("TODO")
     case Number:
         debug("is_negated: %v", v.is_negated)

@@ -1,31 +1,28 @@
 package main
 
-Dynamic :: struct(T: typeid) {
-    length: int,
-    data:   [^]T,
+import "base:runtime"
+
+fix_resizable_dynamic :: proc(d: []$T) {
+    fix_resizable(raw_data(d))
 }
 
-create_dynamic :: proc(a: ^Arena, $T: typeid, always_resizable := true) -> Dynamic(T) {
-    return Dynamic(T){0, ([^]T)(alloc(a, struct {}, always_resizable))}
+resize_dynamic :: proc(d: ^[]$T, new_length: int) {
+    raw := (^runtime.Raw_Slice)(d)
+    raw.len = new_length
+    resize(raw.data, new_length * size_of(T))
 }
 
-to_array :: proc(d: Dynamic($T)) -> []T {
-    return d.data[:d.length]
+append_dynamic :: proc(d: ^[]$T, elem: T) {
+    resize_dynamic(d, len(d) + 1)
+    d[len(d) - 1] = elem
 }
 
-fix_resizable_dynamic :: proc(d: Dynamic($T)) -> []T {
-    fix_resizable(d.data)
-    return to_array(d)
+append_multi_dynamic :: proc(d: [^]$T, old_length: int, elem: T) {
+    resize(d, (old_length + 1) * size_of(T))
+    d[old_length] = elem
 }
 
-append_dynamic :: proc(d: ^Dynamic($T), elem: T) {
-    d.length += 1
-    realloc(d.data, d.length * size_of(T))
-    d.data[d.length - 1] = elem
-}
-
-clear_dynamic :: proc(d: ^Dynamic($T)) {
-    d.length = 0
-    realloc(d.data, 0)
+clear_dynamic :: proc(d: ^[]$T) {
+    resize_dynamic(d, 0)
 }
 

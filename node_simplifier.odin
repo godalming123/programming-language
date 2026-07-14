@@ -72,7 +72,7 @@ create_joined_values :: proc(
     return CheckedJoinedValues{method, new_clone(val0), new_clone(val1)}
 }
 
-create_field_access :: proc(value: CheckedValue, field_index: uint) -> CheckedValue {
+create_field_access :: proc(value: CheckedValue, field_index: u32) -> CheckedValue {
     #partial switch v in value {
     case CompileTimeValue:
         return v.(CompileTimeStructInitialisation).args[field_index]
