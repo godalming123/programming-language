@@ -145,7 +145,7 @@ arena_make :: proc(
 
 arena_make_multi :: proc(
     a: ^Arena,
-    $T: typeid/[^]$E,
+    $T: typeid/Multi($E),
     len: int,
     resizable := false,
     loc := #caller_location,
@@ -153,8 +153,12 @@ arena_make_multi :: proc(
     when debug_arena {
         print_call(loc, "arena_make_multi")
     }
-    allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
-    return (T)(raw_data(allocated))
+    when ODIN_DEBUG {
+        return T{arena_make(a, []E, len, resizable, loc)}
+    } else {
+        allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
+        return T{([^]E)(raw_data(allocated))}
+    }
 }
 
 AllocationInfo :: struct {
@@ -187,9 +191,14 @@ resize :: proc(allocation: rawptr, new_size: int, loc := #caller_location) {
     }
     info := get_info(allocation)
     assert(is_resizable(info))
-    info.allocation.block.used = uint(
-        mem.ptr_sub(([^]byte)(allocation), info.allocation.block.base) + new_size,
+    // Dependent on https://github.com/odin-lang/Odin/pull/7049
+    err := virtual.memory_block_resize(
+        info.allocation.block,
+        uint(mem.ptr_sub(([^]byte)(allocation), info.allocation.block.base) + new_size),
     )
+    if err != nil {
+        panic("Failed to resize memory block")
+    }
 }
 
 fix_resizable :: proc(allocation: rawptr, loc := #caller_location) {

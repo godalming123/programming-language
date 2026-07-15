@@ -132,24 +132,24 @@ TypeKey :: union {
 }
 
 init_struct_type :: proc(types: ^Types, type: Type, fields: []Type) {
-    assert(types.values[type.index].type == unknown_type)
+    assert(types.values.d[type.index].type == unknown_type)
 
     return_types := make([]Type, 1)
     return_types[0] = type
 
     t := create_type(types, FuncType{fields, return_types}).type
-    types.values[type.index].type = t
+    types.values.d[type.index].type = t
 }
 
 fix_types :: proc(t: Types) {
     fix_key_to_index(t.m)
-    fix_resizable(t.values)
+    fix_resizable_multi(t.values)
 }
 
 create_types :: proc(a: ^Arena) -> Types {
     out := Types {
         make_key_to_index(a, KeyToIndex(TypeKey)),
-        arena_make_multi(a, [^]TypeValue, 0, resizable = true),
+        arena_make_multi(a, Multi(TypeValue), 0, resizable = true),
     }
 
     array_with_string_type := arena_make(a, []Type, 1)
@@ -243,10 +243,10 @@ create_types :: proc(a: ^Arena) -> Types {
         create_type(&out, FuncType{array_with_string_type, array_with_any_type}).type,
     )
 
-    positions := arena_make_multi(a, [^]Pos, 3)
-    positions[0] = unknown_pos
-    positions[1] = unknown_pos
-    positions[2] = unknown_pos
+    positions := arena_make_multi(a, Multi(Pos), 3)
+    positions.d[0] = unknown_pos
+    positions.d[1] = unknown_pos
+    positions.d[2] = unknown_pos
 
     compiler_cache_map := make_key_to_index(a, KeyToIndex(string))
     i, _ := lookup_or_insert(&compiler_cache_map, "contains", string_to_index_procs)
@@ -264,7 +264,7 @@ create_types :: proc(a: ^Arena) -> Types {
 
     assert(
         compiler_cache_type ==
-        create_type(&out, StructType{compiler_cache_map, positions, &compiler_cache_types[0]}).type,
+        create_type(&out, StructType{compiler_cache_map, positions, array_to_multi(compiler_cache_types)}).type,
     )
 
     compiler_map := make_key_to_index(a, KeyToIndex(string))
@@ -280,7 +280,7 @@ create_types :: proc(a: ^Arena) -> Types {
 
     assert(
         compiler_type ==
-        create_type(&out, StructType{compiler_map, positions, &compiler_types[0]}).type,
+        create_type(&out, StructType{compiler_map, positions, array_to_multi(compiler_types)}).type,
     )
 
     assert(
@@ -300,7 +300,7 @@ create_types :: proc(a: ^Arena) -> Types {
     http_request_types[1] = string_type
     assert(
         http_request_type ==
-        create_type(&out, StructType{http_request_map, positions, &http_request_types[0]}).type,
+        create_type(&out, StructType{http_request_map, positions, array_to_multi(http_request_types)}).type,
     )
 
     http_response_body_map := make_key_to_index(a, KeyToIndex(string))
@@ -310,7 +310,7 @@ create_types :: proc(a: ^Arena) -> Types {
 
     assert(
         http_response_body_type ==
-        create_type(&out, StructType{http_response_body_map, positions, &array_with_string_type[0]}).type,
+        create_type(&out, StructType{http_response_body_map, positions, array_to_multi(array_with_string_type)}).type,
     )
 
     http_response_map := make_key_to_index(a, KeyToIndex(string))
@@ -329,7 +329,7 @@ create_types :: proc(a: ^Arena) -> Types {
 
     assert(
         http_response_type ==
-        create_type(&out, SumType{http_response_map, positions, &http_response_types[0]}).type,
+        create_type(&out, SumType{http_response_map, positions, array_to_multi(http_response_types)}).type,
     )
 
     assert(
@@ -357,7 +357,7 @@ create_types :: proc(a: ^Arena) -> Types {
     http_server_types[2] = i64_type
     assert(
         http_server_type ==
-        create_type(&out, StructType{http_server_map, positions, &http_server_types[0]}).type,
+        create_type(&out, StructType{http_server_map, positions, array_to_multi(http_server_types)}).type,
     )
 
     assert(
@@ -381,7 +381,7 @@ TypeValue :: struct {
 
 Types :: struct {
     m:      KeyToIndex(TypeKey),
-    values: [^]TypeValue,
+    values: Multi(TypeValue),
 }
 
 GotType :: struct {
@@ -393,7 +393,7 @@ get_type :: proc(types: Types, t: Type) -> GotType {
     if t.index > max_index {
         return GotType{nil, TypeValue{}}
     }
-    return GotType{types.m.keys[t.index].key, types.values[t.index]}
+    return GotType{types.m.keys[t.index].key, types.values.d[t.index]}
 }
 
 CreatedType :: struct {
@@ -418,10 +418,10 @@ create_type :: proc(
         KeyToIndexProcs(TypeKey){hash_type_value, type_key_is_equal},
         loc,
     )
-    resize(types.values, len(types.m.keys) * size_of(TypeValue))
-    types.values[type.index] = TypeValue{unknown_type}
+    resize_multi(&types.values, len(types.m.keys))
+    types.values.d[type.index] = TypeValue{unknown_type}
 
-    out := CreatedType{type, types.values[type.index], result}
+    out := CreatedType{type, types.values.d[type.index], result}
     when debug_checker {
         debug("out: %v", out)
     }
@@ -454,7 +454,7 @@ hash_struct_type :: proc(value: StructType) -> u32 {
         for c in field.key {
             result ~= u32(c) ~ u32(i)
         }
-        result ~= value.types[i].index
+        result ~= value.types.d[i].index
     }
     return result
 }
@@ -465,7 +465,7 @@ hash_sum_type :: proc(value: SumType) -> u32 {
         for c in variant.key {
             result ~= u32(c)
         }
-        result ~= value.payloads[i].index
+        result ~= value.payloads.d[i].index
     }
     return result
 }
@@ -540,7 +540,7 @@ struct_types_are_equal :: proc(a: StructType, b: StructType) -> bool {
         if a_key.key != b.m.keys[i].key {
             return false
         }
-        if a.types[i] != b.types[i] {
+        if a.types.d[i] != b.types.d[i] {
             return false
         }
     }
@@ -555,7 +555,7 @@ sum_types_are_equal :: proc(a: SumType, b: SumType) -> bool {
         if a_key.key != b.m.keys[i].key {
             return false
         }
-        if a.payloads[i] != b.payloads[i] {
+        if a.payloads.d[i] != b.payloads.d[i] {
             return false
         }
     }

@@ -227,7 +227,7 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     case GenericTypeValue:
     case SumType:
         for _, i in t.m.keys {
-            payload := get_type(s.types, t.payloads[i]).key.(StructType)
+            payload := get_type(s.types, t.payloads.d[i]).key.(StructType)
             strings.write_string(&s.b, "function init_")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")

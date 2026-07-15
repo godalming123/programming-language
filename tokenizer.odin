@@ -244,11 +244,12 @@ CompilerFile :: struct {
 }
 
 TokenizerState :: struct {
-    file_ref:           ^CompilerFile,
-    index:              uint,
-    last_token_pos:     uint,
-    last_token:         TokenContents,
-    last_token_skipped: bool,
+    file_ref:                                         ^CompilerFile,
+    index:                                            uint,
+    last_token_pos:                                   uint,
+    last_token:                                       TokenContents,
+    // last_token_descriptions_of_other_possible_tokens: []string,
+    last_token_skipped:                               bool,
 }
 
 is_nothing_char :: proc(c: byte) -> bool {

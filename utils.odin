@@ -237,6 +237,7 @@ separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
 }
 */
 
+/*
 append2 :: proc(
     a_array: ^[dynamic]$A,
     b_array: ^[^]$B,
@@ -286,6 +287,7 @@ append2 :: proc(
 
     return nil
 }
+*/
 
 // Like a dynamic array, except can also be inserted into in average O(1) time
 DoubleDynamic :: struct(T: typeid) {
@@ -354,7 +356,7 @@ DiagnosticType :: enum {
 }
 
 DiagnosticReporter :: struct {
-    files:     [^]CompilerFile,
+    files:     Multi(CompilerFile),
     io:        Pipe(^os.File),
     number_of: [DiagnosticType]uint,
 }

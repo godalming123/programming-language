@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -57,6 +58,11 @@ CheckedGlobalValue :: struct {
     value: CompileTimeValue,
 }
 
+GenericInitialisations :: struct {
+    m:      KeyToIndex(GenericInitialisation),
+    values: Multi(CheckedGlobalValue),
+}
+
 CheckerState :: struct {
     // The following fields do not change while checking
     parsed_files:                  []map[string]ParsedGlobal, // len(parsed_files) == len(r.files)
@@ -67,10 +73,7 @@ CheckerState :: struct {
     // The following fields change while checking
     a:                             ^Arena,
     using r:                       DiagnosticReporter,
-    generic_initialisations:       struct {
-        m:      KeyToIndex(GenericInitialisation),
-        values: [^]CheckedGlobalValue,
-    },
+    generic_initialisations:       GenericInitialisations,
     checked_functions:             [dynamic]CheckedFunction,
     first_unchecked_function:      uint,
     types:                         Types,
@@ -341,16 +344,16 @@ check_struct_type :: proc(
     type: StructUnit,
     generic_args: map[string]Type,
 ) -> Type {
-    field_types := arena_make_multi(s.a, [^]Type, len(type.m.keys))
+    field_types := arena_make_multi(s.a, Multi(Type), len(type.m.keys))
     ok := true
     for field, i in type.m.keys {
         expect_snake_case(
             s,
             "the name of a struct field",
-            IdentAndPos{field.key, type.positions[i]},
+            IdentAndPos{field.key, type.positions.d[i]},
         )
-        field_types[i] = check_type(s, type.types[i], generic_args)
-        if field_types[i] == invalid_type {
+        field_types.d[i] = check_type(s, type.types.d[i], generic_args)
+        if field_types.d[i] == invalid_type {
             ok = false
         }
     }
@@ -360,7 +363,7 @@ check_struct_type :: proc(
 
     created := create_type(&s.types, StructType{type.m, type.positions, field_types})
     if created.type_value.type == unknown_type {
-        init_struct_type(&s.types, created.type, field_types[:len(type.m.keys)])
+        init_struct_type(&s.types, created.type, field_types.d[:len(type.m.keys)])
     }
     assert(get_type(s.types, created.type).value.type != unknown_type)
     return created.type
@@ -669,12 +672,14 @@ check_comptime_func_call :: proc(
         GenericInitialisation{global, generic_args},
         generic_initialisation_to_index_procs,
     )
-    if res == .Inserted {
-        s.generic_initialisations.values[ref.index] = CheckedGlobalValue{unknown_type, nil}
+    if res == .LookedUp {
+        value := s.generic_initialisations.values.d[ref.index]
+        if value.type != unknown_type {
+            return finish_checking_value(s, pos, type, value.value, value.type, "")
+        }
     } else {
-        value := s.generic_initialisations.values[ref.index]
-        assert(value.type != unknown_type)
-        return finish_checking_value(s, pos, type, value.value, value.type, "")
+        resize_multi(&s.generic_initialisations.values, len(s.generic_initialisations.m.keys))
+        s.generic_initialisations.values.d[ref.index] = CheckedGlobalValue{unknown_type, nil}
     }
 
     generic_args_map := make(map[string]Type)
@@ -705,7 +710,7 @@ check_comptime_func_call :: proc(
     }
     assert(len(body) == 0)
 
-    s.generic_initialisations.values[ref.index] = CheckedGlobalValue{value_type, comptime_value}
+    s.generic_initialisations.values.d[ref.index] = CheckedGlobalValue{value_type, comptime_value}
 
     out := finish_checking_value(s, pos, type, checked_value, value_type, "")
 
@@ -720,7 +725,7 @@ check_comptime_func_call :: proc(
             return out
         }
         s.types.m.keys[type_value.index].key = GenericTypeValue{global, generic_args}
-        s.types.values[type_value.index].type = initialised_type.(CompileTimeValue).(Type)
+        s.types.values.d[type_value.index].type = initialised_type.(CompileTimeValue).(Type)
     }
 
     return out
@@ -984,7 +989,7 @@ type_is_subset :: proc(
         return false
     case SumType:
         for _, i in superset_value.m.keys {
-            if superset_value.payloads[i] == type {
+            if superset_value.payloads.d[i] == type {
                 return true
             }
         }
@@ -1163,7 +1168,7 @@ build_struct_string :: proc(
         first_field = false
         strings.write_string(b, field.key)
         strings.write_string(b, ": ")
-        build_type_string(types, globals, b, type.types[i])
+        build_type_string(types, globals, b, type.types.d[i])
     }
     strings.write_byte(b, '}')
 }
@@ -1221,7 +1226,7 @@ build_type_string :: proc(
                 if !first_variant {
                     strings.write_string(b, ", ")
                 }
-                variant_type := get_type(types, tv.payloads[i]).key.(StructType)
+                variant_type := get_type(types, tv.payloads.d[i]).key.(StructType)
                 strings.write_string(b, variant.key)
                 build_struct_string(types, globals, b, variant_type)
                 first_variant = false
@@ -1948,7 +1953,7 @@ check_block :: proc(
                     var_ok: bool = ---
                     var, var_ok = add_variable(
                         s,
-                        val_sum_type.payloads[variant.index],
+                        val_sum_type.payloads.d[variant.index],
                         false,
                         ident.segments[0],
                     )
@@ -2016,7 +2021,7 @@ check_namespaced_var_ref :: proc(
             ref.segments[index].pos,
             "The variable `%s` is not defined in the file `%s`",
             ref.segments[index].ident,
-            s.files[namespace_index].file_path,
+            s.files.d[namespace_index].file_path,
         )
         return nil, invalid_type, 0
     }
@@ -2201,7 +2206,7 @@ check_var_ref :: proc(
             )
             return nil
         }
-        got := get_type(s.types, sum_type.payloads[variant.index])
+        got := get_type(s.types, sum_type.payloads.d[variant.index])
         _, is_struct := got.key.(StructType)
         assert(is_struct)
         func_type := got.value.type
@@ -2308,7 +2313,7 @@ check_var_ref :: proc(
             )
             return nil
         }
-        out_type = struct_type.types[field.index]
+        out_type = struct_type.types.d[field.index]
         out = create_field_access(out, field.index)
     }
     return finish_checking_value(s, pos, a.type, out, out_type, "")
@@ -2551,6 +2556,7 @@ check_joined_unit_value :: proc(
         }
         out: CheckedValue = CompileTimeValue(create_type(&s.types, t).type)
         return finish_checking_value(s, pos, a.type, out, type_type, "")
+
     case .BooleanAnd, .BooleanOr:
         val0 := check_value(
             s,
@@ -2573,6 +2579,7 @@ check_joined_unit_value :: proc(
             bool_type,
             "",
         )
+
     case .IsEqual, .IsNotEqual:
         t := invalid_type
         val0 := check_runtime_value(s, value.unit0^, a.body, AnyType{&t}, a.generic_args)
@@ -2637,6 +2644,7 @@ check_joined_unit_value :: proc(
             string_type,
             "",
         )
+
     case .Concat:
         type0: Type = ---
         type1: Type = ---
@@ -2668,6 +2676,7 @@ check_joined_unit_value :: proc(
         array_ref := add_unnamed_variable(s, return_type, false)
         append_elem(a.body, CheckedArrayMutation{array_ref, return_type1, segments})
         return finish_checking_value(s, pos, a.type, array_ref, return_type, "")
+
     case .IsGreaterThan, .IsGreaterThanOrEqual, .IsLessThan, .IsLessThanOrEqual:
         // TODO: Do not assume number types
         val0 := check_runtime_value(s, value.unit0^, a.body, i64_type, a.generic_args)
@@ -2683,6 +2692,7 @@ check_joined_unit_value :: proc(
             bool_type,
             "",
         )
+
     case .Multiplication, .Subtraction, .Division, .Addition, .Modulo:
         // TODO: Do not assume number types
         val0 := check_runtime_value(s, value.unit0^, a.body, i64_type, a.generic_args)
@@ -2698,8 +2708,9 @@ check_joined_unit_value :: proc(
             i64_type,
             "",
         )
+
     case:
-        panic("Unreachable")
+        panic(fmt.aprintf("Unreachable (join method is %v)", value.join_method))
     }
 
 }
@@ -2842,16 +2853,16 @@ check_value :: proc(
         if a.early_exit_if_value_is_type != nil {
             return finish_checking_early_return_type(s, v.pos, a)
         }
-        variant_payloads := arena_make_multi(s.a, [^]Type, len(value.m.keys))
+        variant_payloads := arena_make_multi(s.a, Multi(Type), len(value.m.keys))
         ok := true
         for key, i in value.m.keys {
             expect_camel_case(
                 s,
                 "the name of a sum type variant",
-                IdentAndPos{key.key, value.positions[i]},
+                IdentAndPos{key.key, value.positions.d[i]},
             )
-            variant_payloads[i] = check_struct_type(s, value.payloads[i], a.generic_args)
-            if variant_payloads[i] == invalid_type {
+            variant_payloads.d[i] = check_struct_type(s, value.payloads.d[i], a.generic_args)
+            if variant_payloads.d[i] == invalid_type {
                 ok = false
             }
         }
@@ -3301,6 +3312,10 @@ check :: proc(
 ) -> CheckerOutput {
     state := CheckerState {
         a                             = a,
+        generic_initialisations       = GenericInitialisations {
+            make_key_to_index(a, KeyToIndex(GenericInitialisation)),
+            arena_make_multi(a, Multi(CheckedGlobalValue), 0, resizable = true),
+        },
         r                             = DiagnosticReporter {
             parsed.files,
             io,
@@ -3315,7 +3330,11 @@ check :: proc(
         func_defs                     = parsed.function_defs,
         types                         = create_types(a),
     }
-    defer fix_types(state.types)
+    defer {
+        fix_types(state.types)
+        fix_key_to_index(state.generic_initialisations.m)
+        fix_resizable_multi(state.generic_initialisations.values)
+    }
 
     for _, i in state.global_values_without_generic {
         state.global_values_without_generic[i].v.type = unknown_type
@@ -3361,7 +3380,7 @@ check :: proc(
         // non-deterministic error ordering in this compiler
         for global_name, global in file {
             if is_builtin(global_name) {
-                diagnostic(&state, Pos{global.pos, &state.files[i]}, builtins_err, global_name)
+                diagnostic(&state, Pos{global.pos, &state.files.d[i]}, builtins_err, global_name)
                 continue
             }
             // TODO: Check that the name is the correct case
@@ -3396,7 +3415,7 @@ check :: proc(
     func_ref, _, func_ok := get_global_function(
         &state,
         unknown_pos,
-        state.files,
+        &state.files.d[0],
         func_name,
         "\nTODO: Write hint",
     )

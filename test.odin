@@ -395,14 +395,17 @@ basic_fuzz_test :: proc(t: ^testing.T) {
 
 @(test)
 basic_type_system_test :: proc(t: ^testing.T) {
-    types: Types
+    a := Arena{}
+    defer delete_arena(&a, expect_empty = false)
+    types := create_types(&a)
+    defer fix_types(types)
     generic_args0 := make([]Type, 1)
     generic_args0[0] = string_type
     generic_args1 := make([]Type, 1)
     generic_args1[0] = bool_type
     generic0 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
     generic1 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
-    types.values[generic1.type.index].type = i64_type
+    types.values.d[generic1.type.index].type = i64_type
     generic2 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args1})
     testing.expect(t, generic0.type == generic1.type)
     generic0_initialised := get_type(types, generic0.type).value.type

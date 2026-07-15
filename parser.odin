@@ -9,8 +9,8 @@ import "core:strings"
 
 FileRef :: ^CompilerFile
 
-get_file_index :: proc(files: [^]CompilerFile, ref: FileRef, loc := #caller_location) -> int {
-    return mem.ptr_sub(ref, cast(^CompilerFile)files)
+get_file_index :: proc(files: Multi(CompilerFile), ref: FileRef, loc := #caller_location) -> int {
+    return mem.ptr_sub(ref, &files.d[0])
 }
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
@@ -22,7 +22,7 @@ ParserState :: struct {
     // Grow as the project is parsed
     using r:                        DiagnosticReporter,
     files_map:                      map[string]FileRef,
-    parsed_files:                   [dynamic]map[string]ParsedGlobal,
+    parsed_files:                   []map[string]ParsedGlobal,
     global_values_without_generics: [dynamic]GlobalValueWithoutGeneric,
     global_values_with_generics:    [dynamic]GlobalValueWithGeneric,
     function_defs:                  [dynamic]FunctionDefinition,
@@ -32,8 +32,12 @@ ParserState :: struct {
 parse_struct :: proc(s: ^ParserState) -> (StructUnit, bool) {
     out := StructUnit {
         make_key_to_index(&s.a, KeyToIndex(string)),
-        arena_make_multi(&s.a, [^]Pos, 0),
-        arena_make_multi(&s.a, [^]Unit, 0),
+        arena_make_multi(&s.a, Multi(Pos), 0, resizable = true),
+        arena_make_multi(&s.a, Multi(Unit), 0, resizable = true),
+    }
+    defer {
+        fix_resizable_multi(out.types)
+        fix_resizable_multi(out.positions)
     }
     for {
         field: IdentAndPos = ---
@@ -80,14 +84,14 @@ parse_struct :: proc(s: ^ParserState) -> (StructUnit, bool) {
                 field.pos,
                 "There is already a field called `%s` defined in this struct at %v",
                 field.ident,
-                out.positions[i.index],
+                out.positions.d[i.index],
             )
             return StructUnit{}, false
         }
-        resize(out.positions, len(out.m.keys))
-        resize(out.types, len(out.m.keys))
-        out.positions[i.index] = field.pos
-        out.types[i.index] = parsed.unit
+        resize_multi(&out.positions, len(out.m.keys))
+        resize_multi(&out.types, len(out.m.keys))
+        out.positions.d[i.index] = field.pos
+        out.types.d[i.index] = parsed.unit
 
         #partial switch _ in s.last_token {
         case:
@@ -179,14 +183,14 @@ parse_initial_unit :: proc(
                 )
                 return Unit{}, nil, false
             }
-            ref := &s.files[len(s.parsed_files)]
-            out.value = Import{ref}
-            append2(
-                &s.parsed_files,
+            append_multi_dynamic(
                 &s.files,
-                nil,
+                len(s.parsed_files),
                 CompilerFile{string(data), joined, filepath.dir(joined)},
             )
+            ref := &s.files.d[len(s.parsed_files)]
+            append_dynamic(&s.parsed_files, nil)
+            out.value = Import{ref}
             s.files_map[joined] = ref
         }
 
@@ -215,8 +219,8 @@ parse_initial_unit :: proc(
     case OpenAngleBracketToken:
         sum_type := SumUnit {
             make_key_to_index(&s.a, KeyToIndex(string)),
-            arena_make_multi(&s.a, [^]Pos, 0, resizable = true),
-            arena_make_multi(&s.a, [^]StructUnit, 0, resizable = true),
+            arena_make_multi(&s.a, Multi(Pos), 0, resizable = true),
+            arena_make_multi(&s.a, Multi(StructUnit), 0, resizable = true),
         }
         loop: for {
             get_next_token(s, true)
@@ -254,14 +258,14 @@ parse_initial_unit :: proc(
                         variant_name.pos,
                         "There is already a variant called `%s` in this sum type at %v",
                         variant_name.ident,
-                        sum_type.positions[i.index],
+                        sum_type.positions.d[i.index],
                     )
                     return Unit{}, nil, false
                 }
-                resize(sum_type.positions, len(sum_type.m.keys))
-                resize(sum_type.payloads, len(sum_type.m.keys))
-                sum_type.positions[i.index] = variant_name.pos
-                sum_type.payloads[i.index] = variant_payload
+                resize_multi(&sum_type.positions, len(sum_type.m.keys))
+                resize_multi(&sum_type.payloads, len(sum_type.m.keys))
+                sum_type.positions.d[i.index] = variant_name.pos
+                sum_type.payloads.d[i.index] = variant_payload
                 #partial switch _ in s.last_token {
                 case:
                     expected := [dynamic]string{"`,`", "`>`"}
@@ -1435,13 +1439,14 @@ parse_file :: proc(s: ^ParserState) -> bool {
 ParsedProject :: struct {
     files_map:                     map[string]FileRef,
     parsed_files:                  []map[string]ParsedGlobal,
-    files:                         [^]CompilerFile,
+    files:                         Multi(CompilerFile),
     global_values_without_generic: []GlobalValueWithoutGeneric,
     global_values_with_generics:   []GlobalValueWithGeneric,
     function_defs:                 []FunctionDefinition,
 }
 
 parse_project :: proc(
+    a: ^Arena,
     first_file_relative_path: string,
     io: Pipe(^os.File),
     exit_early: EarlyExitInfo,
@@ -1470,23 +1475,27 @@ parse_project :: proc(
     }
 
     state := ParserState {
-        r = DiagnosticReporter{io = io},
-    }
-    append2(
-        &state.parsed_files,
-        &state.files,
-        nil,
-        CompilerFile {
-            string(data),
-            first_file_absolute_path,
-            filepath.dir(first_file_absolute_path),
+        r = DiagnosticReporter {
+            io = io,
+            files = arena_make_multi(a, Multi(CompilerFile), 1, resizable = true),
         },
-    )
-    state.files_map[first_file_absolute_path] = state.files
-    state.file_ref = state.files
+        parsed_files = arena_make(a, []map[string]ParsedGlobal, 1, resizable = true),
+    }
+    defer {
+        fix_resizable_dynamic(state.parsed_files)
+        fix_resizable_multi(state.r.files)
+    }
+    state.parsed_files[0] = nil
+    state.r.files.d[0] = CompilerFile {
+        string(data),
+        first_file_absolute_path,
+        filepath.dir(first_file_absolute_path),
+    }
+    state.files_map[first_file_absolute_path] = &state.files.d[0]
+    state.file_ref = &state.files.d[0]
 
     ok := true
-    for get_file_index(state.files, state.file_ref) < len(state.parsed_files) {
+    for {
         file_path := state.file_ref.file_path
         fmt.printfln("Parsing `%s`...", file_path)
         state.tokenizer_state = TokenizerState {
@@ -1496,12 +1505,16 @@ parse_project :: proc(
         if !file_ok {
             ok = false
         }
-        state.file_ref = &state.files[get_file_index(state.files, state.file_ref) + 1]
+        next_index := get_file_index(state.files, state.file_ref) + 1
+        if next_index >= len(state.parsed_files) {
+            break
+        }
+        state.file_ref = &state.files.d[next_index]
     }
     if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
         #partial switch &exit_early_info_value in exit_early_info {
         case ExitEarlyAwaitingSourceCodeChange:
-            exit_early_info_value.files = state.files[:len(state.parsed_files)]
+            exit_early_info_value.files = multi_to_array(state.files, len(state.parsed_files))
         case:
             panic("Unreachable")
         }

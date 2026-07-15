@@ -16,6 +16,7 @@ debug_key_to_index :: false
 debug_interpreter :: false
 debug_diagnostics :: false
 debug_arena :: false
+debug_dynamic_array :: false
 
 position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
     if verb != 'v' {
@@ -196,7 +197,7 @@ compile :: proc(
         )
     }
 
-    parsed, ok := parse_project(func.file_name, compiler, exit_early)
+    parsed, ok := parse_project(&a, func.file_name, compiler, exit_early)
     if !ok {
         return 1
     }

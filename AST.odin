@@ -2,26 +2,26 @@ package main
 
 StructUnit :: struct {
     m:         KeyToIndex(string),
-    positions: [^]Pos,
-    types:     [^]Unit,
+    positions: Multi(Pos),
+    types:     Multi(Unit),
 }
 
 StructType :: struct {
     m:         KeyToIndex(string),
-    positions: [^]Pos,
-    types:     [^]Type,
+    positions: Multi(Pos),
+    types:     Multi(Type),
 }
 
 SumUnit :: struct {
     m:         KeyToIndex(string),
-    positions: [^]Pos,
-    payloads:  [^]StructUnit,
+    positions: Multi(Pos),
+    payloads:  Multi(StructUnit),
 }
 
 SumType :: struct {
     m:         KeyToIndex(string),
-    positions: [^]Pos,
-    payloads:  [^]Type, // Always a struct type
+    positions: Multi(Pos),
+    payloads:  Multi(Type), // Always a struct type
 }
 
 Ident :: struct {
