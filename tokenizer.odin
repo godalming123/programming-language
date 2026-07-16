@@ -248,7 +248,7 @@ TokenizerState :: struct {
     index:                                            uint,
     last_token_pos:                                   uint,
     last_token:                                       TokenContents,
-    // last_token_descriptions_of_other_possible_tokens: []string,
+    last_token_descriptions_of_other_possible_tokens: []string,
     last_token_skipped:                               bool,
 }
 
@@ -309,26 +309,25 @@ skip :: proc(s: ^TokenizerState, should_continue: proc(_: byte) -> bool) -> Skip
 
 wrong_token_err :: proc(
     state: ^ParserState,
-    expected_possibilities: []string,
     infos: ..string,
     loc := #caller_location,
 ) {
     expected_bytes: []byte
     defer delete(expected_bytes)
-    if len(expected_possibilities) == 1 {
-        expected_bytes = make([]byte, len(expected_possibilities[0]) + 1)
+    if len(state.last_token_descriptions_of_other_possible_tokens) == 1 {
+        expected_bytes = make([]byte, len(state.last_token_descriptions_of_other_possible_tokens[0]) + 1)
         expected_bytes[0] = ' '
-        copy(expected_bytes[1:], expected_possibilities[0])
+        copy(expected_bytes[1:], state.last_token_descriptions_of_other_possible_tokens[0])
     } else {
         line_start :: "\n- "
         either :: " either:"
-        length := len(either) + len(expected_possibilities) * len(line_start)
-        for str in expected_possibilities {
+        length := len(either) + len(state.last_token_descriptions_of_other_possible_tokens) * len(line_start)
+        for str in state.last_token_descriptions_of_other_possible_tokens {
             length += len(str)
         }
         expected_bytes = make([]byte, length)
         i := copy(expected_bytes, either)
-        for str in expected_possibilities {
+        for str in state.last_token_descriptions_of_other_possible_tokens {
             i += copy(expected_bytes[i:], line_start)
             i += copy(expected_bytes[i:], str)
         }
@@ -392,6 +391,7 @@ get_next_token :: proc(
             debug("last token set to %s", token_contents_to_string(state.last_token))
         }
     }
+    clear_dynamic(&state.last_token_descriptions_of_other_possible_tokens)
     if skip(state, is_nothing_char).reached_end_of_file {
         state.last_token_pos = len(state.file_ref.code)
         state.last_token = EndOfFileToken{}

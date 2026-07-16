@@ -6,7 +6,6 @@ package main
 // See `arena_test` in `test.odin` for an example
 
 import "base:runtime"
-import "core:fmt"
 import "core:mem"
 import "core:mem/virtual"
 
@@ -167,6 +166,7 @@ AllocationInfo :: struct {
 }
 
 get_info :: proc(allocated: rawptr) -> AllocationInfo {
+    assert(allocated != nil)
     allocation := &([^]ArenaAllocation)(allocated)[-1]
     return AllocationInfo{allocation, get_block_info(allocation.block)}
 }
@@ -256,11 +256,9 @@ delete_arena :: proc(a: ^Arena, expect_empty := true, loc := #caller_location) {
         // Expect that `fix_resizable` has been called for all resizable elements which were allocated on the arena
         if block not_in resizable_blocks {
             when ODIN_DEBUG {
-                panic(
-                    fmt.aprintf(
-                        "There was a resizable allocation allocated at %v for which `fix_resizable` was not called",
-                        block_info.last_allocation_in_block.loc,
-                    ),
+                panicf(
+                    "There was a resizable allocation allocated at %v for which `fix_resizable` was not called",
+                    block_info.last_allocation_in_block.loc,
                 )
             } else {
                 panic("There was a resizable allocation for which `fix_resizable` was not called")

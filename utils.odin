@@ -5,9 +5,12 @@ import "core:fmt"
 import "core:io"
 import "core:math/rand"
 import "core:os"
-import "core:slice"
 import "core:strings"
 import "core:testing"
+
+panicf :: proc(format: string, args: ..any) -> ! {
+    panic(fmt.aprintf(format, ..args))
+}
 
 // FNV-1a 32-bit
 simple_hash :: proc(data: []byte) -> u32 {
@@ -330,13 +333,13 @@ up_line :: "\033[A"
 erase_line :: "\033[2K"
 to_beginning :: "\r"
 
+/*
 join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     dyn := slice.clone_to_dynamic(slice0)
     append_elems(&dyn, ..slice1)
     return dyn[:]
 }
 
-/*
 OutputBuilder :: struct {
     file:   ^os.File,
     b:      strings.Builder,
