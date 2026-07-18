@@ -20,6 +20,7 @@ get_http_server = |cache: CompilerCache| -> HttpServer {
 
 handler = |req: HttpRequest| -> HttpResponse {
     if req.method == "GET" {
+        // TODO: Sanitize `req.url` before including in HTML
 		return .Html("<p>Hello world</p><p>Url is " & req.url & "</p>")
 	} else if req.method == "POST" {
 	    return .Plain("TODO: Handle post")

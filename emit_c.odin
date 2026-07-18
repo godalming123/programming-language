@@ -26,14 +26,14 @@ emit_variable :: proc(b: ^strings.Builder, variable: VariableRef) {
 }
 
 // Does not include the `struct`
-emit_struct_type :: proc(b: ^strings.Builder, type: Struct(Type, Type), loc := #caller_location) {
+emit_struct_type :: proc(b: ^strings.Builder, type: StructType, loc := #caller_location) {
     when debug_emitter {
         print_call(loc, "emit_struct_type")
     }
     strings.write_byte(b, '{')
-    for field, index in type.fields {
+    for _, index in type.m.keys {
         name := fmt.aprintf("field%d", index)
-        emit_type(b, name, field.type)
+        emit_type(b, name, type.types.d[index])
         delete_string(name)
         strings.write_byte(b, ';')
     }
@@ -174,7 +174,7 @@ emit_c_value :: proc(s: ^CEmitterState, v: CheckedValue) {
     case CheckedFieldAccess:
         emit_c_value(s, value.value^)
         strings.write_string(&s.b, ".field")
-        strings.write_uint(&s.b, value.field_index)
+        strings.write_uint(&s.b, uint(value.field_index))
     //case CheckedJsFunctionCall:
     //    panic("Internal error: JsFunctionCall received by C emitter")
     //case ArrayValue:
@@ -464,7 +464,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
     }
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
-    switch type in s.types.values[index].value.value {
+    switch type in s.types.m.keys[index].key {
     case ArrayType:
         strings.write_string(&s.other_type_definitions, "struct ")
         strings.write_string(&s.other_type_definitions, name)
@@ -527,16 +527,16 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.other_type_definitions, ");")
     case GenericTypeValue:
         strings.write_string(&s.other_type_definitions, "typedef ")
-        emit_type(&s.other_type_definitions, name, type.initialised_type)
+        emit_type(&s.other_type_definitions, name, s.types.values.d[index].type)
         strings.write_byte(&s.other_type_definitions, ';')
-    case SumType(Type):
+    case SumType:
         // Main struct type
         strings.write_string(&s.sum_type_definitions, "struct ")
         strings.write_string(&s.sum_type_definitions, name)
         strings.write_string(&s.sum_type_definitions, "Struct{uint64_t variant; union {")
-        for variant, i in type.variants {
+        for _, i in type.m.keys {
             strings.write_string(&s.sum_type_definitions, "Type")
-            strings.write_uint(&s.sum_type_definitions, uint(variant.payload.index))
+            strings.write_uint(&s.sum_type_definitions, uint(type.payloads.d[i].index))
             strings.write_string(&s.sum_type_definitions, "* variant")
             strings.write_int(&s.sum_type_definitions, i)
             strings.write_byte(&s.sum_type_definitions, ';')
@@ -547,8 +547,9 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         emit_forward_struct_definition(s, name)
 
         // Variant funcs
-        for variant, i in type.variants {
-            payload := get_type(s.types, variant.payload).(Struct(Type, Type))
+        for _, i in type.m.keys {
+            payload_type := type.payloads.d[i]
+            payload := get_type(s.types, payload_type).key.(StructType)
             strings.write_string(&s.sum_type_initialisation_funcs, name)
             strings.write_string(&s.sum_type_initialisation_funcs, " init_")
             strings.write_string(&s.sum_type_initialisation_funcs, name)
@@ -556,14 +557,14 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             strings.write_int(&s.sum_type_initialisation_funcs, i)
             strings.write_byte(&s.sum_type_initialisation_funcs, '(')
             first_arg := true
-            for field, j in payload.fields {
+            for _, j in payload.m.keys {
                 if !first_arg {
                     strings.write_byte(&s.sum_type_initialisation_funcs, ',')
                 }
                 first_arg = false
                 field_name := fmt.aprintf("field%d", j)
                 defer delete_string(field_name)
-                emit_type(&s.sum_type_initialisation_funcs, field_name, field.type)
+                emit_type(&s.sum_type_initialisation_funcs, field_name, payload.types.d[j])
             }
             strings.write_string(&s.sum_type_initialisation_funcs, ") {")
             strings.write_string(&s.sum_type_initialisation_funcs, name)
@@ -572,15 +573,15 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             strings.write_string(&s.sum_type_initialisation_funcs, "; out.payload.variant")
             strings.write_int(&s.sum_type_initialisation_funcs, i)
             strings.write_string(&s.sum_type_initialisation_funcs, " = malloc(sizeof(Type")
-            strings.write_uint(&s.sum_type_initialisation_funcs, uint(variant.payload.index))
+            strings.write_uint(&s.sum_type_initialisation_funcs, uint(payload_type.index))
             strings.write_string(&s.sum_type_initialisation_funcs, "));")
             strings.write_string(&s.sum_type_initialisation_funcs, "*out.payload.variant")
             strings.write_int(&s.sum_type_initialisation_funcs, i)
             strings.write_string(&s.sum_type_initialisation_funcs, " = init_Type")
-            strings.write_uint(&s.sum_type_initialisation_funcs, uint(variant.payload.index))
+            strings.write_uint(&s.sum_type_initialisation_funcs, uint(payload_type.index))
             strings.write_string(&s.sum_type_initialisation_funcs, "(")
             first_arg = true
-            for _, j in payload.fields {
+            for _, j in payload.m.keys {
                 if !first_arg {
                     strings.write_byte(&s.sum_type_initialisation_funcs, ',')
                 }
@@ -590,7 +591,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             }
             strings.write_string(&s.sum_type_initialisation_funcs, ");return out;}")
         }
-    case Struct(Type, Type):
+    case StructType:
         // Type def
         emit_forward_struct_definition(s, name)
 
@@ -605,7 +606,7 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
         strings.write_string(&s.other_type_definitions, name)
         strings.write_byte(&s.other_type_definitions, '(')
         first_field := true
-        for field, i in type.fields {
+        for _, i in type.m.keys {
             if first_field == false {
                 strings.write_byte(&s.other_type_definitions, ',')
             } else {
@@ -613,12 +614,12 @@ emit_c_global_type :: proc(s: ^CEmitterState, index: int, loc := #caller_locatio
             }
             field_name := fmt.aprintf("field%d", i)
             defer delete(field_name)
-            emit_type(&s.other_type_definitions, field_name, field.type)
+            emit_type(&s.other_type_definitions, field_name, type.types.d[i])
         }
         strings.write_string(&s.other_type_definitions, ") {")
         strings.write_string(&s.other_type_definitions, name)
         strings.write_string(&s.other_type_definitions, " out;")
-        for _, i in type.fields {
+        for _, i in type.m.keys {
             strings.write_string(&s.other_type_definitions, "out.field")
             strings.write_int(&s.other_type_definitions, i)
             strings.write_string(&s.other_type_definitions, "=field")
@@ -633,7 +634,7 @@ emit_function_head :: proc(s: ^CEmitterState, func_index: int, type: Type) {
     when debug_emitter {
         debug("emitting function index %d", func_index)
     }
-    info := get_type(s.types, type).(FuncType)
+    info := get_type(s.types, type).key.(FuncType)
     switch len(info.return_types) {
     case 0:
         strings.write_string(&s.b, "void")
@@ -671,7 +672,7 @@ emit_c :: proc(
         GeneralEmitterState{strings.builder_make(), types, checked_funcs},
     }
 
-    for _, i in types.values {
+    for _, i in types.m.keys {
         emit_c_global_type(&s, i)
     }
 

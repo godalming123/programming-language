@@ -72,7 +72,7 @@ create_joined_values :: proc(
     return CheckedJoinedValues{method, new_clone(val0), new_clone(val1)}
 }
 
-create_field_access :: proc(value: CheckedValue, field_index: uint) -> CheckedValue {
+create_field_access :: proc(value: CheckedValue, field_index: u32) -> CheckedValue {
     #partial switch v in value {
     case CompileTimeValue:
         return v.(CompileTimeStructInitialisation).args[field_index]
@@ -106,7 +106,7 @@ iterate_array :: proc(
     loop_index: uint,
     index_variable: VariableRef,
     value_variable: VariableRef,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
     array_value: CheckedValue,
     array_type: ArrayType,
@@ -116,7 +116,7 @@ iterate_array :: proc(
 
     if_block := make([]CheckedStatement, 1)
     if_block[0] = BreakLoop{loop_index}
-    insert(
+    dynamic_insert(
         body,
         CheckedIf {
             create_joined_values(
@@ -157,7 +157,7 @@ iterate_start_end_step :: proc(
     start: CheckedValue,
     end: CheckedValue,
     step: CheckedValue,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
     // TODO: Handle when `step` is negative
@@ -165,7 +165,7 @@ iterate_start_end_step :: proc(
     loop_enter[0] = CheckedMutation{index_variable, start}
     if_block := make([]CheckedStatement, 1)
     if_block[0] = BreakLoop{loop_index}
-    insert(
+    dynamic_insert(
         body,
         CheckedIf {
             create_joined_values(
@@ -197,11 +197,11 @@ iterate_ordered_hash_map :: proc(
     index_variable: VariableRef,
     key_variable: VariableRef,
     value_variable: VariableRef,
-    body: ^Dynamic(CheckedStatement),
+    body: ^DoubleDynamic(CheckedStatement),
     body_variables: []Type,
 ) -> CheckedLoop {
     keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)} // TODO: Handle for I64 keys
-    insert(
+    dynamic_insert(
         body,
         CheckedMutation {
             value_variable,

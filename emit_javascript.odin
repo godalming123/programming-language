@@ -134,7 +134,7 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
     case CheckedFieldAccess:
         emit_js_value(s, v.value^)
         strings.write_string(&s.b, ".field")
-        strings.write_uint(&s.b, v.field_index)
+        strings.write_uint(&s.b, uint(v.field_index))
     case LengthOfArray:
         emit_js_value(s, v.array^)
         strings.write_string(&s.b, ".length")
@@ -219,22 +219,22 @@ emit_js_value :: proc(s: ^GeneralEmitterState, value: CheckedValue) {
 emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
     name := fmt.aprintf("Type%d", index)
     defer delete(name)
-    switch t in s.types.values[index].value.value {
+    switch t in s.types.m.keys[index].key {
     case OrderedHashMapTypeWithStringKey:
     case OrderedHashMapTypeWithI64Key:
     case ArrayType:
     case FuncType:
     case GenericTypeValue:
-    case SumType(Type):
-        for variant, i in t.variants {
-            payload := get_type(s.types, variant.payload).(Struct(Type, Type))
+    case SumType:
+        for _, i in t.m.keys {
+            payload := get_type(s.types, t.payloads.d[i]).key.(StructType)
             strings.write_string(&s.b, "function init_")
             strings.write_string(&s.b, name)
             strings.write_string(&s.b, "Variant")
             strings.write_int(&s.b, i)
             strings.write_byte(&s.b, '(')
             first_arg := true
-            for _, j in payload.fields {
+            for _, j in payload.m.keys {
                 if first_arg {
                     first_arg = false
                 } else {
@@ -245,19 +245,19 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
             }
             strings.write_string(&s.b, ") {return {variant:")
             strings.write_int(&s.b, i)
-            for _, j in payload.fields {
+            for _, j in payload.m.keys {
                 strings.write_byte(&s.b, ',')
                 strings.write_string(&s.b, "field")
                 strings.write_int(&s.b, j)
             }
             strings.write_string(&s.b, "}}")
         }
-    case Struct(Type, Type):
+    case StructType:
         strings.write_string(&s.b, "function init_")
         strings.write_string(&s.b, name)
         strings.write_byte(&s.b, '(')
         first_field := true
-        for _, i in t.fields {
+        for _, i in t.m.keys {
             if first_field {
                 first_field = false
             } else {
@@ -268,7 +268,7 @@ emit_js_global_type :: proc(s: ^GeneralEmitterState, index: int) {
         }
         strings.write_string(&s.b, ") {return {")
         first_field = true
-        for _, i in t.fields {
+        for _, i in t.m.keys {
             if first_field {
                 first_field = false
             } else {
@@ -317,10 +317,8 @@ emit_js_block_body :: proc(
                 emit_js_block_head(s, nesting_level + 1, branch.block.variables)
                 if value_var, has_value_var := branch.value_var.(VariableRef); has_value_var {
                     emit_variable(&s.b, value_var)
-                    strings.write_string(&s.b, " = *")
-                    emit_variable(&s.b, stmt.value)
-                    strings.write_string(&s.b, ".payload.variant")
-                    strings.write_int(&s.b, i)
+                    strings.write_string(&s.b, " = ")
+                    emit_variable(&s.b, stmt.value) // TODO: Maybe create a copy without the `variant` field?
                     strings.write_byte(&s.b, ';')
                 }
                 emit_js_block_body(s, nesting_level + 1, branch.block.body)
@@ -406,7 +404,7 @@ emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> s
     s := GeneralEmitterState{strings.builder_make(), types, checked_functions}
     strings.write_string(&s.b, "function in_map(a, b) {return Map.prototype.has.call(b, a)}")
 
-    for _, index in types.values {
+    for _, index in types.m.keys {
         emit_js_global_type(&s, index)
     }
 
@@ -434,7 +432,7 @@ emit_javascript :: proc(types: Types, checked_functions: []CheckedFunction) -> s
         strings.write_string(&s.b, "function func")
         strings.write_int(&s.b, index)
         strings.write_byte(&s.b, '(')
-        info := get_type(types, func.type).(FuncType)
+        info := get_type(types, func.type).key.(FuncType)
         first_arg := true
         for _, i in info.args {
             if first_arg {

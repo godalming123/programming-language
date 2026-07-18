@@ -1,7 +1,8 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
-import "core:log"
+import "core:mem"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -11,9 +12,60 @@ debug_tokenizer :: false // You can use this to debug the parser
 debug_parser_output :: false
 debug_checker :: false
 debug_emitter :: false
-debug_ordered_hash_sets :: false
+debug_key_to_index :: false
 debug_interpreter :: false
 debug_diagnostics :: false
+debug_arena :: false
+debug_dynamic_array :: false
+
+position_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+    if verb != 'v' {
+        return false
+    }
+    pos := cast(^Pos)arg.data
+    if pos^ == unknown_pos {
+        fmt.wprint(fi.writer, "unknown_pos")
+        return true
+    }
+    line := 1
+    column := 1
+    for char in pos.file.code[:pos.index] {
+        if char == '\n' {
+            line += 1
+            column = 1
+        } else {
+            column += 1
+        }
+    }
+    fmt.wprintf(fi.writer, "`%s` (%d:%d)", pos.file.file_path, line, column)
+    return true
+}
+
+source_code_location_formatter :: proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+    if verb != 'v' {
+        return false
+    }
+    loc := cast(^runtime.Source_Code_Location)arg.data
+    fmt.wprintf(fi.writer, "file %s at line %d column %d", loc.file_path, loc.line, loc.column)
+    return true
+}
+
+@(init)
+init :: proc "contextless" () {
+    context = runtime.default_context()
+    user_formatters := new(map[typeid]fmt.User_Formatter)
+    user_formatters[Pos] = position_formatter
+    user_formatters[TokenContents] = token_formatter
+    user_formatters[runtime.Source_Code_Location] = source_code_location_formatter
+    fmt.set_user_formatters(user_formatters)
+}
+
+@(fini)
+fini :: proc "contextless" () {
+    context = runtime.default_context()
+    delete_map(fmt._user_formatters^)
+    free(fmt._user_formatters)
+}
 
 // The `string` returned is the path to the executable
 write_and_compile_c :: proc(c_code: []u8, path: string) -> (string, bool) {
@@ -70,7 +122,7 @@ source_code_changed :: proc(early_exit_value: ^ExitEarlyAwaitingSourceCodeChange
     for file in early_exit_value.files {
         info, err := os.stat(file.file_path, context.allocator)
         if err == os.General_Error.Not_Exist {
-            continue
+            return true
         }
         if err != nil {
             panic(fmt.aprintf("Failed to stat file: %v", err))
@@ -131,6 +183,8 @@ compile :: proc(
     command: Command,
     exit_early: EarlyExitInfo,
 ) -> int {
+    a: Arena
+    defer delete_arena(&a, expect_empty = false)
     start := time.now()
     if exit_early_info, exiting_early := exit_early.(^ExitEarly); exiting_early {
         exit_early_info^ = ExitEarlyAwaitingSourceCodeChange{start, nil, time.Time{}}
@@ -143,7 +197,7 @@ compile :: proc(
         )
     }
 
-    parsed, ok := parse_project(func.file_name, compiler, exit_early)
+    parsed, ok := parse_project(&a, func.file_name, compiler, exit_early)
     if !ok {
         return 1
     }
@@ -161,7 +215,7 @@ compile :: proc(
     }
 
     fmt.fprintfln(compiler.stdout, "Checking...")
-    checker_output := check(parsed, func.func_name, compiler)
+    checker_output := check(&a, parsed, func.func_name, compiler)
     function_type := unknown_type
     if checker_output.func_ref.index < len(checker_output.checked_funcs) {
         function_type = checker_output.checked_funcs[checker_output.func_ref.index].type
@@ -231,15 +285,29 @@ compile :: proc(
     }
     defer delete_string(warnings)
 
+    elapsed_ms := time.duration_milliseconds(time.since(start))
+
     if checker_output.reporter.number_of[.Error] > 0 {
-        fmt.fprintfln(compiler.stderr, "Erroneously checked with %s and %s", errors, warnings)
+        fmt.fprintfln(
+            compiler.stderr,
+            "Erroneously checked with %s and %s in %f ms",
+            errors,
+            warnings,
+            elapsed_ms,
+        )
         return 1
     }
 
-    fmt.fprintfln(compiler.stdout, "Successfully checked with %s and %s", errors, warnings)
+    fmt.fprintfln(
+        compiler.stdout,
+        "Successfully checked with %s and %s in %f ms",
+        errors,
+        warnings,
+        elapsed_ms,
+    )
 
     if build_c, is_build_c := command.(BuildC); is_build_c {
-        fmt.printfln("Emitting C code...")
+        fmt.fprintfln(compiler.stdout, "Emitting C code...")
         c := emit_c(checker_output.types, checker_output.checked_funcs, checker_output.func_ref)
         executable_path, ok2 := write_and_compile_c(c, func.file_name)
         if !ok2 {
@@ -290,8 +358,6 @@ compile :: proc(
         args = make([]RuntimeValue, 1)
         args[0] = RuntimeStruct{true, compiler_struct_fields, compiler_type}
     }
-    // TODO: Output logs to run.program_io
-    context.logger = log.create_console_logger(.Info) // Used by the http server
     result := interp_execute_function2(
         InterpState{&state, run.long_lived_interp_state},
         checker_output.func_ref,

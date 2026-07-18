@@ -1,33 +1,34 @@
 package main
 
-StructField :: struct(T: typeid) {
-    name: IdentAndPos,
-    type: T,
+StructUnit :: struct {
+    m:         KeyToIndex(string),
+    positions: Multi(Pos),
+    types:     Multi(Unit),
 }
 
-Struct :: struct(T: typeid, ExtraData: typeid) {
-    extra_data: ExtraData,
-
-    // Stored this way to preserve the order
-    fields_map: map[string]uint, // An index into `fields`
-    fields:     #soa[]StructField(T),
+StructType :: struct {
+    m:         KeyToIndex(string),
+    positions: Multi(Pos),
+    types:     Multi(Type),
 }
 
-SumTypeVariant :: struct(Payload: typeid) {
-    name:    IdentAndPos,
-    payload: Payload,
+SumUnit :: struct {
+    m:         KeyToIndex(string),
+    positions: Multi(Pos),
+    payloads:  Multi(StructUnit),
 }
 
-SumType :: struct(VariantPayload: typeid) {
-    // Stored this way to preserve the order
-    variants_map: map[string]uint, // An index into `variants`
-    variants:     #soa[]SumTypeVariant(VariantPayload),
+SumType :: struct {
+    m:         KeyToIndex(string),
+    positions: Multi(Pos),
+    payloads:  Multi(Type), // Always a struct type
 }
 
 Ident :: struct {
     segments: #soa[]IdentAndPos,
 }
 
+/*
 make_ident :: proc(token: IdentToken, file: FileRef) -> Ident {
     // TODO: Do not copy the token
     out := make(#soa[]IdentAndPos, len(token))
@@ -36,6 +37,7 @@ make_ident :: proc(token: IdentToken, file: FileRef) -> Ident {
     }
     return Ident{out}
 }
+*/
 
 Number :: struct {
     is_negated:      bool,
@@ -96,8 +98,8 @@ InitialUnit :: union {
 */
 
 UnitWithoutPos :: union {
-    Struct(Unit, struct {}),
-    SumType(Struct(Unit, struct {})),
+    StructUnit,
+    SumUnit,
     Tuple,
     FuncDefinitionRef,
     CallWithBrackets,
@@ -256,12 +258,14 @@ Pos :: struct {
     file:  FileRef,
 }
 
-unknown_pos :: Pos{max(uint), FileRef{max(uint)}}
+unknown_pos :: Pos{max(uint), nil}
 
+/*
 IdentAndIndex :: struct {
     ident: string,
     index: uint,
 }
+*/
 
 IdentAndPos :: struct {
     ident: string,
@@ -418,9 +422,9 @@ debug_unit :: proc(funcs: []FunctionDefinition, unit: Unit) {
     debug("value at character index %d", unit.pos)
     debug_nesting += 1
     switch v in unit.value {
-    case Struct(Unit, struct {}):
+    case StructUnit:
         panic("TODO")
-    case SumType(Struct(Unit, struct {})):
+    case SumUnit:
         panic("TODO")
     case Number:
         debug("is_negated: %v", v.is_negated)

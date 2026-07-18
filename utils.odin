@@ -5,9 +5,54 @@ import "core:fmt"
 import "core:io"
 import "core:math/rand"
 import "core:os"
-import "core:slice"
 import "core:strings"
 import "core:testing"
+
+panicf :: proc(format: string, args: ..any) -> ! {
+    panic(fmt.aprintf(format, ..args))
+}
+
+resizable_array_stream_proc :: proc(
+    data: rawptr,
+    mode: io.Stream_Mode,
+    p: []byte,
+    offset: i64,
+    whence: io.Seek_From,
+) -> (
+    n: i64,
+    err: io.Error,
+) {
+    assert(offset == 0 && whence == nil)
+    if mode == .Close || mode == .Flush {
+        assert(len(p) == 0)
+        return 0, nil
+    }
+    if mode != .Write {
+        panicf("Mode is %v", mode)
+    }
+    d := (^[]byte)(data)
+    append_dynamic_elems(d, ..p)
+    return i64(len(p)), nil
+}
+
+aprintf :: proc(a: ^Arena, format: string, args: ..any) -> string {
+    array := arena_make(a, []byte, 0)
+    fmt.wprintf(io.Writer{resizable_array_stream_proc, &array}, format, ..args)
+    return string(array)
+}
+
+// FNV-1a 32-bit
+simple_hash :: proc(data: []byte) -> u32 {
+    h: u32 = 0x811c_9dc5 // FNV 32-bit offset basis
+    for b in data {
+        h = (h ~ u32(b)) * 0x0100_0193 // FNV 32-bit prime
+    }
+    return h
+}
+
+simple_hash_string :: proc(data: string) -> u32 {
+    return simple_hash(transmute([]byte)data)
+}
 
 file_mock :: proc() -> (^os.File, ^strings.Builder) {
     builder := new_clone(strings.builder_make())
@@ -224,6 +269,7 @@ separate_u64 :: proc(combined: u64) -> (a: u32, b: u32) {
 }
 */
 
+/*
 append2 :: proc(
     a_array: ^[dynamic]$A,
     b_array: ^[^]$B,
@@ -273,25 +319,26 @@ append2 :: proc(
 
     return nil
 }
+*/
 
 // Like a dynamic array, except can also be inserted into in average O(1) time
-Dynamic :: struct(T: typeid) {
+DoubleDynamic :: struct(T: typeid) {
     elems:       [dynamic]T,
     start_index: int,
 }
 
-dynamic_grow_front :: proc(array: ^Dynamic($T), grow_by: int) {
+dynamic_grow_front :: proc(array: ^DoubleDynamic($T), grow_by: int) {
     old_start_index := array.start_index
     array.start_index += grow_by
 
     old_elems := array.elems
-    array.elems = make([dynamic]T, cap(array.elems) + grow_by)
+    array.elems = make([dynamic]T, len(array.elems) + grow_by, cap(array.elems) + grow_by)
 
     copy_slice(array.elems[array.start_index:], old_elems[old_start_index:])
     delete(old_elems)
 }
 
-dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
+dynamic_insert :: proc(array: ^DoubleDynamic($T), elems: ..T) {
     if array.start_index < len(elems) {
         dynamic_grow_front(array, max(len(array.elems), len(elems)))
     }
@@ -299,28 +346,37 @@ dynamic_insert :: proc(array: ^Dynamic($T), elems: ..T) {
     copy(array.elems[array.start_index:], elems)
 }
 
-dynamic_append_elem :: proc(array: ^Dynamic($T), elem: T) {
+dynamic_append_elem :: proc(array: ^DoubleDynamic($T), elem: T) {
     append_elem(&array.elems, elem)
 }
 
-dynamic_to_fixed :: proc(array: Dynamic($T)) -> []T {
+dynamic_to_fixed :: proc(array: DoubleDynamic($T)) -> []T {
     return array.elems[array.start_index:]
-}
-
-insert :: proc {
-    dynamic_insert,
-    ordered_hash_set_insert,
 }
 
 up_line :: "\033[A"
 erase_line :: "\033[2K"
 to_beginning :: "\r"
 
+/*
 join :: proc(slice0: $TypeDefinition/[]$Elem, slice1: ..Elem) -> []Elem {
     dyn := slice.clone_to_dynamic(slice0)
     append_elems(&dyn, ..slice1)
     return dyn[:]
 }
+
+OutputBuilder :: struct {
+    file:   ^os.File,
+    b:      strings.Builder,
+    footer: string,
+}
+
+write :: proc(output_builder: ^OutputBuilder) {
+    strings.write_string(&output_builder.b, footer)
+    fmt.fprint(output_builder.file, strings.to_string(output_builder.b))
+    strings.builder_destroy(&output_builder.b)
+}
+*/
 
 DiagnosticType :: enum {
     Error,
@@ -328,7 +384,7 @@ DiagnosticType :: enum {
 }
 
 DiagnosticReporter :: struct {
-    files:     [^]CompilerFile,
+    files:     Multi(CompilerFile),
     io:        Pipe(^os.File),
     number_of: [DiagnosticType]uint,
 }
@@ -366,9 +422,7 @@ diagnostic :: proc(
     }
     strings.write_string(&message, " compiling")
     if position != unknown_pos {
-        loc := get_location(r.files, position)
-        strings.write_byte(&message, ' ')
-        strings.write_string(&message, loc)
+        fmt.sbprintf(&message, " %v", position)
     }
     strings.write_byte(&message, '\n')
 
@@ -507,13 +561,7 @@ print_arg :: proc(arg_name: string, arg_value: any) {
 
 @(deferred_in_out = print_call_finished)
 print_call :: proc(loc: runtime.Source_Code_Location, func_name: string) {
-    debug(
-        "%s called from file %s at line %d column %d",
-        func_name,
-        loc.file_path,
-        loc.line,
-        loc.column,
-    )
+    debug("%s called from %v", func_name, loc)
     debug_nesting += 1
 }
 

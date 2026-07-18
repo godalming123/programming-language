@@ -63,9 +63,9 @@ run_example_via_c :: proc(
         testing.fail_now(t, fmt.aprintf("Failed to create pipe: %#v", err))
     }
     defer os.close(stdin_reader)
-    defer os.close(stdin_writer)
 
     _, err2 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
+    os.close(stdin_writer)
     if err2 != nil {
         testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err2))
     }
@@ -245,7 +245,7 @@ The number 100 is not prime
 
 @(test)
 example_03_fibonacci :: proc(t: ^testing.T) {
-    file :: #directory + "examples/fibonacci.txt"
+    file :: #directory + "examples/gitignore_fibonacci.txt"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -337,7 +337,7 @@ buffered_pipe_test :: proc(t: ^testing.T) {
 
 @(test)
 example_06_counter :: proc(t: ^testing.T) {
-    file :: #directory + "examples/counter.html"
+    file :: #directory + "examples/gitignore_counter.html"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -349,7 +349,7 @@ example_06_counter :: proc(t: ^testing.T) {
 
 @(test)
 example_07_conways_game_of_life :: proc(t: ^testing.T) {
-    file :: #directory + "examples/conways_game_of_life.html"
+    file :: #directory + "examples/gitignore_conways_game_of_life.html"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -393,21 +393,22 @@ basic_fuzz_test :: proc(t: ^testing.T) {
 
 @(test)
 basic_type_system_test :: proc(t: ^testing.T) {
-    types: Types
+    a := Arena{}
+    defer delete_arena(&a, expect_empty = false)
+    types := create_types(&a)
+    defer fix_types(types)
     generic_args0 := make([]Type, 1)
     generic_args0[0] = string_type
     generic_args1 := make([]Type, 1)
     generic_args1[0] = bool_type
-    generic0 :=
-        create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0, unknown_type}).type
-    generic1 :=
-        create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0, i64_type}).type
-    generic2 :=
-        create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args1, unknown_type}).type
-    testing.expect(t, generic0 == generic1)
-    generic0_initialised := get_type(types, generic0).(GenericTypeValue).initialised_type
+    generic0 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
+    generic1 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args0})
+    types.values.d[generic1.type.index].type = i64_type
+    generic2 := create_type(&types, GenericTypeValue{GlobalValueWithGenericRef{7}, generic_args1})
+    testing.expect(t, generic0.type == generic1.type)
+    generic0_initialised := get_type(types, generic0.type).value.type
     testing.expect(t, generic0_initialised == i64_type)
-    testing.expect(t, generic0 != generic2)
+    testing.expect(t, generic0.type != generic2.type)
 }
 
 @(test)
@@ -505,17 +506,18 @@ invalid_example_00_uninitialised_global_value_with_generics :: proc(t: ^testing.
     )
     expect_string(&e, "Hint: Try initialising the global value with something like `debug[T]`\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")
+    expect_string(&e, "Erroneously checked with 1 error and 0 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
     expect_finished(&e)
 }
 
 @(test)
 invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
-    ran := run_example_via_c(
-        t,
-        #directory + "examples/invalid/01_wrong_identifier_casing.code",
-        "",
-    )
+    file :: #directory + "examples/invalid/01_wrong_identifier_casing.code"
+    ran := run_example_via_c(t, file, "")
     if ran == nil {return}
     out := ran.(CompilationSuccessful)
     testing.expect(t, out.program.stderr == "")
@@ -523,6 +525,7 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     testing.expect(t, out.compiler.stderr == "")
     e := TestingTextExpecter{0, out.compiler.stdout, t}
     fmt.println(out.compiler.stdout)
+    expect_string(&e, "Reading `" + file + "`...\n")
     expect_string(&e, "Checking...\n")
     expect_string(&e, "\n")
     expect_string(&e, "Warning compiling `" + #directory)
@@ -537,24 +540,27 @@ invalid_example_01_wrong_identifier_casing :: proc(t: ^testing.T) {
     expect_string(&e, "First character in a camel case identifier must be an uppercase letter\n")
     expect_string(&e, "Got 'e'\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Successfully checked with 0 errors and 2 warnings\n")
+    expect_string(&e, "Successfully checked with 0 errors and 2 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
+    expect_string(&e, "Emitting C code...\n")
     expect_done_message(&e)
     expect_finished(&e)
 }
 
 @(test)
 invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
-    ran := run_example_via_c(
-        t,
-        #directory + "examples/invalid/02_wrong_main_function_type.code",
-        "",
-    )
+    file :: #directory + "examples/invalid/02_wrong_main_function_type.code"
+    ran := run_example_via_c(t, file, "")
     if ran == nil {return}
     out := ran.(CompilationFailed)
 
     testing.expect(t, out.status == 1)
 
     e := TestingTextExpecter{0, out.compiler.stdout, t}
+    expect_string(&e, "Reading `" + file + "`...\n")
     expect_string(&e, "Checking...\n")
     expect_done_message(&e)
     expect_finished(&e)
@@ -565,8 +571,118 @@ invalid_example_02_wrong_main_function_type :: proc(t: ^testing.T) {
     expect_string(&e, "Got the type `(String, I64) -> I64`\n")
     expect_string(&e, "Expected the type `() -> I64`\n")
     expect_string(&e, "\n")
-    expect_string(&e, "Erroneously checked with 1 error and 0 warnings\n")
+    expect_string(&e, "Erroneously checked with 1 error and 0 warnings in ")
+    expect_digits(&e)
+    expect_string(&e, ".")
+    expect_digits(&e)
+    expect_string(&e, " ms\n")
     expect_finished(&e)
+}
+
+// Just to test `arena.odin`, so no proper error handling
+
+TreeNode :: union {
+    string,
+    []TreeNode,
+}
+
+string_to_node :: proc(a: ^Arena, i: ^int, text: string) -> TreeNode {
+    for text[i^] == ' ' {
+        i^ += 1
+    }
+    switch text[i^] {
+    case '(':
+        i^ += 1
+        children := arena_make(a, []TreeNode, 0, resizable = true)
+        for text[i^] != ')' {
+            child := string_to_node(a, i, text)
+            append_dynamic(&children, child)
+        }
+        i^ += 1
+        fix_resizable_dynamic(children)
+        return children
+    case '`':
+        i^ += 1
+        start := i^
+        for text[i^] != '`' {
+            i^ += 1
+        }
+        out := text[start:i^]
+        i^ += 1
+        return out
+    case:
+        panic("Unreachable")
+    }
+}
+
+node_to_string := proc(d: ^[]byte, node: TreeNode) {
+    switch n in node {
+    case string:
+        append_dynamic(d, '`')
+        for c in transmute([]byte)n {
+            append_dynamic(d, c)
+        }
+        append_dynamic(d, '`')
+    case []TreeNode:
+        append_dynamic(d, '(')
+        first_child := true
+        for child in n {
+            if first_child == false {
+                append_dynamic(d, ' ')
+            }
+            node_to_string(d, child)
+            first_child = false
+        }
+        append_dynamic(d, ')')
+    case:
+        panic("Unreachable")
+    }
+}
+
+@(test)
+arena_test :: proc(t: ^testing.T) {
+    a := Arena{}
+    defer delete_arena(&a, expect_empty = false)
+
+    my_tree_string :: "(((`a` `b` `c`) `d` (`e` `f`)) `g` `h`)"
+
+    index := 0
+    my_tree_node := string_to_node(&a, &index, my_tree_string)
+    testing.expect(t, index == len(my_tree_string))
+
+    // Even though `my_tree_dynamic_array` was not created with
+    // `resizable == false`, it is still resizable because the last
+    // allocation is always resizable
+    my_tree_dynamic_array := arena_make(&a, []byte, 0, resizable = false)
+    defer dealloc(raw_data(my_tree_dynamic_array))
+    node_to_string(&my_tree_dynamic_array, my_tree_node)
+    my_tree_string2 := string(my_tree_dynamic_array)
+    if my_tree_string != my_tree_string2 {
+        testing.fail_now(t, fmt.aprintf("%s != %s", my_tree_string, my_tree_string2))
+    }
+
+    my_int := arena_new(&a, int)
+    defer dealloc(my_int)
+    my_int^ = 5
+    defer testing.expect(t, my_int^ == 5)
+
+    fibonacci_numbers := arena_make(&a, []int, 0, resizable = false)
+    defer dealloc(raw_data(fibonacci_numbers))
+    append_dynamic_elems(&fibonacci_numbers, 0, 1, 1)
+
+    for len(fibonacci_numbers) < 15 {
+        append_dynamic(
+            &fibonacci_numbers,
+            fibonacci_numbers[len(fibonacci_numbers) - 1] +
+            fibonacci_numbers[len(fibonacci_numbers) - 2],
+        )
+    }
+
+    fibonacci_string := aprintf(&a, "%v", fibonacci_numbers)
+    defer dealloc(raw_data(fibonacci_string))
+    if fibonacci_string != "[0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377]" {
+        testing.fail_now(t, fmt.aprintf("Fibonacci string is %q", fibonacci_string))
+    }
 }
 
 // TODO: Add a fuzz test where the code that gets compiled never has any syntax errors

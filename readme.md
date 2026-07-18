@@ -8,12 +8,10 @@ The second programming language that I've developed, after [common assembly](htt
 odin build .
 ```
 
-# Compiling and executing the fizzbuzz example
+# Executing the fizzbuzz example
 
 ```sh
-./programming_language build examples/fizzbuzz.code
-gcc examples/fizzbuzz.code.c -o fizzbuzz
-./fizzbuzz
+./programming_language run examples/00_fizzbuzz.code
 ```
 
 # Running tests
@@ -68,7 +66,9 @@ A new language for the web, because it's time to stop working around javascript.
 - Remove unnecersarry array copies from the C backend
   - Once this is done, arrays should grow by a multiple of 2 when they overflow rather than growing the minimum amount to be able to fit their new contents
 - Add reference counting or garbage collection to the emitted C code to stop it from leaking memory
-- Do not leak memory in the compiler
+- Do not leak memory in the compiler and interpreter
+  - Especially important since the `-watch` flag was added
+  - For the interpreter, any http server in `LongLivedInterpState.http_servers` should be cleaned up once it is no longer accessible through in-scope variables or the compiler cache
 - Tell the c compiler the type of the number literals that are emitted
 - Check that number literals aren't too big or small for their type
 - Implement parsing boolean not
