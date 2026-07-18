@@ -251,7 +251,7 @@ example_03_fibonacci :: proc(t: ^testing.T) {
 
     ran := interpret_example(t, FunctionRef{#directory + "examples/03_fibonacci.code", "main"})
     testing.expect(t, ran.exit_code == 0)
-    // testing.expect(ran.compiler_stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
+    // testing.expect(ran.compiler.stderr == "") // TODO: Implement array bounds checking so this line can be uncommented
 
     data, err2 := os.read_entire_file(file, context.allocator)
     if err2 != nil {
@@ -651,7 +651,7 @@ arena_test :: proc(t: ^testing.T) {
     testing.expect(t, index == len(my_tree_string))
 
     // Even though `my_tree_dynamic_array` was not created with
-    // `resizable == false`, it is still resizable because the last
+    // `resizable = false`, it is still resizable because the last
     // allocation is always resizable
     my_tree_dynamic_array := arena_make(&a, []byte, 0, resizable = false)
     defer dealloc(raw_data(my_tree_dynamic_array))

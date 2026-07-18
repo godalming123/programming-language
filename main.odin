@@ -62,6 +62,7 @@ init :: proc "contextless" () {
 
 @(fini)
 fini :: proc "contextless" () {
+    // TODO: Check if there are any `Arena` allocators which have not been deleted when `ODIN_DEBUG == true`
     context = runtime.default_context()
     delete_map(fmt._user_formatters^)
     free(fmt._user_formatters)

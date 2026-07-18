@@ -9,16 +9,20 @@ package main
 
 import "core:mem"
 
+@(private = "file")
 key_to_index_min_scale_factor :: 3 // len(KeyToIndex.keys) * min_scale_factor <= len(KeyToIndex.slots)
+
+@(private = "file")
 key_to_index_size_with_one_elem :: 4 // math.next_power_of_two(key_to_index_min_scale_factor)
 
 Index :: struct {
     index: u32, // An index into `KeyToIndex.keys`
 }
 
+// Private because every `SlotIndex` becomes out-dated when the key to index is resized
+@(private = "file")
 SlotIndex :: struct {
     // An index into `KeyToIndex.slots`
-    // Short-lived because the `KeyToIndex` slots may be reallocated
     index: int,
 }
 
@@ -47,16 +51,12 @@ fix_key_to_index :: proc(key_to_index: KeyToIndex($Key)) {
     fix_resizable_dynamic(key_to_index.keys)
 }
 
+@(private = "file")
 get_index :: proc(slots_len: $T, hash: T) -> T {
     return hash & (slots_len - 1)
 }
 
-/*
-get_key :: proc(t: KeyToIndex($Key), ref: Index) -> Key {
-    return t.keys[ref.index].key
-}
-*/
-
+@(private = "file")
 resize_key_to_index :: proc(
     key_to_index: ^KeyToIndex($Key),
     new_slots_len: u32,
@@ -116,26 +116,7 @@ Result :: enum {
     LookedUp,
 }
 
-Exists :: struct {
-    index:      Index,
-    slot_index: SlotIndex,
-}
-
-NoSlots :: struct {}
-
-DoesNotExist :: union #no_nil {
-    // The index of the slot that the key would go in
-    SlotIndex,
-
-    // Cannot know the `SlotIndex`, nor the `Index` because there are no slots
-    NoSlots,
-}
-
-LookupResult :: union #no_nil {
-    Exists,
-    DoesNotExist,
-}
-
+@(private = "file")
 _lookup :: proc(
     key_to_index: KeyToIndex($K),
     key: Key(K),
@@ -221,9 +202,6 @@ lookup_or_insert :: proc(
         if minimum_number_of_slots > len(key_to_index.slots) {
             new_size := len(key_to_index.slots) << 1
             assert(new_size > minimum_number_of_slots)
-            // for u32(minimum_number_of_slots) > new_size {
-            // new_size <<= 1
-            // }
             resize_key_to_index(key_to_index, u32(new_size))
         } else {
             key_to_index.slots[result.index] = out

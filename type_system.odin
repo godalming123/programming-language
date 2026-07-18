@@ -402,12 +402,7 @@ CreatedType :: struct {
     result:     Result,
 }
 
-create_type :: proc(
-    types: ^Types,
-    value: TypeKey,
-    aliases: [dynamic]string = nil,
-    loc := #caller_location,
-) -> CreatedType {
+create_type :: proc(types: ^Types, value: TypeKey, loc := #caller_location) -> CreatedType {
     when debug_checker {
         print_call(loc, "create_type")
         debug("value: %v", value)

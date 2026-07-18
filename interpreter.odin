@@ -300,6 +300,7 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
                 if !ok {
                     err := webserver.send_error(client, 400, "Bad Request")
                     if err != nil {
+                        // TODO: Better error handling
                         panic("Failed to send error")
                     }
                     continue
@@ -327,6 +328,7 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
                     transmute([]byte)(response.payload[0].(RuntimeString).value),
                 )
                 if err != nil {
+                    // TODO: Better error handling
                     panic("Failed to send response")
                 }
             }
