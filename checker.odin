@@ -640,6 +640,9 @@ generic_initialisation_to_index_procs :: KeyToIndexProcs(GenericInitialisation) 
         return g.global.index ~ get_hash_of_array_of_types(g.args)
     },
     proc(v0: GenericInitialisation, v1: GenericInitialisation) -> bool {
+        if v0.global != v1.global {
+            return false
+        }
         if len(v0.args) != len(v1.args) {
             return false
         }
@@ -674,9 +677,10 @@ check_comptime_func_call :: proc(
     )
     if res == .LookedUp {
         value := s.generic_initialisations.values.d[ref.index]
-        if value.type != unknown_type {
-            return finish_checking_value(s, pos, type, value.value, value.type, "")
+        if value.type == unknown_type {
+            panic("TODO: Handle cycles")
         }
+        return finish_checking_value(s, pos, type, value.value, value.type, "")
     } else {
         resize_multi(&s.generic_initialisations.values, len(s.generic_initialisations.m.keys))
         s.generic_initialisations.values.d[ref.index] = CheckedGlobalValue{unknown_type, nil}

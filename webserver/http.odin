@@ -1,5 +1,6 @@
 package webserver
 
+import "base:runtime"
 import "core:bytes"
 import "core:fmt"
 import "core:net"
@@ -102,6 +103,7 @@ parse_http_request :: proc(data: []byte) -> (Http_Request, bool) {
         if colon_pos == -1 {
             continue
         }
+        // TODO: free `key`
         key := strings.to_lower(strings.trim_space(line[:colon_pos]))
         value := strings.trim_space(line[colon_pos + 1:])
         request.headers[key] = value
@@ -152,14 +154,23 @@ serve_file :: proc(client: net.TCP_Socket, url_path: string) {
 
 */
 
+WebserverError :: union #shared_nil {
+    net.TCP_Send_Error,
+    runtime.Allocator_Error,
+}
+
+@(require_results)
 send_response :: proc(
     client: net.TCP_Socket,
     code: int,
     text: string,
     content_type: string,
     body: []byte,
-) -> net.TCP_Send_Error {
-    sb := strings.builder_make()
+) -> WebserverError {
+    sb, err := strings.builder_make()
+    if err != nil {
+        return err
+    }
     defer strings.builder_destroy(&sb)
 
     fmt.sbprintf(&sb, "HTTP/1.1 %d %s\r\n", code, text)
@@ -170,23 +181,24 @@ send_response :: proc(
     fmt.sbprintf(&sb, "\r\n")
 
     header_str := strings.to_string(sb)
-    _, err := net.send_tcp(client, transmute([]byte)header_str)
-    if err != nil {
-        return err
+    _, err2 := net.send_tcp(client, transmute([]byte)header_str)
+    if err2 != nil {
+        return err2
     }
     if len(body) > 0 {
-        _, err2 := net.send_tcp(client, body)
-        if err2 != nil {
-            return err2
+        _, err3 := net.send_tcp(client, body)
+        if err3 != nil {
+            return err3
         }
     }
     return nil
 }
 
 
-send_error :: proc(client: net.TCP_Socket, code: int, text: string) {
+@(require_results)
+send_error :: proc(client: net.TCP_Socket, code: int, text: string) -> WebserverError {
     body := fmt.tprintf("<html><body><h1>%d %s</h1></body></html>", code, text)
-    send_response(client, code, text, "text/html", transmute([]byte)body)
+    return send_response(client, code, text, "text/html", transmute([]byte)body)
 }
 /*
 

@@ -1,3 +1,4 @@
 programming_language
 examples/**/*.c
 examples/**/*.bin
+gitignore*

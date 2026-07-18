@@ -15,7 +15,7 @@ get_file_index :: proc(files: Multi(CompilerFile), ref: FileRef, loc := #caller_
 
 // The index of the first unparsed file is always `ParserState.file_ref.index + 1`
 ParserState :: struct {
-    a:                              Arena,
+    a:                              ^Arena,
     // Updated every time the parser starts parsing a different file
     using tokenizer_state:          TokenizerState,
 
@@ -31,11 +31,12 @@ ParserState :: struct {
 // Does not include the `{`
 parse_struct :: proc(s: ^ParserState) -> (StructUnit, bool) {
     out := StructUnit {
-        make_key_to_index(&s.a, KeyToIndex(string)),
-        arena_make_multi(&s.a, Multi(Pos), 0, resizable = true),
-        arena_make_multi(&s.a, Multi(Unit), 0, resizable = true),
+        make_key_to_index(s.a, KeyToIndex(string)),
+        arena_make_multi(s.a, Multi(Pos), 0, resizable = true),
+        arena_make_multi(s.a, Multi(Unit), 0, resizable = true),
     }
     defer {
+        fix_key_to_index(out.m)
         fix_resizable_multi(out.types)
         fix_resizable_multi(out.positions)
     }
@@ -73,6 +74,7 @@ parse_struct :: proc(s: ^ParserState) -> (StructUnit, bool) {
                 fmt.aprintf("`:` to specify the type of the `%s` field", field.ident),
             )
             wrong_token_err(s)
+            return StructUnit{}, false
         case ColonToken:
         }
 
@@ -207,9 +209,14 @@ parse_initial_unit :: proc(s: ^ParserState) -> (Unit, bool) {
 
     case OpenAngleBracketToken:
         sum_type := SumUnit {
-            make_key_to_index(&s.a, KeyToIndex(string)),
-            arena_make_multi(&s.a, Multi(Pos), 0, resizable = true),
-            arena_make_multi(&s.a, Multi(StructUnit), 0, resizable = true),
+            make_key_to_index(s.a, KeyToIndex(string)),
+            arena_make_multi(s.a, Multi(Pos), 0, resizable = true),
+            arena_make_multi(s.a, Multi(StructUnit), 0, resizable = true),
+        }
+        defer {
+            fix_key_to_index(sum_type.m)
+            fix_resizable_multi(sum_type.payloads)
+            fix_resizable_multi(sum_type.positions)
         }
         loop: for {
             get_next_token(s, true)
@@ -766,7 +773,7 @@ get_identifier :: proc(
     }
     _, is_close_square_brace := s.last_token.(CloseSquareBracketToken)
     if !is_close_square_brace {
-        append_dynamic(&s.last_token_descriptions_of_other_possible_tokens, "`[`")
+        append_dynamic(&s.last_token_descriptions_of_other_possible_tokens, "`]`")
         wrong_token_err(s)
         return VariableDest{}, false
     }
@@ -951,11 +958,7 @@ parse_block :: proc(s: ^ParserState) -> ([]Statement, bool) {
             ok: bool = ---
             stmt, ok = parse_variable_management_after_first_var(
                 s,
-                VariableDest {
-                    IdentAndPos{token[0].ident, Pos{s.last_token_pos, s.file_ref}},
-                    .Constant,
-                    nil,
-                },
+                VariableDest{token[0], .Constant, nil},
             )
             if !ok {
                 return nil, false
@@ -1317,10 +1320,9 @@ ParsedGlobal :: struct {
 
 parse_file :: proc(s: ^ParserState) -> bool {
     get_next_token(s, true)
-    other_possible_tokens := [dynamic]string{}
     loop: for {
-        append_elems(
-            &other_possible_tokens,
+        append_dynamic_elems(
+            &s.last_token_descriptions_of_other_possible_tokens,
             "a newline",
             "a comment",
             "an identifier with one segment to define a global",
@@ -1354,12 +1356,13 @@ parse_file :: proc(s: ^ParserState) -> bool {
             _, is_open_square_bracket := s.last_token.(OpenSquareBracketToken)
             if is_open_square_bracket {
                 for {
-                    clear(&other_possible_tokens)
-
                     get_next_token(s, false)
                     segments, is_ident := s.last_token.(IdentToken)
                     if !is_ident || len(segments) != 1 {
-                        append_elem(&other_possible_tokens, "An identifier with one segment")
+                        append_dynamic(
+                            &s.last_token_descriptions_of_other_possible_tokens,
+                            "An identifier with one segment",
+                        )
                         break
                     }
 
@@ -1381,14 +1384,17 @@ parse_file :: proc(s: ^ParserState) -> bool {
                     get_next_token(s, false)
                     _, is_comma := s.last_token.(CommaToken)
                     if !is_comma {
-                        append_elem(&other_possible_tokens, "A comma")
+                        append_dynamic(
+                            &s.last_token_descriptions_of_other_possible_tokens,
+                            "A comma",
+                        )
                         break
                     }
                 }
 
                 _, is_close_square_bracket := s.last_token.(CloseSquareBracketToken)
                 if !is_close_square_bracket {
-                    append_elem(&other_possible_tokens, "`]`")
+                    append_dynamic(&s.last_token_descriptions_of_other_possible_tokens, "`]`")
                     wrong_token_err(s)
                     return false
                 }
@@ -1403,12 +1409,9 @@ parse_file :: proc(s: ^ParserState) -> bool {
                         type = .Warning,
                     )
                 }
-
-                clear(&other_possible_tokens)
             } else {
-                clear(&other_possible_tokens)
-                append_elem(
-                    &other_possible_tokens,
+                append_dynamic(
+                    &s.last_token_descriptions_of_other_possible_tokens,
                     "`[` to define the name of a generic argument to the value",
                 )
             }
@@ -1496,6 +1499,7 @@ parse_project :: proc(
             files = arena_make_multi(a, Multi(CompilerFile), 1, resizable = true),
         },
         parsed_files = arena_make(a, []map[string]ParsedGlobal, 1, resizable = true),
+        a = a,
     }
     defer {
         fix_resizable_dynamic(state.parsed_files)

@@ -24,6 +24,6 @@ build = |c: Compiler| -> I64 {
         counter_initial_state,
         h.ignore_keypress[CounterState],
     )
-    write_file("counter.html", html)
+    write_file("gitignore_counter.html", html)
     return 0
 }

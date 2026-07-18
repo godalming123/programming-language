@@ -317,10 +317,8 @@ emit_js_block_body :: proc(
                 emit_js_block_head(s, nesting_level + 1, branch.block.variables)
                 if value_var, has_value_var := branch.value_var.(VariableRef); has_value_var {
                     emit_variable(&s.b, value_var)
-                    strings.write_string(&s.b, " = *")
-                    emit_variable(&s.b, stmt.value)
-                    strings.write_string(&s.b, ".payload.variant")
-                    strings.write_int(&s.b, i)
+                    strings.write_string(&s.b, " = ")
+                    emit_variable(&s.b, stmt.value) // TODO: Maybe create a copy without the `variant` field?
                     strings.write_byte(&s.b, ';')
                 }
                 emit_js_block_body(s, nesting_level + 1, branch.block.body)

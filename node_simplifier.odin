@@ -116,7 +116,7 @@ iterate_array :: proc(
 
     if_block := make([]CheckedStatement, 1)
     if_block[0] = BreakLoop{loop_index}
-    insert(
+    dynamic_insert(
         body,
         CheckedIf {
             create_joined_values(
@@ -165,7 +165,7 @@ iterate_start_end_step :: proc(
     loop_enter[0] = CheckedMutation{index_variable, start}
     if_block := make([]CheckedStatement, 1)
     if_block[0] = BreakLoop{loop_index}
-    insert(
+    dynamic_insert(
         body,
         CheckedIf {
             create_joined_values(
@@ -201,7 +201,7 @@ iterate_ordered_hash_map :: proc(
     body_variables: []Type,
 ) -> CheckedLoop {
     keys := KeysOfOrderedHashMapWithStringKey{new_clone(hash_map)} // TODO: Handle for I64 keys
-    insert(
+    dynamic_insert(
         body,
         CheckedMutation {
             value_variable,

@@ -12,6 +12,35 @@ panicf :: proc(format: string, args: ..any) -> ! {
     panic(fmt.aprintf(format, ..args))
 }
 
+resizable_array_stream_proc :: proc(
+    data: rawptr,
+    mode: io.Stream_Mode,
+    p: []byte,
+    offset: i64,
+    whence: io.Seek_From,
+) -> (
+    n: i64,
+    err: io.Error,
+) {
+    assert(offset == 0 && whence == nil)
+    if mode == .Close || mode == .Flush {
+        assert(len(p) == 0)
+        return 0, nil
+    }
+    if mode != .Write {
+        panicf("Mode is %v", mode)
+    }
+    d := (^[]byte)(data)
+    append_dynamic_elems(d, ..p)
+    return i64(len(p)), nil
+}
+
+aprintf :: proc(a: ^Arena, format: string, args: ..any) -> string {
+    array := arena_make(a, []byte, 0)
+    fmt.wprintf(io.Writer{resizable_array_stream_proc, &array}, format, ..args)
+    return string(array)
+}
+
 // FNV-1a 32-bit
 simple_hash :: proc(data: []byte) -> u32 {
     h: u32 = 0x811c_9dc5 // FNV 32-bit offset basis
@@ -303,7 +332,7 @@ dynamic_grow_front :: proc(array: ^DoubleDynamic($T), grow_by: int) {
     array.start_index += grow_by
 
     old_elems := array.elems
-    array.elems = make([dynamic]T, cap(array.elems) + grow_by)
+    array.elems = make([dynamic]T, len(array.elems) + grow_by, cap(array.elems) + grow_by)
 
     copy_slice(array.elems[array.start_index:], old_elems[old_start_index:])
     delete(old_elems)
@@ -323,10 +352,6 @@ dynamic_append_elem :: proc(array: ^DoubleDynamic($T), elem: T) {
 
 dynamic_to_fixed :: proc(array: DoubleDynamic($T)) -> []T {
     return array.elems[array.start_index:]
-}
-
-insert :: proc {
-    dynamic_insert,
 }
 
 up_line :: "\033[A"

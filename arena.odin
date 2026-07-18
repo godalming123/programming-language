@@ -76,7 +76,7 @@ alloc :: proc(
     alignment: uint,
     resizable: bool,
     loc: runtime.Source_Code_Location,
-) -> []byte {
+) -> rawptr {
     if a.last_resizable_block == nil {
         create_block(a)
     }
@@ -113,7 +113,13 @@ alloc :: proc(
         last_resizable_block_info.last_resizable_block = nil
     }
 
-    return data
+    out := raw_data(data)
+
+    info := get_info(out)
+    assert(info.allocation == arena_allocation)
+    assert(info.block == last_resizable_block_info)
+
+    return out
 }
 
 arena_new :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_location) -> ^T {
@@ -121,7 +127,7 @@ arena_new :: proc(a: ^Arena, $T: typeid, resizable := false, loc := #caller_loca
         print_call(loc, "arena_new")
     }
     allocated := alloc(a, size_of(T), align_of(T), resizable, loc)
-    return (^T)(raw_data(allocated))
+    return (^T)(allocated)
 }
 
 arena_make :: proc(
@@ -134,10 +140,9 @@ arena_make :: proc(
     when debug_arena {
         print_call(loc, "arena_make")
     }
-    allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
     out: T = ---
     out_raw := (^runtime.Raw_Slice)(&out)
-    out_raw.data = raw_data(allocated)
+    out_raw.data = alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
     out_raw.len = len
     return out
 }
@@ -156,7 +161,7 @@ arena_make_multi :: proc(
         return T{arena_make(a, []E, len, resizable, loc)}
     } else {
         allocated := alloc(a, uint(size_of(E) * len), align_of(E), resizable, loc)
-        return T{([^]E)(raw_data(allocated))}
+        return T{([^]E)(allocated)}
     }
 }
 

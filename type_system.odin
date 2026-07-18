@@ -134,7 +134,7 @@ TypeKey :: union {
 init_struct_type :: proc(types: ^Types, type: Type, fields: []Type) {
     assert(types.values.d[type.index].type == unknown_type)
 
-    return_types := make([]Type, 1)
+    return_types := make([]Type, 1) // TODO: free `return_types`
     return_types[0] = type
 
     t := create_type(types, FuncType{fields, return_types}).type
@@ -418,8 +418,10 @@ create_type :: proc(
         KeyToIndexProcs(TypeKey){hash_type_value, type_key_is_equal},
         loc,
     )
-    resize_multi(&types.values, len(types.m.keys))
-    types.values.d[type.index] = TypeValue{unknown_type}
+    if result == .Inserted {
+        resize_multi(&types.values, len(types.m.keys))
+        types.values.d[type.index] = TypeValue{unknown_type}
+    }
 
     out := CreatedType{type, types.values.d[type.index], result}
     when debug_checker {

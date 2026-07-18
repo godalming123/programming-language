@@ -15,6 +15,6 @@ main = || -> I64 {
     // }
 
     last_fibonacci_number = fibonacci_numbers[fibonacci_numbers.len-1]
-    write_file("fibonacci.txt", last_fibonacci_number.to_str)
+    write_file("gitignore_fibonacci.txt", last_fibonacci_number.to_str)
     return 0
 }

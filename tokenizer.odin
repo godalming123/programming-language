@@ -307,21 +307,22 @@ skip :: proc(s: ^TokenizerState, should_continue: proc(_: byte) -> bool) -> Skip
     return skip_ignore_first(s, should_continue)
 }
 
-wrong_token_err :: proc(
-    state: ^ParserState,
-    infos: ..string,
-    loc := #caller_location,
-) {
+wrong_token_err :: proc(state: ^ParserState, infos: ..string, loc := #caller_location) {
     expected_bytes: []byte
     defer delete(expected_bytes)
     if len(state.last_token_descriptions_of_other_possible_tokens) == 1 {
-        expected_bytes = make([]byte, len(state.last_token_descriptions_of_other_possible_tokens[0]) + 1)
+        expected_bytes = make(
+            []byte,
+            len(state.last_token_descriptions_of_other_possible_tokens[0]) + 1,
+        )
         expected_bytes[0] = ' '
         copy(expected_bytes[1:], state.last_token_descriptions_of_other_possible_tokens[0])
     } else {
         line_start :: "\n- "
         either :: " either:"
-        length := len(either) + len(state.last_token_descriptions_of_other_possible_tokens) * len(line_start)
+        length :=
+            len(either) +
+            len(state.last_token_descriptions_of_other_possible_tokens) * len(line_start)
         for str in state.last_token_descriptions_of_other_possible_tokens {
             length += len(str)
         }
@@ -388,7 +389,7 @@ get_next_token :: proc(
     when debug_tokenizer {
         print_call(loc, "get next token")
         defer {
-            debug("last token set to %s", token_contents_to_string(state.last_token))
+            debug("last token set to %v", state.last_token)
         }
     }
     clear_dynamic(&state.last_token_descriptions_of_other_possible_tokens)

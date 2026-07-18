@@ -298,7 +298,10 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
             } else {
                 request, ok := webserver.parse_http_request(data)
                 if !ok {
-                    webserver.send_error(client, 400, "Bad Request")
+                    err := webserver.send_error(client, 400, "Bad Request")
+                    if err != nil {
+                        panic("Failed to send error")
+                    }
                     continue
                 }
                 defer delete(request.headers)
@@ -316,13 +319,16 @@ interp_execute_function :: proc(s: InterpState, c: CheckedFunctionCall) -> Runti
                 }
                 response := response_raw.(RuntimeSumType)
 
-                webserver.send_response(
+                err := webserver.send_response(
                     client,
                     200,
                     "OK",
                     response_type_variant_index_to_content_type(response.variant_index),
                     transmute([]byte)(response.payload[0].(RuntimeString).value),
                 )
+                if err != nil {
+                    panic("Failed to send response")
+                }
             }
         }
         return nil

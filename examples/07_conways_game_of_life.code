@@ -86,6 +86,6 @@ build = |c: Compiler| -> I64 {
 		pulsar_initial_state,
 		h.ignore_keypress[[game_size]Bool],
 	)
-    write_file("conways_game_of_life.html", html)
+    write_file("gitignore_conways_game_of_life.html", html)
     return 0
 }

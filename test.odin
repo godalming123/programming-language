@@ -65,12 +65,10 @@ run_example_via_c :: proc(
     defer os.close(stdin_reader)
 
     _, err2 := os.write(stdin_writer, transmute([]u8)stdin_to_send)
+    os.close(stdin_writer)
     if err2 != nil {
-        os.close(stdin_writer)
         testing.fail_now(t, fmt.aprintf("Failed to write to pipe: %#v", err2))
     }
-
-    os.close(stdin_writer)
 
     // TODO: Check for memory leaks when the process runs
     state, stdout, stderr, err3 := os.process_exec(
@@ -247,7 +245,7 @@ The number 100 is not prime
 
 @(test)
 example_03_fibonacci :: proc(t: ^testing.T) {
-    file :: #directory + "examples/fibonacci.txt"
+    file :: #directory + "examples/gitignore_fibonacci.txt"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -339,7 +337,7 @@ buffered_pipe_test :: proc(t: ^testing.T) {
 
 @(test)
 example_06_counter :: proc(t: ^testing.T) {
-    file :: #directory + "examples/counter.html"
+    file :: #directory + "examples/gitignore_counter.html"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -351,7 +349,7 @@ example_06_counter :: proc(t: ^testing.T) {
 
 @(test)
 example_07_conways_game_of_life :: proc(t: ^testing.T) {
-    file :: #directory + "examples/conways_game_of_life.html"
+    file :: #directory + "examples/gitignore_conways_game_of_life.html"
     err := os.remove_all(file)
     testing.expect(t, err == nil || err.(os.General_Error) == .Not_Exist)
 
@@ -670,15 +668,20 @@ arena_test :: proc(t: ^testing.T) {
 
     fibonacci_numbers := arena_make(&a, []int, 0, resizable = false)
     defer dealloc(raw_data(fibonacci_numbers))
-    append_dynamic(&fibonacci_numbers, 1)
-    append_dynamic(&fibonacci_numbers, 1)
+    append_dynamic_elems(&fibonacci_numbers, 0, 1, 1)
 
-    for _ in 1 ..= 50 {
+    for len(fibonacci_numbers) < 15 {
         append_dynamic(
             &fibonacci_numbers,
             fibonacci_numbers[len(fibonacci_numbers) - 1] +
             fibonacci_numbers[len(fibonacci_numbers) - 2],
         )
+    }
+
+    fibonacci_string := aprintf(&a, "%v", fibonacci_numbers)
+    defer dealloc(raw_data(fibonacci_string))
+    if fibonacci_string != "[0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377]" {
+        testing.fail_now(t, fmt.aprintf("Fibonacci string is %q", fibonacci_string))
     }
 }
 
